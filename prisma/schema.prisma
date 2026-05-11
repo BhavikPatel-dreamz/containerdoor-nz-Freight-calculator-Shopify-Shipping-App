@@ -9,8 +9,8 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -31,4 +31,65 @@ model Session {
   emailVerified Boolean?  @default(false)
   refreshToken        String?
   refreshTokenExpires DateTime?
+}
+
+model AppSetting {
+  id                         String   @id @default(cuid())
+  shop                       String   @unique
+  fuelSurchargePercent       Decimal  @default(0) @db.Decimal(10, 2)
+  additionalCostType         CostType @default(FIXED)
+  additionalCostValue        Decimal  @default(0) @db.Decimal(10, 2)
+  defaultCurrency            String   @default("NZD")
+  defaultServiceType         ServiceType @default(STANDARD_DELIVERY)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+model ShippingRate {
+  id             String      @id @default(cuid())
+  shop           String
+  company        CarrierCompany
+  serviceType    ServiceType
+  city           String
+  postalCode     String
+  useWeightRange Boolean     @default(false)
+  minWeightGrams Int?
+  maxWeightGrams Int?
+  useVolumeRange Boolean     @default(false)
+  minVolumeCm3   Int?
+  maxVolumeCm3   Int?
+  rate           Decimal     @db.Decimal(10, 2)
+  zoneSurcharge  Decimal     @default(0) @db.Decimal(10, 2)
+  mode           CarrierMode?
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([shop, active, company, serviceType])
+  @@index([shop, city, postalCode])
+}
+
+enum CostType {
+  FIXED
+  PERCENTAGE
+}
+
+enum CarrierCompany {
+  FLIWAY
+  NZP
+  CASTLE
+  TGE
+  M2H
+  MAINFREIGHT
+}
+
+enum ServiceType {
+  STANDARD_DELIVERY
+  DEPOT_DELIVERY
+  CUSTOMER_PICKUP
+}
+
+enum CarrierMode {
+  AIR
+  ROAD
 }
