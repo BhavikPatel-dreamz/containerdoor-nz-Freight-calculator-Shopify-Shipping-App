@@ -75,64 +75,121 @@ export default function SettingsPage() {
 
   return (
     <s-page heading="Settings">
+      <style>{`
+        .settings-card {
+          border: 1px solid #d5d9dd;
+          border-radius: 12px;
+          padding: 14px;
+          background: #fff;
+        }
+        .settings-grid {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+        .settings-field {
+          display: grid;
+          gap: 6px;
+          font-size: 13px;
+          color: #455a64;
+        }
+        .settings-field input,
+        .settings-field select {
+          width: 100%;
+          border: 1px solid #bec5cc;
+          border-radius: 8px;
+          padding: 8px 10px;
+          background: #fff;
+          color: #1f2933;
+        }
+        .meta-list {
+          display: grid;
+          gap: 8px;
+          margin: 0;
+          padding: 0;
+          list-style: none;
+        }
+        .meta-list li {
+          border: 1px solid #dfe4e8;
+          border-radius: 8px;
+          padding: 10px;
+          background: #fbfcfd;
+          display: flex;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+        .meta-key {
+          color: #52606d;
+          font-size: 12px;
+        }
+      `}</style>
+
       <s-section heading="Shipping defaults">
         {actionData?.message ? <s-banner tone="success">{actionData.message}</s-banner> : null}
-        <Form method="post">
-          <s-stack direction="block" gap="base">
-            <label>
-              Fuel surcharge percentage
-              <input name="fuelSurchargePercent" type="number" step="0.01" min="0" defaultValue={settings.fuelSurchargePercent} />
-            </label>
-            <label>
-              Additional cost type
-              <select name="additionalCostType" defaultValue={settings.additionalCostType}>
-                {costTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {costTypeLabels[type]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Additional cost value
-              <input name="additionalCostValue" type="number" step="0.01" min="0" defaultValue={settings.additionalCostValue} />
-            </label>
-            <label>
-              Default currency
-              <input name="defaultCurrency" type="text" maxLength={3} defaultValue={settings.defaultCurrency} />
-            </label>
-            <label>
-              Default service
-              <select name="defaultServiceType" defaultValue={settings.defaultServiceType}>
-                {serviceTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {serviceLabels[type]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <s-button type="submit" {...(saving ? { loading: true } : {})}>
-              Save settings
-            </s-button>
-          </s-stack>
-        </Form>
+        <div className="settings-card">
+          <Form method="post">
+            <div className="settings-grid">
+              <label className="settings-field">
+                Fuel surcharge percentage
+                <input name="fuelSurchargePercent" type="number" step="0.01" min="0" defaultValue={settings.fuelSurchargePercent} />
+              </label>
+              <label className="settings-field">
+                Additional cost type
+                <select name="additionalCostType" defaultValue={settings.additionalCostType}>
+                  {costTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {costTypeLabels[type]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="settings-field">
+                Additional cost value
+                <input name="additionalCostValue" type="number" step="0.01" min="0" defaultValue={settings.additionalCostValue} />
+              </label>
+              <label className="settings-field">
+                Default currency
+                <input name="defaultCurrency" type="text" maxLength={3} defaultValue={settings.defaultCurrency} />
+              </label>
+              <label className="settings-field">
+                Default service
+                <select name="defaultServiceType" defaultValue={settings.defaultServiceType}>
+                  {serviceTypes.map((type) => (
+                    <option key={type} value={type}>
+                      {serviceLabels[type]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <s-button type="submit" {...(saving ? { loading: true } : {})}>
+                Save settings
+              </s-button>
+            </div>
+          </Form>
+        </div>
       </s-section>
 
       <s-section heading="Variant metafields">
-        <s-stack direction="block" gap="small">
+        <div className="settings-card">
+          <s-stack direction="block" gap="small">
           <s-paragraph>Namespace: {freightMetafieldNamespace}</s-paragraph>
-          <s-unordered-list>
+          <ul className="meta-list">
             {metafields.map((field) => (
-              <s-list-item key={field.key}>
-                {field.name} · {field.key}
-              </s-list-item>
+              <li key={field.key}>
+                <span>{field.name}</span>
+                <span className="meta-key">{field.key}</span>
+              </li>
             ))}
-          </s-unordered-list>
+          </ul>
           <Form method="post">
             <input type="hidden" name="intent" value="metafields" />
             <s-button type="submit">Create variant metafields</s-button>
           </Form>
-        </s-stack>
+          </s-stack>
+        </div>
       </s-section>
     </s-page>
   );

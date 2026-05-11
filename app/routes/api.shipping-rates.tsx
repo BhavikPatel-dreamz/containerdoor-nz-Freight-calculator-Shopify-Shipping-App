@@ -48,7 +48,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const rates = serviceRates.map((serviceRate) => ({
     service_name: serviceLabels[serviceRate.serviceType],
     service_code: serviceRate.serviceType.toLowerCase(),
-    description: `ContainerDoor freight via ${serviceRate.companies.map((company) => companyLabels[company]).join(", ")}`,
+    description: `ContainerDoor freight via ${serviceRate.companies.map((company) => companyLabels[company]).join(", ")} (${serviceRate.packageCount} boxes)`,
     currency: serviceRate.currency || payload.rate?.currency || "NZD",
     total_price: Math.round(serviceRate.total * 100).toString(),
   }));
@@ -70,14 +70,15 @@ async function getFreightPackages(
   for (const item of items ?? []) {
     const variantGid = item.variant_id ? `gid://shopify/ProductVariant/${item.variant_id}` : "";
     const metafields = metafieldsByVariant.get(variantGid) ?? {};
+    const properties = item.properties ?? {};
     const quantity = Number(item.quantity ?? 1);
-    const unitsPerBox = positiveInt(metafields.units_per_box) || 1;
-    const explicitBoxes = positiveInt(metafields.number_of_boxes);
-    const boxes = explicitBoxes || Math.ceil(quantity / unitsPerBox);
-    const length = positiveNumber(metafields.box_length_cm);
-    const width = positiveNumber(metafields.box_width_cm);
-    const height = positiveNumber(metafields.box_height_cm);
-    const company = normaliseCompany(metafields.courier_company || item.properties?.courier_company);
+    const unitsPerBox = positiveInt(metafields.units_per_box || properties.units_per_box) || 1;
+    const explicitBoxes = positiveInt(metafields.number_of_boxes || properties.number_of_boxes);
+    const boxes = Math.max(explicitBoxes || Math.ceil(quantity / unitsPerBox), 1);
+    const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
+    const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
+    const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
+    const company = normaliseCompany(metafields.courier_company || properties.courier_company);
 
     if (!company) continue;
 
@@ -86,9 +87,9 @@ async function getFreightPackages(
       quantity,
       company,
       boxes,
-      weightGrams: positiveInt(metafields.weight_grams) || Number(item.grams ?? 0) * quantity,
+      weightGrams: positiveInt(metafields.weight_grams || properties.weight_grams) || Number(item.grams ?? 0) * quantity,
       volumeCm3: length * width * height * boxes,
-      hiabRequired: metafields.hiab_required === "true",
+      hiabRequired: isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),
     });
   }
 
@@ -135,7 +136,13 @@ function normaliseCompany(value: string | undefined): CarrierCompany | null {
     .trim()
     .toUpperCase()
     .replace(/[\s-]+/g, "_");
-  return carrierCompanies.includes(normalised as CarrierCompany) ? (normalised as CarrierCompany) : null;
+  const aliases: Record<string, CarrierCompany> = {
+    TEAM_GLOBAL_EXPRESS: "TGE",
+    MAIN_FREIGHT: "MAINFREIGHT",
+    COURIER_POST: "NZP",
+  };
+  const mapped = aliases[normalised] ?? normalised;
+  return carrierCompanies.includes(mapped as CarrierCompany) ? (mapped as CarrierCompany) : null;
 }
 
 function positiveNumber(value: string | undefined) {
@@ -146,4 +153,8 @@ function positiveNumber(value: string | undefined) {
 function positiveInt(value: string | undefined) {
   const parsed = Number.parseInt(value ?? "0", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isTrue(value: string | undefined) {
+  return ["1", "true", "yes", "on", "y"].includes(String(value ?? "").trim().toLowerCase());
 }

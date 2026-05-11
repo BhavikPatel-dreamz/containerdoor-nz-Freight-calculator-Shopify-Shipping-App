@@ -131,6 +131,13 @@ export async function upsertRate(shop: string, formData: FormData) {
   const id = String(formData.get("id") || "");
   const data = readRateForm(shop, formData);
 
+  if (!isServiceSupportedByCompany(data.company, data.serviceType)) {
+    return {
+      ok: false,
+      message: "Depot delivery is only available for Fliway, Mainfreight, and Team Global Express.",
+    };
+  }
+
   if (id) {
     await prisma.shippingRate.update({ where: { id, shop }, data });
     return { ok: true, message: "Rate updated" };
@@ -219,6 +226,10 @@ export async function importRatesCsv(shop: string, csv: string) {
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
       active: row.active === "" ? true : normaliseBoolean(row.active),
     };
+    if (!isServiceSupportedByCompany(data.company, data.serviceType)) {
+      continue;
+    }
+
     const existing = row.id
       ? await prisma.shippingRate.findFirst({ where: { id: row.id, shop } })
       : await prisma.shippingRate.findFirst({
@@ -250,30 +261,66 @@ export async function calculateServiceRates(
   packages: FreightPackage[],
 ) {
   const settings = await getAppSettings(shop);
-  const serviceTotals = new Map<ServiceType, CalculatedServiceRate>();
+  const serviceTotals = new Map<
+    ServiceType,
+    {
+      subtotal: number;
+      packageCount: number;
+      companies: Set<CarrierCompany>;
+      coveredPackages: number;
+    }
+  >();
 
   for (const freightPackage of packages) {
     const matchedRates = await findMatchingRates(shop, destination, freightPackage);
+    const bestByService = new Map<
+      ServiceType,
+      { amount: number; company: CarrierCompany; boxes: number }
+    >();
+
     for (const matchedRate of matchedRates) {
-      const adjusted = calculateFreightRate(freightPackage, matchedRate);
-      if (adjusted === null) continue;
-      const existing = serviceTotals.get(matchedRate.serviceType) ?? {
-        serviceType: matchedRate.serviceType,
-        total: 0,
-        currency: settings.defaultCurrency,
-        packageCount: 0,
-        companies: [],
-      };
-      existing.total += applySettings(adjusted, settings);
-      existing.packageCount += freightPackage.boxes;
-      if (!existing.companies.includes(matchedRate.company)) {
-        existing.companies.push(matchedRate.company);
+      const amount = calculateFreightRate(freightPackage, matchedRate);
+      if (amount === null) continue;
+
+      const current = bestByService.get(matchedRate.serviceType);
+      if (!current || amount < current.amount) {
+        bestByService.set(matchedRate.serviceType, {
+          amount,
+          company: matchedRate.company,
+          boxes: freightPackage.boxes,
+        });
       }
-      serviceTotals.set(matchedRate.serviceType, existing);
+    }
+
+    for (const [serviceType, match] of bestByService.entries()) {
+      const existing = serviceTotals.get(serviceType) ?? {
+        subtotal: 0,
+        packageCount: 0,
+        companies: new Set<CarrierCompany>(),
+        coveredPackages: 0,
+      };
+      existing.subtotal += match.amount;
+      existing.packageCount += match.boxes;
+      existing.coveredPackages += 1;
+      existing.companies.add(match.company);
+      serviceTotals.set(serviceType, existing);
     }
   }
 
-  return [...serviceTotals.values()].sort((left, right) =>
+  const completeServiceRates: CalculatedServiceRate[] = [];
+
+  for (const [serviceType, totals] of serviceTotals.entries()) {
+    if (totals.coveredPackages !== packages.length) continue;
+    completeServiceRates.push({
+      serviceType,
+      total: applySettings(totals.subtotal, settings),
+      currency: settings.defaultCurrency,
+      packageCount: totals.packageCount,
+      companies: [...totals.companies],
+    });
+  }
+
+  return completeServiceRates.sort((left, right) =>
     left.serviceType.localeCompare(right.serviceType),
   );
 }
@@ -291,11 +338,6 @@ export async function findMatchingRates(
       shop,
       active: true,
       company: freightPackage.company,
-      OR: [
-        { city: { equals: city || "", mode: "insensitive" } },
-        { postalCode: postalCode || "" },
-        { postalCode: "*" },
-      ],
     },
   });
 
@@ -308,9 +350,11 @@ export async function findMatchingRates(
       !rate.useVolumeRange ||
       ((rate.minVolumeCm3 === null || freightPackage.volumeCm3 >= rate.minVolumeCm3) &&
         (rate.maxVolumeCm3 === null || freightPackage.volumeCm3 <= rate.maxVolumeCm3));
-    const matchesPostalCode = !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
+    const matchesPostalCode =
+      !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
+    const matchesCity = !city || cityMatches(city, rate.city);
 
-    return matchesWeight && matchesVolume && matchesPostalCode;
+    return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
   });
 }
 
@@ -373,11 +417,19 @@ function applySettings(baseRate: number, settings: AppSetting) {
 function postalCodeInRange(postalCode: string, range: string) {
   if (range === "*" || range === postalCode) return true;
   const [start, end] = range.split("-").map((part) => Number.parseInt(part.trim(), 10));
-  const numericPostalCode = Number.parseInt(postalCode, 10);
+  const numericPostalCode = Number.parseInt(postalCode.trim(), 10);
   if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(numericPostalCode)) {
     return false;
   }
   return numericPostalCode >= start && numericPostalCode <= end;
+}
+
+function cityMatches(destinationCity: string, rateCity: string) {
+  const normalisedRateCity = rateCity.trim().toLowerCase();
+  if (!normalisedRateCity || normalisedRateCity === "*" || normalisedRateCity === "all") {
+    return true;
+  }
+  return destinationCity.trim().toLowerCase() === normalisedRateCity;
 }
 
 function escapeCsvCell(value: unknown) {
@@ -427,4 +479,11 @@ function toNullableInt(value: string | undefined) {
 
 function normaliseBoolean(value: string | undefined) {
   return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function isServiceSupportedByCompany(company: CarrierCompany, serviceType: ServiceType) {
+  return (
+    serviceType !== "DEPOT_DELIVERY" ||
+    freightFormula.depotCollectionCompanies.includes(company)
+  );
 }

@@ -44,67 +44,197 @@ export default function RatesPage() {
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
   const query = searchParams.get("q") || "";
+  const isSubmitting = navigation.state === "submitting";
 
   return (
     <s-page heading="Rate management">
+      <style>{`
+        .panel {
+          border: 1px solid #d5d9dd;
+          border-radius: 12px;
+          padding: 14px;
+          background: #fff;
+        }
+        .toolbar {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 10px;
+          align-items: end;
+        }
+        .search-form {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+        .search-form input,
+        .import-form input[type="file"],
+        .grid-form input,
+        .grid-form select,
+        .rates-table input,
+        .rates-table select {
+          border: 1px solid #bec5cc;
+          border-radius: 8px;
+          padding: 7px 9px;
+          background: #fff;
+          color: #1f2933;
+          min-height: 34px;
+        }
+        .import-form {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          align-items: center;
+          padding: 10px;
+          border: 1px dashed #bec5cc;
+          border-radius: 10px;
+          background: #f8fafb;
+        }
+        .summary {
+          margin: 0;
+          color: #52606d;
+          font-size: 13px;
+        }
+        .table-wrap {
+          overflow-x: auto;
+          border: 1px solid #e3e7ea;
+          border-radius: 10px;
+        }
+        .rates-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+          min-width: 1200px;
+        }
+        .rates-table th,
+        .rates-table td {
+          border-bottom: 1px solid #edf1f4;
+          padding: 8px;
+          vertical-align: top;
+          white-space: nowrap;
+        }
+        .rates-table th {
+          position: sticky;
+          top: 0;
+          background: #f4f7f9;
+          color: #334e68;
+          font-weight: 700;
+          z-index: 1;
+        }
+        .range-col {
+          display: grid;
+          gap: 6px;
+          min-width: 155px;
+        }
+        .checkbox-row {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          color: #52606d;
+          font-size: 12px;
+        }
+        .inline-actions {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .plain-save {
+          border: 1px solid #9fb3c8;
+          background: #fff;
+          color: #102a43;
+          border-radius: 8px;
+          padding: 7px 10px;
+          font-weight: 600;
+          cursor: pointer;
+        }
+        .pager {
+          display: flex;
+          gap: 10px;
+          margin-top: 8px;
+        }
+        .pager a {
+          text-decoration: none;
+          border: 1px solid #bec5cc;
+          border-radius: 999px;
+          padding: 6px 12px;
+          color: #243b53;
+          font-size: 13px;
+        }
+        .grid-form {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        }
+        .grid-form label {
+          display: grid;
+          gap: 6px;
+          color: #455a64;
+          font-size: 13px;
+        }
+      `}</style>
+
       <s-section heading="Add rate">
         {actionData?.message ? (
           <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
         ) : null}
-        <RateForm />
+        <div className="panel">
+          <RateForm />
+        </div>
       </s-section>
 
       <s-section heading="Rates">
-        <s-stack direction="block" gap="base">
-          <s-stack direction="inline" gap="small">
-            <Form method="get">
+        <div className="panel">
+          <s-stack direction="block" gap="base">
+            <div className="toolbar">
+              <Form method="get" className="search-form">
               <input name="q" placeholder="City or postal code" defaultValue={query} />
               <s-button type="submit">Search</s-button>
+              </Form>
+              <s-button href="/api/rates/export">Export CSV</s-button>
+            </div>
+            <Form className="import-form" method="post" encType="multipart/form-data">
+              <input type="hidden" name="intent" value="import" />
+              <input type="file" name="csv" accept=".csv,text/csv" />
+              <s-button type="submit" {...(isSubmitting ? { loading: true } : {})}>
+                Import CSV
+              </s-button>
             </Form>
-            <s-button href="/api/rates/export">Export CSV</s-button>
+
+            <p className="summary">
+              {total} active rates · page {page} of {pageCount}
+            </p>
+
+            <div className="table-wrap">
+              <table className="rates-table">
+                <thead>
+                  <tr>
+                    <th>Company</th>
+                    <th>Service</th>
+                    <th>City</th>
+                    <th>Postal</th>
+                    <th>Weight g</th>
+                    <th>Volume cm3</th>
+                    <th>Rate</th>
+                    <th>Zone surcharge</th>
+                    <th>Mode</th>
+                    <th>Active</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rates.map((rate) => (
+                    <InlineRateRow key={rate.id} rate={rate} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="pager">
+              {page > 1 ? <Link to={`/app/rates?page=${page - 1}&q=${query}`}>Previous</Link> : null}
+              {page < pageCount ? <Link to={`/app/rates?page=${page + 1}&q=${query}`}>Next</Link> : null}
+            </div>
           </s-stack>
-          <Form method="post" encType="multipart/form-data">
-            <input type="hidden" name="intent" value="import" />
-            <input type="file" name="csv" accept=".csv,text/csv" />
-            <s-button type="submit" {...(navigation.state === "submitting" ? { loading: true } : {})}>
-              Import CSV
-            </s-button>
-          </Form>
-
-          <s-paragraph>
-            {total} active rates · page {page} of {pageCount}
-          </s-paragraph>
-
-          <div style={{ overflowX: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Company</th>
-                  <th>Service</th>
-                  <th>City</th>
-                  <th>Postal</th>
-                  <th>Weight g</th>
-                  <th>Volume cm3</th>
-                  <th>Rate</th>
-                  <th>Zone surcharge</th>
-                  <th>Mode</th>
-                  <th>Active</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rates.map((rate) => (
-                  <InlineRateRow key={rate.id} rate={rate} />
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <s-stack direction="inline" gap="small">
-            {page > 1 ? <Link to={`/app/rates?page=${page - 1}&q=${query}`}>Previous</Link> : null}
-            {page < pageCount ? <Link to={`/app/rates?page=${page + 1}&q=${query}`}>Next</Link> : null}
-          </s-stack>
-        </s-stack>
+        </div>
       </s-section>
     </s-page>
   );
@@ -142,16 +272,20 @@ function InlineRateRow({ rate }: { rate: any }) {
         <input form={`rate-${rate.id}`} name="postalCode" required defaultValue={rate.postalCode} aria-label="Postal code" />
       </td>
       <td>
-        <input form={`rate-${rate.id}`} name="minWeightGrams" type="number" min="0" defaultValue={rate.minWeightGrams ?? ""} aria-label="Min weight" />
-        <input form={`rate-${rate.id}`} name="maxWeightGrams" type="number" min="0" defaultValue={rate.maxWeightGrams ?? ""} aria-label="Max weight" />
-        <label>
+        <div className="range-col">
+          <input form={`rate-${rate.id}`} name="minWeightGrams" type="number" min="0" defaultValue={rate.minWeightGrams ?? ""} aria-label="Min weight" />
+          <input form={`rate-${rate.id}`} name="maxWeightGrams" type="number" min="0" defaultValue={rate.maxWeightGrams ?? ""} aria-label="Max weight" />
+        </div>
+        <label className="checkbox-row">
           <input form={`rate-${rate.id}`} name="useWeightRange" type="checkbox" defaultChecked={rate.useWeightRange} /> Use
         </label>
       </td>
       <td>
-        <input form={`rate-${rate.id}`} name="minVolumeCm3" type="number" min="0" defaultValue={rate.minVolumeCm3 ?? ""} aria-label="Min volume" />
-        <input form={`rate-${rate.id}`} name="maxVolumeCm3" type="number" min="0" defaultValue={rate.maxVolumeCm3 ?? ""} aria-label="Max volume" />
-        <label>
+        <div className="range-col">
+          <input form={`rate-${rate.id}`} name="minVolumeCm3" type="number" min="0" defaultValue={rate.minVolumeCm3 ?? ""} aria-label="Min volume" />
+          <input form={`rate-${rate.id}`} name="maxVolumeCm3" type="number" min="0" defaultValue={rate.maxVolumeCm3 ?? ""} aria-label="Max volume" />
+        </div>
+        <label className="checkbox-row">
           <input form={`rate-${rate.id}`} name="useVolumeRange" type="checkbox" defaultChecked={rate.useVolumeRange} /> Use
         </label>
       </td>
@@ -180,21 +314,23 @@ function InlineRateRow({ rate }: { rate: any }) {
         </select>
       </td>
       <td>
-        <label>
+        <label className="checkbox-row">
           <input form={`rate-${rate.id}`} name="active" type="checkbox" defaultChecked={rate.active} /> Active
         </label>
       </td>
       <td>
-        <button form={`rate-${rate.id}`} type="submit">
-          Save
-        </button>
-        <Form method="post">
-          <input type="hidden" name="intent" value="delete" />
-          <input type="hidden" name="id" value={rate.id} />
-          <s-button type="submit" tone="critical" variant="tertiary">
-            Delete
-          </s-button>
-        </Form>
+        <div className="inline-actions">
+          <button className="plain-save" form={`rate-${rate.id}`} type="submit">
+            Save
+          </button>
+          <Form method="post">
+            <input type="hidden" name="intent" value="delete" />
+            <input type="hidden" name="id" value={rate.id} />
+            <s-button type="submit" tone="critical" variant="tertiary">
+              Delete
+            </s-button>
+          </Form>
+        </div>
       </td>
     </tr>
   );
@@ -205,7 +341,7 @@ function RateForm({ rate }: { rate?: any }) {
     <Form method="post">
       <input type="hidden" name="intent" value="save" />
       {rate?.id ? <input type="hidden" name="id" value={rate.id} /> : null}
-      <div style={{ display: "grid", gap: 12, gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))" }}>
+      <div className="grid-form">
         <label>
           Company
           <select name="company" defaultValue={rate?.company ?? "FLIWAY"}>
@@ -279,7 +415,9 @@ function RateForm({ rate }: { rate?: any }) {
           <input name="active" type="checkbox" defaultChecked={rate?.active ?? true} /> Active
         </label>
       </div>
-      <s-button type="submit">{rate?.id ? "Save rate" : "Add rate"}</s-button>
+      <div style={{ marginTop: 12 }}>
+        <s-button type="submit">{rate?.id ? "Save rate" : "Add rate"}</s-button>
+      </div>
     </Form>
   );
 }
