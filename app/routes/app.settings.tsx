@@ -9,6 +9,8 @@ import {
   serviceTypes,
   variantFreightMetafields,
 } from "../lib/freight";
+import { listCarrierServices, registerOrUpdateCarrierService } from "../lib/carrier-service.server";
+import prisma from "../db.server";
 import { getAppSettings, updateAppSettings } from "../models/freight.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -31,6 +33,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const formData = await request.formData();
   const intent = String(formData.get("intent") || "save");
+
+  if (intent === "carrier-register") {
+    const offlineSession = await prisma.session.findFirst({
+      where: { shop: session.shop, isOnline: false },
+      orderBy: { id: "asc" },
+    });
+    const token = offlineSession?.accessToken || session.accessToken;
+
+    if (!token) {
+      return { ok: false, message: "No access token found for this shop. Reinstall app and try again." };
+    }
+
+    try {
+      const result = await registerOrUpdateCarrierService(session.shop, token);
+      const services = await listCarrierServices(session.shop, token);
+      const names = services.map((service) => service.name).join(", ") || "none";
+      return {
+        ok: true,
+        message: `Carrier service ${result.action}. Active services: ${names}`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to register carrier service";
+      return { ok: false, message };
+    }
+  }
 
   if (intent === "metafields") {
     const results = [];
@@ -60,11 +87,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       results.push(json.data?.metafieldDefinitionCreate?.userErrors?.[0]?.message ?? field.key);
     }
 
-    return { message: `Variant metafield setup checked: ${results.join(", ")}` };
+    return { ok: true, message: `Variant metafield setup checked: ${results.join(", ")}` };
   }
 
   await updateAppSettings(session.shop, formData);
-  return { message: "Settings saved" };
+  return { ok: true, message: "Settings saved" };
 };
 
 export default function SettingsPage() {
@@ -126,7 +153,9 @@ export default function SettingsPage() {
       `}</style>
 
       <s-section heading="Shipping defaults">
-        {actionData?.message ? <s-banner tone="success">{actionData.message}</s-banner> : null}
+        {actionData?.message ? (
+          <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
+        ) : null}
         <div className="settings-card">
           <Form method="post">
             <div className="settings-grid">
@@ -188,6 +217,22 @@ export default function SettingsPage() {
             <input type="hidden" name="intent" value="metafields" />
             <s-button type="submit">Create variant metafields</s-button>
           </Form>
+          </s-stack>
+        </div>
+      </s-section>
+
+      <s-section heading="Carrier callback registration">
+        <div className="settings-card">
+          <s-stack direction="block" gap="small">
+            <s-paragraph>
+              Use this after deploy/reinstall to ensure Shopify calls this app for checkout shipping rates.
+            </s-paragraph>
+            <Form method="post">
+              <input type="hidden" name="intent" value="carrier-register" />
+              <s-button type="submit" {...(saving ? { loading: true } : {})}>
+                Register carrier service now
+              </s-button>
+            </Form>
           </s-stack>
         </div>
       </s-section>

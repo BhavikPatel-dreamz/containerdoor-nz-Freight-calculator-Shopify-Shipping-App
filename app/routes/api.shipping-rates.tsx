@@ -26,35 +26,82 @@ type ShopifyCarrierRateRequest = {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const url = new URL(request.url);
-  const shop = url.searchParams.get("shop") || process.env.SHOPIFY_SHOP_DOMAIN || "";
+  try {
+    const url = new URL(request.url);
+    const shop = url.searchParams.get("shop") || process.env.SHOPIFY_SHOP_DOMAIN || "";
 
-  if (!shop) {
+    if (!shop) {
+      console.error("Shipping callback missing shop query parameter and SHOPIFY_SHOP_DOMAIN fallback");
+      return Response.json({ rates: [] });
+    }
+
+    const payload = (await request.json()) as ShopifyCarrierRateRequest;
+    console.log(
+      `Shipping callback received for ${shop} with ${payload.rate?.items?.length ?? 0} cart items`,
+    );
+
+    if (useStaticRates()) {
+      return Response.json({
+        rates: buildStaticRates(payload.rate?.currency || "NZD"),
+      });
+    }
+
+    const destination = {
+      city: payload.rate?.destination?.city,
+      postalCode: payload.rate?.destination?.postal_code,
+    };
+    const packages = await getFreightPackages(shop, payload.rate?.items ?? []);
+
+    if (packages.length === 0) {
+      return Response.json({ rates: [] });
+    }
+
+    const serviceRates = await calculateServiceRates(shop, destination, packages);
+    const rates = serviceRates.map((serviceRate) => ({
+      service_name: serviceLabels[serviceRate.serviceType],
+      service_code: serviceRate.serviceType.toLowerCase(),
+      description: `ContainerDoor freight via ${serviceRate.companies.map((company) => companyLabels[company]).join(", ")} (${serviceRate.packageCount} boxes)`,
+      currency: serviceRate.currency || payload.rate?.currency || "NZD",
+      total_price: Math.round(serviceRate.total * 100).toString(),
+    }));
+
+    return Response.json({ rates });
+  } catch (error) {
+    console.error("Shipping callback failed", error);
     return Response.json({ rates: [] });
   }
-
-  const payload = (await request.json()) as ShopifyCarrierRateRequest;
-  const destination = {
-    city: payload.rate?.destination?.city,
-    postalCode: payload.rate?.destination?.postal_code,
-  };
-  const packages = await getFreightPackages(shop, payload.rate?.items ?? []);
-
-  if (packages.length === 0) {
-    return Response.json({ rates: [] });
-  }
-
-  const serviceRates = await calculateServiceRates(shop, destination, packages);
-  const rates = serviceRates.map((serviceRate) => ({
-    service_name: serviceLabels[serviceRate.serviceType],
-    service_code: serviceRate.serviceType.toLowerCase(),
-    description: `ContainerDoor freight via ${serviceRate.companies.map((company) => companyLabels[company]).join(", ")} (${serviceRate.packageCount} boxes)`,
-    currency: serviceRate.currency || payload.rate?.currency || "NZD",
-    total_price: Math.round(serviceRate.total * 100).toString(),
-  }));
-
-  return Response.json({ rates });
 };
+
+function useStaticRates() {
+  const value = String(process.env.USE_STATIC_SHIPPING_RATES || "false").toLowerCase();
+  return value !== "false" && value !== "0";
+}
+
+function buildStaticRates(currency: string) {
+  return [
+    {
+      service_name: "Standard delivery",
+      service_code: "standard_delivery",
+      description: "ContainerDoor static test rate",
+      currency,
+      total_price: "14500",
+    },
+    {
+      service_name: "Depot delivery",
+      service_code: "depot_delivery",
+      description: "ContainerDoor static test rate",
+      currency,
+      total_price: "9800",
+    },
+    {
+      service_name: "Customer pickup",
+      service_code: "customer_pickup",
+      description: "Pickup from warehouse",
+      currency,
+      total_price: "0",
+    },
+  ];
+}
 
 async function getFreightPackages(
   shop: string,

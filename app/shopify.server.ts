@@ -5,7 +5,13 @@ import {
   shopifyApp,
 } from "@shopify/shopify-app-react-router/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
+import { registerOrUpdateCarrierService } from "./lib/carrier-service.server";
 import prisma from "./db.server";
+
+function shouldAutoRegisterCarrierService() {
+  const value = String(process.env.AUTO_REGISTER_CARRIER_SERVICE || "true").toLowerCase();
+  return value !== "false" && value !== "0";
+}
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY,
@@ -16,6 +22,26 @@ const shopify = shopifyApp({
   authPathPrefix: "/auth",
   sessionStorage: new PrismaSessionStorage(prisma),
   distribution: AppDistribution.AppStore,
+  hooks: {
+    afterAuth: async ({ session }) => {
+      if (!shouldAutoRegisterCarrierService()) {
+        return;
+      }
+
+      if (!session.shop || !session.accessToken || session.isOnline) {
+        return;
+      }
+
+      try {
+        const result = await registerOrUpdateCarrierService(session.shop, session.accessToken);
+        console.log(
+          `Carrier service ${result.action} for ${session.shop} (id=${result.carrierServiceId})`,
+        );
+      } catch (error) {
+        console.error(`Carrier service registration failed for ${session.shop}`, error);
+      }
+    },
+  },
   future: {
     expiringOfflineAccessTokens: true,
   },

@@ -6,6 +6,28 @@ This is a template for building a [Shopify app](https://shopify.dev/docs/apps/ge
 
 The shipping calculator and data model used for the ContainerDoor app are documented in [docs/freight-logic.md](docs/freight-logic.md).
 
+### Carrier service registration and static callback mode
+
+This app now auto-registers (or updates) a Carrier Service for each shop right after OAuth install/auth.
+This registration does not create fixed shipping prices. It only tells Shopify which callback URL to call during checkout.
+All dynamic pricing (zone/location/product logic) still runs inside `/api/shipping-rates` on every rate request.
+
+Required env vars:
+
+- `SHOPIFY_API_KEY`
+- `SHOPIFY_API_SECRET`
+- `SHOPIFY_APP_URL`
+- `SCOPES` (must include `write_shipping`)
+
+Optional env vars:
+
+- `CARRIER_SERVICE_NAME` (default: `ContainerDoor Shipping`)
+- `AUTO_REGISTER_CARRIER_SERVICE` (default: `true`)
+- `USE_STATIC_SHIPPING_RATES` (default: `false`)
+
+When `USE_STATIC_SHIPPING_RATES=true`, `/api/shipping-rates` returns static test rates.
+By default (`false`), dynamic calculator logic is used.
+
 Rather than cloning this repo, follow the [Quick Start steps](https://github.com/Shopify/shopify-app-template-react-router#quick-start).
 
 Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-react-router) for more details on the React Router app package.
