@@ -17,12 +17,29 @@ export default function App() {
 
   return (
     <AppProvider embedded apiKey={apiKey}>
+      <style>{`
+        .app-shell {
+          width: 100%;
+          max-width: none;
+          padding: 0 8px 16px;
+          box-sizing: border-box;
+        }
+        .app-shell s-page {
+          width: 100%;
+          max-width: none;
+        }
+        .app-shell s-section {
+          max-width: none;
+        }
+      `}</style>
       <s-app-nav>
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/rates">Rates</s-link>
       </s-app-nav>
-      <Outlet />
+      <div className="app-shell">
+        <Outlet />
+      </div>
     </AppProvider>
   );
 }

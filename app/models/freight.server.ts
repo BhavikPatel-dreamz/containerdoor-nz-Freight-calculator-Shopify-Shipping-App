@@ -87,12 +87,25 @@ export async function updateAppSettings(shop: string, formData: FormData) {
   });
 }
 
-export async function listRates(shop: string, page: number, query?: string) {
-  const take = 25;
+export async function listRates(
+  shop: string,
+  page: number,
+  filters?: {
+    query?: string;
+    company?: CarrierCompany | "";
+    serviceType?: ServiceType | "";
+  },
+) {
+  const take = 100;
   const skip = Math.max(page - 1, 0) * take;
+  const query = filters?.query?.trim();
+  const company = filters?.company || "";
+  const serviceType = filters?.serviceType || "";
   const where = {
     shop,
     active: true,
+    ...(company ? { company } : {}),
+    ...(serviceType ? { serviceType } : {}),
     ...(query
       ? {
           OR: [
@@ -209,18 +222,27 @@ export async function importRatesCsv(shop: string, csv: string) {
   for (const line of lines) {
     const cells = parseCsvLine(line);
     const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+    const minWeightGrams = toNullableInt(row.minWeightGrams);
+    const maxWeightGrams = toNullableInt(row.maxWeightGrams);
+    const minVolumeCm3 = toNullableInt(row.minVolumeCm3);
+    const maxVolumeCm3 = toNullableInt(row.maxVolumeCm3);
+    const useWeightRange =
+      normaliseBoolean(row.useWeightRange) || minWeightGrams !== null || maxWeightGrams !== null;
+    const useVolumeRange =
+      normaliseBoolean(row.useVolumeRange) || minVolumeCm3 !== null || maxVolumeCm3 !== null;
+
     const data = {
       shop,
       company: normaliseEnum(row.company, carrierCompanies, "FLIWAY"),
       serviceType: normaliseEnum(row.serviceType, serviceTypes, "STANDARD_DELIVERY"),
       city: row.city || "All",
       postalCode: row.postalCode || "*",
-      useWeightRange: normaliseBoolean(row.useWeightRange),
-      minWeightGrams: toNullableInt(row.minWeightGrams),
-      maxWeightGrams: toNullableInt(row.maxWeightGrams),
-      useVolumeRange: normaliseBoolean(row.useVolumeRange),
-      minVolumeCm3: toNullableInt(row.minVolumeCm3),
-      maxVolumeCm3: toNullableInt(row.maxVolumeCm3),
+      useWeightRange,
+      minWeightGrams,
+      maxWeightGrams,
+      useVolumeRange,
+      minVolumeCm3,
+      maxVolumeCm3,
       rate: parseDecimalString(row.rate),
       zoneSurcharge: parseDecimalString(row.zoneSurcharge),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
@@ -359,8 +381,18 @@ export async function findMatchingRates(
 }
 
 function readRateForm(shop: string, formData: FormData) {
-  const useWeightRange = parseBoolean(formData.get("useWeightRange"));
-  const useVolumeRange = parseBoolean(formData.get("useVolumeRange"));
+  const minWeightGrams = parseOptionalInt(formData.get("minWeightGrams"));
+  const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
+  const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
+  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3"));
+  const useWeightRange =
+    parseBoolean(formData.get("useWeightRange")) ||
+    minWeightGrams !== null ||
+    maxWeightGrams !== null;
+  const useVolumeRange =
+    parseBoolean(formData.get("useVolumeRange")) ||
+    minVolumeCm3 !== null ||
+    maxVolumeCm3 !== null;
 
   return {
     shop,
@@ -369,11 +401,11 @@ function readRateForm(shop: string, formData: FormData) {
     city: String(formData.get("city") || "").trim(),
     postalCode: String(formData.get("postalCode") || "*").trim(),
     useWeightRange,
-    minWeightGrams: useWeightRange ? parseOptionalInt(formData.get("minWeightGrams")) : null,
-    maxWeightGrams: useWeightRange ? parseOptionalInt(formData.get("maxWeightGrams")) : null,
+    minWeightGrams,
+    maxWeightGrams,
     useVolumeRange,
-    minVolumeCm3: useVolumeRange ? parseOptionalInt(formData.get("minVolumeCm3")) : null,
-    maxVolumeCm3: useVolumeRange ? parseOptionalInt(formData.get("maxVolumeCm3")) : null,
+    minVolumeCm3,
+    maxVolumeCm3,
     rate: parseDecimalString(formData.get("rate")),
     zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
     mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,

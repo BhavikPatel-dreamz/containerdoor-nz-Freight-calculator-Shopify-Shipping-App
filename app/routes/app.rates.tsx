@@ -1,5 +1,13 @@
+import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, Link, useActionData, useLoaderData, useNavigation, useSearchParams } from "react-router";
+import {
+  Form,
+  Link,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+  useSearchParams,
+} from "react-router";
 import {
   carrierCompanies,
   carrierModes,
@@ -17,7 +25,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const page = Number.parseInt(url.searchParams.get("page") || "1", 10);
   const query = url.searchParams.get("q") || "";
-  return listRates(session.shop, page, query);
+  const companyParam = url.searchParams.get("company") || "";
+  const serviceTypeParam = url.searchParams.get("serviceType") || "";
+
+  const company = carrierCompanies.includes(companyParam as (typeof carrierCompanies)[number])
+    ? companyParam
+    : "";
+  const serviceType = serviceTypes.includes(serviceTypeParam as (typeof serviceTypes)[number])
+    ? serviceTypeParam
+    : "";
+
+  return listRates(session.shop, page, {
+    query,
+    company: company as "" | (typeof carrierCompanies)[number],
+    serviceType: serviceType as "" | (typeof serviceTypes)[number],
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -43,95 +65,153 @@ export default function RatesPage() {
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
+  const [showAddForm, setShowAddForm] = useState(false);
+
   const query = searchParams.get("q") || "";
+  const selectedCompany = searchParams.get("company") || "";
+  const selectedServiceType = searchParams.get("serviceType") || "";
   const isSubmitting = navigation.state === "submitting";
 
+  const buildPageLink = (nextPage: number) => {
+    const params = new URLSearchParams();
+    params.set("page", String(nextPage));
+    if (query) params.set("q", query);
+    if (selectedCompany) params.set("company", selectedCompany);
+    if (selectedServiceType) params.set("serviceType", selectedServiceType);
+    return `/app/rates?${params.toString()}`;
+  };
+
   return (
-    <s-page heading="Rate management">
+    <s-page inlineSize="large" heading="Rate management">
       <style>{`
-        .panel {
-          border: 1px solid #d5d9dd;
-          border-radius: 12px;
-          padding: 14px;
-          background: #fff;
-        }
-        .toolbar {
+        .top-row {
           display: flex;
-          flex-wrap: wrap;
+          justify-content: flex-end;
           gap: 10px;
-          align-items: end;
-        }
-        .search-form {
-          display: flex;
-          gap: 8px;
-          align-items: center;
+          margin-bottom: 12px;
           flex-wrap: wrap;
         }
-        .search-form input,
-        .import-form input[type="file"],
-        .grid-form input,
-        .grid-form select,
-        .rates-table input,
-        .rates-table select {
-          border: 1px solid #bec5cc;
-          border-radius: 8px;
-          padding: 7px 9px;
-          background: #fff;
-          color: #1f2933;
-          min-height: 34px;
-        }
-        .import-form {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 8px;
-          align-items: center;
-          padding: 10px;
-          border: 1px dashed #bec5cc;
+        .top-btn {
+          border: 1px solid #d4dce4;
           border-radius: 10px;
-          background: #f8fafb;
+          background: #fff;
+          color: #0f2a43;
+          padding: 8px 14px;
+          font-weight: 700;
+          font-size: 14px;
+          cursor: pointer;
+          box-shadow: 0 1px 2px rgba(15, 42, 67, 0.08);
+        }
+        .import-btn {
+          position: relative;
+          overflow: hidden;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .import-btn input[type="file"] {
+          position: absolute;
+          inset: 0;
+          opacity: 0;
+          cursor: pointer;
+        }
+        .add-wrap {
+          border: 1px solid #dce5ef;
+          border-radius: 12px;
+          background: #f8fbff;
+          padding: 14px;
+          margin-bottom: 12px;
+        }
+        .rates-card {
+          border: 1px solid #dce5ef;
+          border-radius: 12px;
+          background: #fff;
+          overflow: hidden;
+        }
+        .rates-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e8eef4;
+        }
+        .rates-title {
+          margin: 0;
+          color: #0f2a43;
+          font-size: 22px;
+          font-weight: 700;
         }
         .summary {
           margin: 0;
-          color: #52606d;
-          font-size: 13px;
+          color: #486581;
+          font-size: 14px;
+          white-space: nowrap;
+        }
+        .toolbar {
+          display: flex;
+          align-items: end;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e8eef4;
+        }
+        .search-form {
+          display: grid;
+          gap: 10px;
+          grid-template-columns: 2fr 1fr 1fr auto;
+          flex: 1;
+        }
+        .search-form input,
+        .search-form select,
+        .rates-table input,
+        .rates-table select,
+        .grid-form input,
+        .grid-form select {
+          width: 100%;
+          border: 1px solid #d3dde8;
+          border-radius: 10px;
+          padding: 9px 12px;
+          min-height: 36px;
+          box-sizing: border-box;
         }
         .table-wrap {
+          width: 100%;
           overflow-x: auto;
-          border: 1px solid #e3e7ea;
-          border-radius: 10px;
         }
         .rates-table {
           width: 100%;
+          min-width: 1320px;
           border-collapse: collapse;
-          font-size: 13px;
-          min-width: 1200px;
+          font-size: 14px;
         }
         .rates-table th,
         .rates-table td {
-          border-bottom: 1px solid #edf1f4;
-          padding: 8px;
+          border-bottom: 1px solid #eef3f8;
+          padding: 12px 10px;
           vertical-align: top;
           white-space: nowrap;
         }
         .rates-table th {
+          color: #486581;
+          font-weight: 700;
+          background: #fff;
           position: sticky;
           top: 0;
-          background: #f4f7f9;
-          color: #334e68;
-          font-weight: 700;
           z-index: 1;
         }
         .range-col {
           display: grid;
           gap: 6px;
-          min-width: 155px;
+          grid-auto-flow: column;
         }
         .checkbox-row {
           display: inline-flex;
           align-items: center;
           gap: 6px;
-          color: #52606d;
           font-size: 12px;
+          color: #52606d;
         }
         .inline-actions {
           display: flex;
@@ -139,26 +219,27 @@ export default function RatesPage() {
           align-items: center;
         }
         .plain-save {
-          border: 1px solid #9fb3c8;
+          border: 1px solid #d3dde8;
           background: #fff;
           color: #102a43;
-          border-radius: 8px;
-          padding: 7px 10px;
+          border-radius: 10px;
+          padding: 8px 12px;
           font-weight: 600;
+          height: 36px;
           cursor: pointer;
         }
         .pager {
           display: flex;
           gap: 10px;
-          margin-top: 8px;
+          padding: 12px 16px;
         }
         .pager a {
           text-decoration: none;
-          border: 1px solid #bec5cc;
+          border: 1px solid #d3dde8;
           border-radius: 999px;
           padding: 6px 12px;
           color: #243b53;
-          font-size: 13px;
+          font-size: 14px;
         }
         .grid-form {
           display: grid;
@@ -171,71 +252,116 @@ export default function RatesPage() {
           color: #455a64;
           font-size: 13px;
         }
+        @media (max-width: 980px) {
+          .rates-head {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+          .search-form {
+            grid-template-columns: 1fr;
+          }
+          .toolbar {
+            display: grid;
+          }
+        }
       `}</style>
 
-      <s-section heading="Add rate">
-        {actionData?.message ? (
-          <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
-        ) : null}
-        <div className="panel">
+      {actionData?.message ? (
+        <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
+      ) : null}
+
+      <div className="top-row">
+        <button className="top-btn" type="button" onClick={() => setShowAddForm((value) => !value)}>
+          + {showAddForm ? "Close add rate" : "Add rate"}
+        </button>
+        <Form method="post" encType="multipart/form-data">
+          <input type="hidden" name="intent" value="import" />
+          <label className="top-btn import-btn">
+            Import CSV
+            <input
+              type="file"
+              name="csv"
+              accept=".csv,text/csv"
+              onChange={(event) => {
+                if (event.currentTarget.files?.length) {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+            />
+          </label>
+        </Form>
+      </div>
+
+      {showAddForm ? (
+        <div className="add-wrap">
           <RateForm />
         </div>
-      </s-section>
+      ) : null}
 
-      <s-section heading="Rates">
-        <div className="panel">
-          <s-stack direction="block" gap="base">
-            <div className="toolbar">
-              <Form method="get" className="search-form">
-              <input name="q" placeholder="City or postal code" defaultValue={query} />
-              <s-button type="submit">Search</s-button>
-              </Form>
-              <s-button href="/api/rates/export">Export CSV</s-button>
-            </div>
-            <Form className="import-form" method="post" encType="multipart/form-data">
-              <input type="hidden" name="intent" value="import" />
-              <input type="file" name="csv" accept=".csv,text/csv" />
-              <s-button type="submit" {...(isSubmitting ? { loading: true } : {})}>
-                Import CSV
-              </s-button>
-            </Form>
-
-            <p className="summary">
-              {total} active rates · page {page} of {pageCount}
-            </p>
-
-            <div className="table-wrap">
-              <table className="rates-table">
-                <thead>
-                  <tr>
-                    <th>Company</th>
-                    <th>Service</th>
-                    <th>City</th>
-                    <th>Postal</th>
-                    <th>Weight g</th>
-                    <th>Volume cm3</th>
-                    <th>Rate</th>
-                    <th>Zone surcharge</th>
-                    <th>Mode</th>
-                    <th>Active</th>
-                    <th>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rates.map((rate) => (
-                    <InlineRateRow key={rate.id} rate={rate} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="pager">
-              {page > 1 ? <Link to={`/app/rates?page=${page - 1}&q=${query}`}>Previous</Link> : null}
-              {page < pageCount ? <Link to={`/app/rates?page=${page + 1}&q=${query}`}>Next</Link> : null}
-            </div>
-          </s-stack>
+      <div className="rates-card">
+        <div className="rates-head">
+          <h2 className="rates-title">Rates list</h2>
+          <p className="summary">
+            {total} active rates · page {page} of {pageCount}
+          </p>
         </div>
-      </s-section>
+
+        <div className="toolbar">
+          <Form method="get" className="search-form">
+            <input name="q" placeholder="Search city or postal code" defaultValue={query} />
+            <select name="company" defaultValue={selectedCompany}>
+              <option value="">All companies</option>
+              {carrierCompanies.map((company) => (
+                <option key={company} value={company}>
+                  {companyLabels[company]}
+                </option>
+              ))}
+            </select>
+            <select name="serviceType" defaultValue={selectedServiceType}>
+              <option value="">All services</option>
+              {serviceTypes.map((serviceType) => (
+                <option key={serviceType} value={serviceType}>
+                  {serviceLabels[serviceType]}
+                </option>
+              ))}
+            </select>
+            <s-button type="submit">Search</s-button>
+          </Form>
+          <s-button href="/api/rates/export" {...(isSubmitting ? { loading: true } : {})}>
+            Export CSV
+          </s-button>
+        </div>
+
+        <div className="table-wrap">
+          <table className="rates-table">
+            <thead>
+              <tr>
+                <th>Company</th>
+                <th>Service</th>
+                <th>City</th>
+                <th>Postal</th>
+                <th>Weight (g)</th>
+                <th>Volume (cm3)</th>
+                <th>Rate</th>
+                <th>Surcharge</th>
+                <th>Mode</th>
+                <th>Active</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rates.map((rate) => (
+                <InlineRateRow key={rate.id} rate={rate} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="pager">
+          {page > 1 ? <Link to={buildPageLink(page - 1)}>Previous</Link> : null}
+          {page < pageCount ? <Link to={buildPageLink(page + 1)}>Next</Link> : null}
+        </div>
+      </div>
     </s-page>
   );
 }
