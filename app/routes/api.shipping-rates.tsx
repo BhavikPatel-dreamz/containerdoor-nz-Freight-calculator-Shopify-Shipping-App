@@ -129,9 +129,9 @@ async function getFreightPackages(
     const properties = item.properties ?? {};
 
     // ADD THIS — log raw metafields coming from Shopify
-    console.log(`[DEBUG] variantGid: ${variantGid}`);
-    console.log(`[DEBUG] metafields from Shopify:`, JSON.stringify(metafields));
-    console.log(`[DEBUG] item.properties:`, JSON.stringify(properties));
+    // console.log(`[DEBUG] variantGid: ${variantGid}`);
+    // console.log(`[DEBUG] metafields from Shopify:`, JSON.stringify(metafields));
+    // console.log(`[DEBUG] item.properties:`, JSON.stringify(properties));
 
     const quantity = Number(item.quantity ?? 1);
     const unitsPerBox = positiveInt(metafields.units_per_box || properties.units_per_box) || 1;

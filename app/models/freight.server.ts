@@ -329,16 +329,7 @@ export async function calculateServiceRates(
       }
     }
 
-    console.log(
-      `[DEBUG] bestByServiceCompany:`,
-      JSON.stringify(
-        [...bestByServiceCompany.entries()].map(([k, v]) => ({
-          key: k,
-          company: v.company,
-          amount: v.amount,
-        })),
-      ),
-    );
+    
 
     for (const [key, match] of bestByServiceCompany.entries()) {
       const existing = serviceTotals.get(key) ?? {
@@ -357,17 +348,16 @@ export async function calculateServiceRates(
 
   const completeServiceRates: CalculatedServiceRate[] = [];
 
-  for (const [key, totals] of serviceTotals.entries()) {
-  console.log(`[DEBUG] serviceTotals key:${key} coveredPackages:${totals.coveredPackages} packagesByVariant.size:${packagesByVariant.size}`);
-  if (totals.coveredPackages !== packagesByVariant.size) continue;
-  completeServiceRates.push({
-    serviceType: totals.serviceType,
-    total: applySettings(totals.subtotal, settings),
-    currency: settings.defaultCurrency,
-    packageCount: totals.packageCount,
-    companies: [totals.company],
-  });
-}
+  for (const [, totals] of serviceTotals.entries()) {
+    if (totals.coveredPackages !== packagesByVariant.size) continue;
+    completeServiceRates.push({
+      serviceType: totals.serviceType,
+      total: applySettings(totals.subtotal, settings),
+      currency: settings.defaultCurrency,
+      packageCount: totals.packageCount,
+      companies: [totals.company], // single company per entry now
+    });
+  }
 
   return completeServiceRates.sort((left, right) =>
     left.serviceType.localeCompare(right.serviceType),
@@ -391,8 +381,8 @@ export async function findMatchingRates(
   });
 
 
-  console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
-console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
+//   console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
+// console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
 
   return rates.filter((rate) => {
     const matchesWeight =
@@ -406,7 +396,7 @@ console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
     const matchesPostalCode =
       !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
     const matchesCity = !city || cityMatches(city, rate.city);
-     console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
+    //  console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
 
     return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
   });
