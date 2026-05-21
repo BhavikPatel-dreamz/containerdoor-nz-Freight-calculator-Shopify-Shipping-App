@@ -40,11 +40,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `Shipping callback received for ${shop} with ${payload.rate?.items?.length ?? 0} cart items`,
     );
 
-    if (useStaticRates()) {
-      return Response.json({
-        rates: buildStaticRates(payload.rate?.currency || "NZD"),
-      });
-    }
+    console.log(`Environment variable SHOPIFY_SHOP_DOMAIN: ${JSON.stringify(payload)}`);
+    
+    console.log(`USE_STATIC_SHIPPING_RATES is ${useStaticRates()}`);
+    console.log(`Payload rate currency: ${payload.rate?.currency}`);
+    // console.log({
+    //     rates: buildStaticRates(payload.rate?.currency || "NZD"),
+    //   })
+
+    //   return Response.json({
+    //     rates: buildStaticRates(payload.rate?.currency || "NZD"),
+    //   });
+
 
     const destination = {
       city: payload.rate?.destination?.city,
@@ -80,11 +87,11 @@ function useStaticRates() {
 function buildStaticRates(currency: string) {
   return [
     {
-      service_name: "Standard delivery",
-      service_code: "standard_delivery",
-      description: "ContainerDoor static test rate",
-      currency,
-      total_price: "14500",
+      "service_name": "Standard Shipping bhavik",
+      "service_code": "STD",
+      "total_price": "1400",
+      "description": "3-5 Business Days",
+      "currency": "USD"
     },
     {
       service_name: "Depot delivery",
