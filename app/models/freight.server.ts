@@ -406,7 +406,7 @@ function readRateForm(shop: string, formData: FormData) {
   const minWeightGrams = parseOptionalInt(formData.get("minWeightGrams"));
   const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
   const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
-  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3"));
+  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3")); 
   const useWeightRange =
     parseBoolean(formData.get("useWeightRange")) ||
     minWeightGrams !== null ||
