@@ -283,64 +283,91 @@ export async function calculateServiceRates(
   packages: FreightPackage[],
 ) {
   const settings = await getAppSettings(shop);
-  const serviceTotals = new Map<
-    ServiceType,
+
+  // KEY CHANGE: map key is now "serviceType|company" instead of just serviceType
+  const serviceTotals = new Map<string, // "STANDARD_DELIVERY|TGE" etc.
     {
+      serviceType: ServiceType;
+      company: CarrierCompany;
       subtotal: number;
       packageCount: number;
-      companies: Set<CarrierCompany>;
       coveredPackages: number;
     }
   >();
 
-  for (const freightPackage of packages) {
-    const matchedRates = await findMatchingRates(shop, destination, freightPackage);
-    const bestByService = new Map<
-      ServiceType,
-      { amount: number; company: CarrierCompany; boxes: number }
+  const packagesByVariant = new Map<string, FreightPackage[]>();
+  for (const pkg of packages) {
+    const key = pkg.variantId ?? "";
+    const group = packagesByVariant.get(key) ?? [];
+    group.push(pkg);
+    packagesByVariant.set(key, group);
+  }
+
+  for (const [, variantPackages] of packagesByVariant) {
+    // KEY CHANGE: best rate keyed by "serviceType|company"
+    const bestByServiceCompany = new Map<string,
+      { serviceType: ServiceType; company: CarrierCompany; amount: number; boxes: number }
     >();
 
-    for (const matchedRate of matchedRates) {
-      const amount = calculateFreightRate(freightPackage, matchedRate);
-      if (amount === null) continue;
+    for (const freightPackage of variantPackages) {
+      const matchedRates = await findMatchingRates(shop, destination, freightPackage);
 
-      const current = bestByService.get(matchedRate.serviceType);
-      if (!current || amount < current.amount) {
-        bestByService.set(matchedRate.serviceType, {
-          amount,
-          company: matchedRate.company,
-          boxes: freightPackage.boxes,
-        });
+      for (const matchedRate of matchedRates) {
+        const amount = calculateFreightRate(freightPackage, matchedRate);
+        if (amount === null) continue;
+
+        const key = `${matchedRate.serviceType}|${matchedRate.company}`;
+        const current = bestByServiceCompany.get(key);
+        if (!current || amount < current.amount) {
+          bestByServiceCompany.set(key, {
+            serviceType: matchedRate.serviceType,
+            company: matchedRate.company,
+            amount,
+            boxes: freightPackage.boxes,
+          });
+        }
       }
     }
 
-    for (const [serviceType, match] of bestByService.entries()) {
-      const existing = serviceTotals.get(serviceType) ?? {
+    console.log(
+      `[DEBUG] bestByServiceCompany:`,
+      JSON.stringify(
+        [...bestByServiceCompany.entries()].map(([k, v]) => ({
+          key: k,
+          company: v.company,
+          amount: v.amount,
+        })),
+      ),
+    );
+
+    for (const [key, match] of bestByServiceCompany.entries()) {
+      const existing = serviceTotals.get(key) ?? {
+        serviceType: match.serviceType,
+        company: match.company,
         subtotal: 0,
         packageCount: 0,
-        companies: new Set<CarrierCompany>(),
         coveredPackages: 0,
       };
       existing.subtotal += match.amount;
       existing.packageCount += match.boxes;
       existing.coveredPackages += 1;
-      existing.companies.add(match.company);
-      serviceTotals.set(serviceType, existing);
+      serviceTotals.set(key, existing);
     }
   }
 
   const completeServiceRates: CalculatedServiceRate[] = [];
 
-  for (const [serviceType, totals] of serviceTotals.entries()) {
-    if (totals.coveredPackages !== packages.length) continue;
-    completeServiceRates.push({
-      serviceType,
-      total: applySettings(totals.subtotal, settings),
-      currency: settings.defaultCurrency,
-      packageCount: totals.packageCount,
-      companies: [...totals.companies],
-    });
-  }
+  for (const [key, totals] of serviceTotals.entries()) {
+  console.log(`[DEBUG] serviceTotals key:${key} coveredPackages:${totals.coveredPackages} packagesByVariant.size:${packagesByVariant.size}`);
+  if (totals.coveredPackages !== packagesByVariant.size) continue;
+  completeServiceRates.push({
+    serviceType: totals.serviceType,
+    total: applySettings(totals.subtotal, settings),
+    currency: settings.defaultCurrency,
+    packageCount: totals.packageCount,
+    companies: [totals.company],
+  });
+}
 
   return completeServiceRates.sort((left, right) =>
     left.serviceType.localeCompare(right.serviceType),
@@ -363,6 +390,10 @@ export async function findMatchingRates(
     },
   });
 
+
+  console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
+console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
+
   return rates.filter((rate) => {
     const matchesWeight =
       !rate.useWeightRange ||
@@ -375,6 +406,7 @@ export async function findMatchingRates(
     const matchesPostalCode =
       !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
     const matchesCity = !city || cityMatches(city, rate.city);
+     console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
 
     return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
   });
