@@ -2,9 +2,9 @@ import type { ActionFunctionArgs } from "react-router";
 import type { CarrierCompany } from "@prisma/client";
 import {
   carrierCompanies,
-  companyLabels,
+  // companyLabels,
   freightMetafieldNamespace,
-  serviceLabels,
+  // serviceLabels,
 } from "../lib/freight";
 import { calculateServiceRates, type FreightPackage } from "../models/freight.server";
 import { unauthenticated } from "../shopify.server";
@@ -41,7 +41,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
 
     // console.log(`Environment variable SHOPIFY_SHOP_DOMAIN: ${JSON.stringify(payload)}`);
-    
+
     // console.log(`USE_STATIC_SHIPPING_RATES is ${useStaticRates()}`);
     // console.log(`Payload rate currency: ${payload.rate?.currency}`);
     // console.log({
@@ -64,13 +64,51 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const serviceRates = await calculateServiceRates(shop, destination, packages);
-    const rates = serviceRates.map((serviceRate) => ({
-      service_name: `${serviceLabels[serviceRate.serviceType]} via ${serviceRate.companies.map((company) => companyLabels[company]).join(", ")}`,
-      service_code: `${serviceRate.serviceType.toLowerCase()}_${serviceRate.companies[0].toLowerCase()}`,  // ← unique per company
-      description: `ContainerDoor freight (${serviceRate.packageCount} boxes)`,
-      currency: serviceRate.currency || payload.rate?.currency || "NZD",
-      total_price: Math.round(serviceRate.total * 100).toString(),
-    }));
+
+    // Filter to Standard Delivery only; one combined rate shown to customer
+    const standardRate = serviceRates.find((r) => r.serviceType === "STANDARD_DELIVERY");
+
+    if (!standardRate) {
+      // No valid carrier found for this address — show manual quote message
+      return Response.json({
+        rates: [
+          {
+            service_name: "Freight Quote Required",
+            service_code: "manual_quote",
+            description: "Please contact us for a freight quote for your location.",
+            currency: payload.rate?.currency || "NZD",
+            total_price: "0",
+          },
+        ],
+      });
+    }
+
+    // Log per-line-item breakdown for internal visibility
+    console.log(
+      `[FREIGHT] Standard Delivery breakdown for ${shop}:`,
+      JSON.stringify(standardRate.lineItemBreakdown, null, 2),
+    );
+
+
+    // Build a compact metadata string saved natively on the Shopify order shipping line
+    const lineItemSummary = standardRate.lineItemBreakdown
+      .map((l) => `${l.variantId.split("/").pop()}:${l.company}x${l.boxes}`)
+      .join("|");
+
+    // This service_code is stored verbatim on the Shopify order — visible in admin + API
+    // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
+    const companies = [...new Set(standardRate.lineItemBreakdown.map((l) => l.company))].join(",");
+    const serviceCode = `standard_delivery::${companies}::${standardRate.packageCount}boxes::${lineItemSummary}`;
+
+    const rates = [
+      {
+        service_name: "Standard Delivery",
+        service_code: serviceCode,
+        currency: standardRate.currency || payload.rate?.currency || "NZD",
+        total_price: Math.round(standardRate.total * 100).toString(),
+      },
+    ];
+
     return Response.json({ rates });
   } catch (error) {
     console.error("Shipping callback failed", error);

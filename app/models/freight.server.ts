@@ -56,6 +56,13 @@ export type CalculatedServiceRate = {
   currency: string;
   packageCount: number;
   companies: CarrierCompany[];
+  // NEW: per-variant breakdown for internal visibility
+  lineItemBreakdown: Array<{
+    variantId: string;
+    company: CarrierCompany;
+    amount: number;
+    boxes: number;
+  }>;
 };
 
 export async function getAppSettings(shop: string) {
@@ -284,17 +291,6 @@ export async function calculateServiceRates(
 ) {
   const settings = await getAppSettings(shop);
 
-  // KEY CHANGE: map key is now "serviceType|company" instead of just serviceType
-  const serviceTotals = new Map<string, // "STANDARD_DELIVERY|TGE" etc.
-    {
-      serviceType: ServiceType;
-      company: CarrierCompany;
-      subtotal: number;
-      packageCount: number;
-      coveredPackages: number;
-    }
-  >();
-
   const packagesByVariant = new Map<string, FreightPackage[]>();
   for (const pkg of packages) {
     const key = pkg.variantId ?? "";
@@ -303,11 +299,25 @@ export async function calculateServiceRates(
     packagesByVariant.set(key, group);
   }
 
-  for (const [, variantPackages] of packagesByVariant) {
-    // KEY CHANGE: best rate keyed by "serviceType|company"
-    const bestByServiceCompany = new Map<string,
-      { serviceType: ServiceType; company: CarrierCompany; amount: number; boxes: number }
-    >();
+  // For each service type, accumulate cheapest-per-variant totals
+  // serviceType -> { total, packageCount, lineItems, coveredVariants }
+  const serviceAccum = new Map<ServiceType, {
+      total: number;
+      packageCount: number;
+      coveredVariants: number;
+      lineItemBreakdown: Array<{
+        variantId: string;
+        company: CarrierCompany;
+        amount: number;
+        boxes: number;
+      }>;
+    }
+  >();
+
+  for (const [variantId, variantPackages] of packagesByVariant) {
+    // For each serviceType, find the cheapest company across all packages for this variant
+    // Each package in variantPackages has its own allowed company
+    const bestByService = new Map<ServiceType, { company: CarrierCompany; amount: number; boxes: number }>();
 
     for (const freightPackage of variantPackages) {
       const matchedRates = await findMatchingRates(shop, destination, freightPackage);
@@ -316,11 +326,9 @@ export async function calculateServiceRates(
         const amount = calculateFreightRate(freightPackage, matchedRate);
         if (amount === null) continue;
 
-        const key = `${matchedRate.serviceType}|${matchedRate.company}`;
-        const current = bestByServiceCompany.get(key);
+        const current = bestByService.get(matchedRate.serviceType);
         if (!current || amount < current.amount) {
-          bestByServiceCompany.set(key, {
-            serviceType: matchedRate.serviceType,
+          bestByService.set(matchedRate.serviceType, {
             company: matchedRate.company,
             amount,
             boxes: freightPackage.boxes,
@@ -329,39 +337,46 @@ export async function calculateServiceRates(
       }
     }
 
-    
-
-    for (const [key, match] of bestByServiceCompany.entries()) {
-      const existing = serviceTotals.get(key) ?? {
-        serviceType: match.serviceType,
-        company: match.company,
-        subtotal: 0,
+    // Accumulate into serviceAccum
+    for (const [serviceType, best] of bestByService) {
+      const existing = serviceAccum.get(serviceType) ?? {
+        total: 0,
         packageCount: 0,
-        coveredPackages: 0,
+        coveredVariants: 0,
+        lineItemBreakdown: [],
       };
-      existing.subtotal += match.amount;
-      existing.packageCount += match.boxes;
-      existing.coveredPackages += 1;
-      serviceTotals.set(key, existing);
+      existing.total += best.amount;
+      existing.packageCount += best.boxes;
+      existing.coveredVariants += 1;
+      existing.lineItemBreakdown.push({
+        variantId,
+        company: best.company,
+        amount: best.amount,
+        boxes: best.boxes,
+      });
+      serviceAccum.set(serviceType, existing);
     }
   }
 
   const completeServiceRates: CalculatedServiceRate[] = [];
 
-  for (const [, totals] of serviceTotals.entries()) {
-    if (totals.coveredPackages !== packagesByVariant.size) continue;
+  for (const [serviceType, accum] of serviceAccum) {
+    // Only include if every variant is covered
+    if (accum.coveredVariants !== packagesByVariant.size) continue;
+
+    const companies = [...new Set(accum.lineItemBreakdown.map((l) => l.company))];
+
     completeServiceRates.push({
-      serviceType: totals.serviceType,
-      total: applySettings(totals.subtotal, settings),
+      serviceType,
+      total: applySettings(accum.total, settings),
       currency: settings.defaultCurrency,
-      packageCount: totals.packageCount,
-      companies: [totals.company], // single company per entry now
+      packageCount: accum.packageCount,
+      companies,
+      lineItemBreakdown: accum.lineItemBreakdown,
     });
   }
 
-  return completeServiceRates.sort((left, right) =>
-    left.serviceType.localeCompare(right.serviceType),
-  );
+  return completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
 }
 
 export async function findMatchingRates(
