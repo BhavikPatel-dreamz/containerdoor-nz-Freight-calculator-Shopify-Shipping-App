@@ -40,17 +40,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `Shipping callback received for ${shop} with ${payload.rate?.items?.length ?? 0} cart items`,
     );
 
-<<<<<<< HEAD
-    console.log(`Environment variable SHOPIFY_SHOP_DOMAIN: ${JSON.stringify(payload)}`);
-    
-    console.log(`USE_STATIC_SHIPPING_RATES is ${useStaticRates()}`);
-    console.log(`Payload rate currency: ${payload.rate?.currency}`);
-=======
     // console.log(`Environment variable SHOPIFY_SHOP_DOMAIN: ${JSON.stringify(payload)}`);
 
     // console.log(`USE_STATIC_SHIPPING_RATES is ${useStaticRates()}`);
     // console.log(`Payload rate currency: ${payload.rate?.currency}`);
->>>>>>> compare-old-work
     // console.log({
     //     rates: buildStaticRates(payload.rate?.currency || "NZD"),
     //   })
