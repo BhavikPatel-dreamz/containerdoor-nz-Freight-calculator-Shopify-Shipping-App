@@ -2,7 +2,7 @@
 
 client_id = "787d83dca600474d64ea044ad28e4a2d"
 name = "containerdoo-calculator"
-application_url = "https://example.com"
+application_url = "https://containerdoor-nz-freight-calculator.vercel.app"
 embedded = true
 
 [build]
@@ -25,4 +25,4 @@ api_version = "2026-07"
 scopes = "read_products,write_products,write_shipping,read_shipping,read_orders"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://containerdoor-nz-freight-calculator.vercel.app/api/auth" ]
