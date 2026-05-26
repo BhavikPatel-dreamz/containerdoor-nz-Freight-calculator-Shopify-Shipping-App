@@ -42,6 +42,24 @@ export const freightFormula = {
     TGE: 25,
   } as Partial<Record<CarrierCompany, number>>,
   depotCollectionCompanies: ["FLIWAY", "MAINFREIGHT", "TGE"] as CarrierCompany[],
+
+  // NEW: NZP-specific
+  nzp: {
+    totalVariableRate: 0.114,   // TVR = VFR (10.8%) + RUC (0.6%)
+    ruralSurcharge: 4.7854,
+    signatureSurcharge: 0.5662,
+    ageRestrictedSurcharge: 2.2835,
+    residentialSurcharge: 0,    // NZP has no residential fee
+  },
+
+  // NEW: Castle-specific
+  castle: {
+    totalVariableRate: 0.167,   // TVR = VFF (12.2%) + RUC (4.5%)
+    residentialSurcharge: 1,    // Always applied
+    ruralSurcharge: 1,
+    signatureSurcharge: 1,
+    waihekeSurcharge: 1,
+  },
 };
 
 export const modeLabels: Record<CarrierMode, string> = {

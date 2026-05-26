@@ -425,6 +425,17 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     return 0;
   }
 
+  // NEW: NZP uses weight/CBM lookup table pricing
+  if (rate.company === "NZP") {
+    return calculateNzpRate(freightPackage, rate);
+  }
+
+  // NEW: Castle Parcels uses CBM lookup table pricing
+  if (rate.company === "CASTLE") {
+    return calculateCastleRate(freightPackage, rate);
+  }
+
+  // Existing logic for FLIWAY, TGE, MAINFREIGHT, M2H (CBM × rate)
   const cbm = freightPackage.volumeCm3 / 1_000_000;
   const baseFreight = cbm * Number(rate.rate);
   const zoneSurcharge = rate.serviceType === "STANDARD_DELIVERY" ? Number(rate.zoneSurcharge) : 0;
@@ -435,6 +446,28 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const subtotal = baseFreight + zoneSurcharge + homeDeliveryFee;
   const withMargin = subtotal * (1 + freightFormula.marginRate);
 
+  return withMargin * (1 + freightFormula.gstRate);
+}
+
+// NEW: NZP rate calculation
+// rate.rate = base charge (max of kg-bracket and CBM-bracket rate, pre-stored)
+// rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
+function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
+  const baseCharge = Number(rate.rate);
+  const additionalCharges = Number(rate.zoneSurcharge); // rural/signature stored here
+  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
+  const withMargin = subtotal * (1 + freightFormula.marginRate);
+  return withMargin * (1 + freightFormula.gstRate);
+}
+
+// NEW: Castle Parcels rate calculation
+// rate.rate = CBM bracket base charge
+// rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
+function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate) {
+  const baseCharge = Number(rate.rate);
+  const additionalCharges = Number(rate.zoneSurcharge); // residential always included
+  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.castle.totalVariableRate);
+  const withMargin = subtotal * (1 + freightFormula.marginRate);
   return withMargin * (1 + freightFormula.gstRate);
 }
 
