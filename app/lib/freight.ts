@@ -74,6 +74,7 @@ export const costTypeLabels: Record<CostType, string> = {
 
 export const variantFreightMetafields = [
   { key: "box_length_cm", name: "Box length (cm)", type: "number_decimal" },
+  { key: "box_cbm", name: "Box CBM", type: "number_decimal" },
   { key: "box_width_cm", name: "Box width (cm)", type: "number_decimal" },
   { key: "box_height_cm", name: "Box height (cm)", type: "number_decimal" },
   { key: "number_of_boxes", name: "Number of boxes", type: "number_integer" },

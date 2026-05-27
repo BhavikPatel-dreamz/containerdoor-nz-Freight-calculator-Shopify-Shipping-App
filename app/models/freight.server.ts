@@ -472,9 +472,12 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     return calculateCastleRate(freightPackage, rate);
   }
 
-  // Existing logic for FLIWAY, TGE, MAINFREIGHT, M2H (CBM × rate)
-  const cbm = freightPackage.volumeCm3 / 1_000_000;
-  const baseFreight = cbm * Number(rate.rate);
+  // NEW: pick base value depending on which range the rate uses
+  const baseValue = rate.useWeightRange
+    ? freightPackage.weightGrams / 1000  // kg
+    : freightPackage.volumeCm3 / 1_000_000; // CBM
+
+  const baseFreight = baseValue * Number(rate.rate);
   const zoneSurcharge = rate.serviceType === "STANDARD_DELIVERY" ? Number(rate.zoneSurcharge) : 0;
   const homeDeliveryFee =
     rate.serviceType === "STANDARD_DELIVERY"

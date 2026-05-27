@@ -178,6 +178,8 @@ async function getFreightPackages(
     const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
     const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
     const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
+    const explicitCbm = positiveNumber(metafields.box_cbm || properties.box_cbm);
+    const volumeCm3 = explicitCbm > 0 ? explicitCbm * 1_000_000 : length * width * height * boxes;
     const companyRaw = metafields.courier_company || properties.courier_company || "";
     const companies = companyRaw
       .split(",")
@@ -200,7 +202,7 @@ async function getFreightPackages(
         weightGrams:
           positiveInt(metafields.weight_grams || properties.weight_grams) ||
           Number(item.grams ?? 0) * quantity,
-        volumeCm3: length * width * height * boxes,
+        volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),
       });
