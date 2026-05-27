@@ -233,10 +233,9 @@ export async function importRatesCsv(shop: string, csv: string) {
     const maxWeightGrams = toNullableInt(row.maxWeightGrams);
     const minVolumeCm3 = toNullableInt(row.minVolumeCm3);
     const maxVolumeCm3 = toNullableInt(row.maxVolumeCm3);
-    const useWeightRange =
-      normaliseBoolean(row.useWeightRange) || minWeightGrams !== null || maxWeightGrams !== null;
-    const useVolumeRange =
-      normaliseBoolean(row.useVolumeRange) || minVolumeCm3 !== null || maxVolumeCm3 !== null;
+    const useWeightRange = normaliseBoolean(row.useWeightRange);
+    const useVolumeRange = normaliseBoolean(row.useVolumeRange);
+
 
     const data = {
       shop,
@@ -269,6 +268,10 @@ export async function importRatesCsv(shop: string, csv: string) {
             city: data.city,
             postalCode: data.postalCode,
             mode: data.mode,
+            minWeightGrams: data.minWeightGrams,
+            maxWeightGrams: data.maxWeightGrams,
+            minVolumeCm3: data.minVolumeCm3,
+            maxVolumeCm3: data.maxVolumeCm3,
           },
         });
 
@@ -422,14 +425,10 @@ function readRateForm(shop: string, formData: FormData) {
   const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
   const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
   const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3")); 
-  const useWeightRange =
-    parseBoolean(formData.get("useWeightRange")) ||
-    minWeightGrams !== null ||
-    maxWeightGrams !== null;
-  const useVolumeRange =
-    parseBoolean(formData.get("useVolumeRange")) ||
-    minVolumeCm3 !== null ||
-    maxVolumeCm3 !== null;
+
+  // FIX: Only use the checkbox value — do NOT auto-force true based on min/max presence
+  const useWeightRange = parseBoolean(formData.get("useWeightRange"));
+  const useVolumeRange = parseBoolean(formData.get("useVolumeRange"));
 
   return {
     shop,
