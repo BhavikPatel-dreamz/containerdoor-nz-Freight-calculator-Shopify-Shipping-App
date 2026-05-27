@@ -36,6 +36,7 @@ export default function App() {
         <s-link href="/app">Dashboard</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/rates">Rates</s-link>
+        <s-link href="/app/freight-orders">Freight Orders</s-link>
       </s-app-nav>
       <div className="app-shell">
         <Outlet />

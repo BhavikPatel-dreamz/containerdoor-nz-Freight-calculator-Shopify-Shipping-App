@@ -56,6 +56,13 @@ export type CalculatedServiceRate = {
   currency: string;
   packageCount: number;
   companies: CarrierCompany[];
+  // NEW: per-variant breakdown for internal visibility
+  lineItemBreakdown: Array<{
+    variantId: string;
+    company: CarrierCompany;
+    amount: number;
+    boxes: number;
+  }>;
 };
 
 export async function getAppSettings(shop: string) {
@@ -283,68 +290,93 @@ export async function calculateServiceRates(
   packages: FreightPackage[],
 ) {
   const settings = await getAppSettings(shop);
-  const serviceTotals = new Map<
-    ServiceType,
-    {
-      subtotal: number;
+
+  const packagesByVariant = new Map<string, FreightPackage[]>();
+  for (const pkg of packages) {
+    const key = pkg.variantId ?? "";
+    const group = packagesByVariant.get(key) ?? [];
+    group.push(pkg);
+    packagesByVariant.set(key, group);
+  }
+
+  // For each service type, accumulate cheapest-per-variant totals
+  // serviceType -> { total, packageCount, lineItems, coveredVariants }
+  const serviceAccum = new Map<ServiceType, {
+      total: number;
       packageCount: number;
-      companies: Set<CarrierCompany>;
-      coveredPackages: number;
+      coveredVariants: number;
+      lineItemBreakdown: Array<{
+        variantId: string;
+        company: CarrierCompany;
+        amount: number;
+        boxes: number;
+      }>;
     }
   >();
 
-  for (const freightPackage of packages) {
-    const matchedRates = await findMatchingRates(shop, destination, freightPackage);
-    const bestByService = new Map<
-      ServiceType,
-      { amount: number; company: CarrierCompany; boxes: number }
-    >();
+  for (const [variantId, variantPackages] of packagesByVariant) {
+    // For each serviceType, find the cheapest company across all packages for this variant
+    // Each package in variantPackages has its own allowed company
+    const bestByService = new Map<ServiceType, { company: CarrierCompany; amount: number; boxes: number }>();
 
-    for (const matchedRate of matchedRates) {
-      const amount = calculateFreightRate(freightPackage, matchedRate);
-      if (amount === null) continue;
+    for (const freightPackage of variantPackages) {
+      const matchedRates = await findMatchingRates(shop, destination, freightPackage);
 
-      const current = bestByService.get(matchedRate.serviceType);
-      if (!current || amount < current.amount) {
-        bestByService.set(matchedRate.serviceType, {
-          amount,
-          company: matchedRate.company,
-          boxes: freightPackage.boxes,
-        });
+      for (const matchedRate of matchedRates) {
+        const amount = calculateFreightRate(freightPackage, matchedRate);
+        if (amount === null) continue;
+
+        const current = bestByService.get(matchedRate.serviceType);
+        if (!current || amount < current.amount) {
+          bestByService.set(matchedRate.serviceType, {
+            company: matchedRate.company,
+            amount,
+            boxes: freightPackage.boxes,
+          });
+        }
       }
     }
 
-    for (const [serviceType, match] of bestByService.entries()) {
-      const existing = serviceTotals.get(serviceType) ?? {
-        subtotal: 0,
+    // Accumulate into serviceAccum
+    for (const [serviceType, best] of bestByService) {
+      const existing = serviceAccum.get(serviceType) ?? {
+        total: 0,
         packageCount: 0,
-        companies: new Set<CarrierCompany>(),
-        coveredPackages: 0,
+        coveredVariants: 0,
+        lineItemBreakdown: [],
       };
-      existing.subtotal += match.amount;
-      existing.packageCount += match.boxes;
-      existing.coveredPackages += 1;
-      existing.companies.add(match.company);
-      serviceTotals.set(serviceType, existing);
+      existing.total += best.amount;
+      existing.packageCount += best.boxes;
+      existing.coveredVariants += 1;
+      existing.lineItemBreakdown.push({
+        variantId,
+        company: best.company,
+        amount: best.amount,
+        boxes: best.boxes,
+      });
+      serviceAccum.set(serviceType, existing);
     }
   }
 
   const completeServiceRates: CalculatedServiceRate[] = [];
 
-  for (const [serviceType, totals] of serviceTotals.entries()) {
-    if (totals.coveredPackages !== packages.length) continue;
+  for (const [serviceType, accum] of serviceAccum) {
+    // Only include if every variant is covered
+    if (accum.coveredVariants !== packagesByVariant.size) continue;
+
+    const companies = [...new Set(accum.lineItemBreakdown.map((l) => l.company))];
+
     completeServiceRates.push({
       serviceType,
-      total: applySettings(totals.subtotal, settings),
+      total: applySettings(accum.total, settings),
       currency: settings.defaultCurrency,
-      packageCount: totals.packageCount,
-      companies: [...totals.companies],
+      packageCount: accum.packageCount,
+      companies,
+      lineItemBreakdown: accum.lineItemBreakdown,
     });
   }
 
-  return completeServiceRates.sort((left, right) =>
-    left.serviceType.localeCompare(right.serviceType),
-  );
+  return completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
 }
 
 export async function findMatchingRates(
@@ -363,6 +395,10 @@ export async function findMatchingRates(
     },
   });
 
+
+//   console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
+// console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
+
   return rates.filter((rate) => {
     const matchesWeight =
       !rate.useWeightRange ||
@@ -375,6 +411,7 @@ export async function findMatchingRates(
     const matchesPostalCode =
       !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
     const matchesCity = !city || cityMatches(city, rate.city);
+    //  console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
 
     return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
   });
@@ -384,7 +421,7 @@ function readRateForm(shop: string, formData: FormData) {
   const minWeightGrams = parseOptionalInt(formData.get("minWeightGrams"));
   const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
   const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
-  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3"));
+  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3")); 
   const useWeightRange =
     parseBoolean(formData.get("useWeightRange")) ||
     minWeightGrams !== null ||
@@ -425,6 +462,17 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     return 0;
   }
 
+  // NEW: NZP uses weight/CBM lookup table pricing
+  if (rate.company === "NZP") {
+    return calculateNzpRate(freightPackage, rate);
+  }
+
+  // NEW: Castle Parcels uses CBM lookup table pricing
+  if (rate.company === "CASTLE") {
+    return calculateCastleRate(freightPackage, rate);
+  }
+
+  // Existing logic for FLIWAY, TGE, MAINFREIGHT, M2H (CBM × rate)
   const cbm = freightPackage.volumeCm3 / 1_000_000;
   const baseFreight = cbm * Number(rate.rate);
   const zoneSurcharge = rate.serviceType === "STANDARD_DELIVERY" ? Number(rate.zoneSurcharge) : 0;
@@ -435,6 +483,28 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const subtotal = baseFreight + zoneSurcharge + homeDeliveryFee;
   const withMargin = subtotal * (1 + freightFormula.marginRate);
 
+  return withMargin * (1 + freightFormula.gstRate);
+}
+
+// NEW: NZP rate calculation
+// rate.rate = base charge (max of kg-bracket and CBM-bracket rate, pre-stored)
+// rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
+function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
+  const baseCharge = Number(rate.rate);
+  const additionalCharges = Number(rate.zoneSurcharge); // rural/signature stored here
+  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
+  const withMargin = subtotal * (1 + freightFormula.marginRate);
+  return withMargin * (1 + freightFormula.gstRate);
+}
+
+// NEW: Castle Parcels rate calculation
+// rate.rate = CBM bracket base charge
+// rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
+function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate) {
+  const baseCharge = Number(rate.rate);
+  const additionalCharges = Number(rate.zoneSurcharge); // residential always included
+  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.castle.totalVariableRate);
+  const withMargin = subtotal * (1 + freightFormula.marginRate);
   return withMargin * (1 + freightFormula.gstRate);
 }
 
