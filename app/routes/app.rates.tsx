@@ -51,6 +51,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return deleteRate(session.shop, String(formData.get("id")));
   }
 
+  if (intent === "bulkDelete") {
+    const ids = formData.getAll("ids").map(String);
+    await Promise.all(ids.map((id) => deleteRate(session.shop, id)));
+    return { ok: true, message: `${ids.length} rates deleted` };
+  }
+
   if (intent === "import") {
     const file = formData.get("csv");
     if (!(file instanceof File)) return { ok: false, message: "Choose a CSV file" };
@@ -66,6 +72,7 @@ export default function RatesPage() {
   const navigation = useNavigation();
   const [searchParams] = useSearchParams();
   const [showAddForm, setShowAddForm] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const query = searchParams.get("q") || "";
   const selectedCompany = searchParams.get("company") || "";
@@ -271,6 +278,17 @@ export default function RatesPage() {
       ) : null}
 
       <div className="top-row">
+        {selectedIds.size > 0 ? (
+          <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+            <input type="hidden" name="intent" value="bulkDelete" />
+            {[...selectedIds].map((id) => (
+              <input key={id} type="hidden" name="ids" value={id} />
+            ))}
+            <button className="top-btn" type="submit" style={{ color: "#c0392b", borderColor: "#c0392b" }}>
+              🗑 Delete selected ({selectedIds.size})
+            </button>
+          </Form>
+        ) : null}
         <button className="top-btn" type="button" onClick={() => setShowAddForm((value) => !value)}>
           + {showAddForm ? "Close add rate" : "Add rate"}
         </button>
@@ -336,6 +354,17 @@ export default function RatesPage() {
           <table className="rates-table">
             <thead>
               <tr>
+                <th>
+                  {rates.length > 0 ? (
+                    <input
+                      type="checkbox"
+                      onChange={(e) =>
+                        setSelectedIds(e.target.checked ? new Set(rates.map((r) => r.id)) : new Set())
+                      }
+                      checked={selectedIds.size === rates.length && rates.length > 0}
+                    />
+                  ) : null}
+                </th>
                 <th>Company</th>
                 <th>Service</th>
                 <th>City</th>
@@ -351,7 +380,18 @@ export default function RatesPage() {
             </thead>
             <tbody>
               {rates.map((rate) => (
-                <InlineRateRow key={rate.id} rate={rate} />
+                <InlineRateRow
+                  key={rate.id}
+                  rate={rate}
+                  selected={selectedIds.has(rate.id)}
+                  onToggle={(id) =>
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      next.has(id) ? next.delete(id) : next.add(id);
+                      return next;
+                    })
+                  }
+                />
               ))}
             </tbody>
           </table>
@@ -366,9 +406,24 @@ export default function RatesPage() {
   );
 }
 
-function InlineRateRow({ rate }: { rate: any }) {
+function InlineRateRow({
+  rate,
+  selected,
+  onToggle,
+}: {
+  rate: any;
+  selected: boolean;
+  onToggle: (id: string) => void;
+}) {
   return (
     <tr>
+      <td>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggle(rate.id)}
+        />
+      </td>
       <td>
         <Form method="post" id={`rate-${rate.id}`}>
           <input type="hidden" name="intent" value="save" />
@@ -419,15 +474,7 @@ function InlineRateRow({ rate }: { rate: any }) {
         <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
       </td>
       <td>
-        <input
-          form={`rate-${rate.id}`}
-          name="zoneSurcharge"
-          type="number"
-          step="0.01"
-          min="0"
-          defaultValue={toMoney(rate.zoneSurcharge)}
-          aria-label="Zone surcharge"
-        />
+        <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
       </td>
       <td>
         <select form={`rate-${rate.id}`} name="mode" defaultValue={rate.mode ?? ""} aria-label="Mode">
@@ -446,15 +493,11 @@ function InlineRateRow({ rate }: { rate: any }) {
       </td>
       <td>
         <div className="inline-actions">
-          <button className="plain-save" form={`rate-${rate.id}`} type="submit">
-            Save
-          </button>
+          <button className="plain-save" form={`rate-${rate.id}`} type="submit">Save</button>
           <Form method="post">
             <input type="hidden" name="intent" value="delete" />
             <input type="hidden" name="id" value={rate.id} />
-            <s-button type="submit" tone="critical" variant="tertiary">
-              Delete
-            </s-button>
+            <s-button type="submit" tone="critical" variant="tertiary">Delete</s-button>
           </Form>
         </div>
       </td>
