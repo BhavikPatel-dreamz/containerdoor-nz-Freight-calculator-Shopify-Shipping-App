@@ -399,8 +399,8 @@ export async function findMatchingRates(
   });
 
 
-//   console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
-// console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
+  console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
+console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
 
   return rates.filter((rate) => {
     const matchesWeight =
@@ -414,7 +414,7 @@ export async function findMatchingRates(
     const matchesPostalCode =
       !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
     const matchesCity = !city || cityMatches(city, rate.city);
-    //  console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
+     console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
 
     return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
   });

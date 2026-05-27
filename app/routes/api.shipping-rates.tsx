@@ -167,9 +167,9 @@ async function getFreightPackages(
     const properties = item.properties ?? {};
 
     // ADD THIS — log raw metafields coming from Shopify
-    // console.log(`[DEBUG] variantGid: ${variantGid}`);
-    // console.log(`[DEBUG] metafields from Shopify:`, JSON.stringify(metafields));
-    // console.log(`[DEBUG] item.properties:`, JSON.stringify(properties));
+    console.log(`[DEBUG] variantGid: ${variantGid}`);
+    console.log(`[DEBUG] metafields from Shopify:`, JSON.stringify(metafields));
+    console.log(`[DEBUG] item.properties:`, JSON.stringify(properties));
 
     const quantity = Number(item.quantity ?? 1);
     const unitsPerBox = positiveInt(metafields.units_per_box || properties.units_per_box) || 1;
@@ -186,10 +186,10 @@ async function getFreightPackages(
       .map((c) => normaliseCompany(c.trim()))
       .filter((c): c is CarrierCompany => c !== null);
 
-    // console.log(`[DEBUG] computed → boxes:${boxes} length:${length} width:${width} height:${height} companies:${companies} volumeCm3:${length * width * height * boxes}`);
+    console.log(`[DEBUG] computed → boxes:${boxes} length:${length} width:${width} height:${height} companies:${companies} volumeCm3:${length * width * height * boxes}`);
 
     if (companies.length === 0) {
-      // console.log(`[DEBUG] skipping item — no valid company found`);
+      console.log(`[DEBUG] skipping item — no valid company found`);
       continue;
     }
 
@@ -210,8 +210,8 @@ async function getFreightPackages(
   }
 
   // ADD THIS — final packages summary
-  // console.log(`[DEBUG] total packages built: ${packages.length}`);
-  // console.log(`[DEBUG] packages:`, JSON.stringify(packages));
+  console.log(`[DEBUG] total packages built: ${packages.length}`);
+  console.log(`[DEBUG] packages:`, JSON.stringify(packages));
 
   return packages;
 }
