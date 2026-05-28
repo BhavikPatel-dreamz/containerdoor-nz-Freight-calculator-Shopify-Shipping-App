@@ -539,11 +539,12 @@ function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
 // rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
 function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate) {
   const baseCharge = Number(rate.rate);
-  const residentialFee = Number(rate.zoneSurcharge); // always applied — stored in zoneSurcharge
-  const signatureFee = freightPackage.castleSignature ? Number(rate.signatureSurcharge) : 0;
-  const ruralFee = freightPackage.castleRural ? Number(rate.ruralSurcharge) : 0;
-  const waihekeFee = freightPackage.castleWaiheke ? Number(rate.ageRestrictedSurcharge) : 0; // reuse field for waiheke
-  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee) * (1 + freightFormula.castle.totalVariableRate);
+  const residentialFee = Number(rate.zoneSurcharge); // always applied
+  const signatureFee = freightPackage.castleSignature ? 1.00 : 0;  // hardcoded
+  const ruralFee = freightPackage.castleRural ? 1.00 : 0;          // hardcoded
+  const waihekeFee = freightPackage.castleWaiheke ? 1.00 : 0;      // hardcoded
+  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee) 
+    * (1 + freightFormula.castle.totalVariableRate);
   const withMargin = subtotal * (1 + freightFormula.marginRate);
   return withMargin * (1 + freightFormula.gstRate);
 }
