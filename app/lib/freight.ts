@@ -82,6 +82,13 @@ export const variantFreightMetafields = [
   { key: "courier_company", name: "Courier company", type: "single_line_text_field" },
   { key: "hiab_required", name: "HIAB required", type: "boolean" },
   { key: "units_per_box", name: "Units per box", type: "number_integer" },
+  { key: "home_delivery", name: "Home delivery", type: "boolean" },
+  { key: "nzp_signature", name: "NZP Signature required", type: "boolean" },
+  { key: "nzp_rural", name: "NZP Rural delivery", type: "boolean" },
+  { key: "nzp_age_restricted", name: "NZP Age restricted (no ATL)", type: "boolean" },
+{ key: "castle_signature", name: "Castle signature required", type: "boolean" },
+{ key: "castle_rural", name: "Castle rural delivery", type: "boolean" },
+{ key: "castle_waiheke", name: "Castle Waiheke Island delivery", type: "boolean" },
 ] as const;
 
 export const freightMetafieldNamespace = "containerdoor_freight";

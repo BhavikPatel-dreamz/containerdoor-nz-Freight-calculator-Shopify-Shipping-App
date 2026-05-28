@@ -24,6 +24,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       additionalCostValue: settings.additionalCostValue.toString(),
       defaultCurrency: settings.defaultCurrency,
       defaultServiceType: settings.defaultServiceType,
+      fafFliway: (settings.fafFliway ?? 30.5).toString(),
+      fafMainfreight: (settings.fafMainfreight ?? 36.35).toString(),
+      fafTge: (settings.fafTge ?? 29.8).toString(),
+      fafM2h: (settings.fafM2h ?? 0).toString(),
+       tgeAdminFee: (settings.tgeAdminFee ?? 12.69).toString(), 
     },
     metafields: variantFreightMetafields,
   };
@@ -78,7 +83,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               key: field.key,
               type: field.type,
               ownerType: "PRODUCTVARIANT",
-              access: { admin: "MERCHANT_READ_WRITE" },
             },
           },
         },
@@ -160,7 +164,27 @@ export default function SettingsPage() {
           <Form method="post">
             <div className="settings-grid">
               <label className="settings-field">
-                Fuel surcharge percentage
+                Fliway FAF %
+                <input name="fafFliway" type="number" step="0.01" min="0" defaultValue={settings.fafFliway} />
+              </label>
+              <label className="settings-field">
+                Mainfreight FAF %
+                <input name="fafMainfreight" type="number" step="0.01" min="0" defaultValue={settings.fafMainfreight} />
+              </label>
+              <label className="settings-field">
+                TGE FAF %
+                <input name="fafTge" type="number" step="0.01" min="0" defaultValue={settings.fafTge} />
+              </label>
+              <label className="settings-field">
+                M2H FAF %
+                <input name="fafM2h" type="number" step="0.01" min="0" defaultValue={settings.fafM2h} />
+              </label>
+              <label className="settings-field">
+                TGE admin fee ($)
+                <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
+              </label>
+              <label className="settings-field">
+                Fuel surcharge % <span style={{ fontWeight: 400, color: "#90a4ae" }}>(NZP / Castle fallback)</span>
                 <input name="fuelSurchargePercent" type="number" step="0.01" min="0" defaultValue={settings.fuelSurchargePercent} />
               </label>
               <label className="settings-field">

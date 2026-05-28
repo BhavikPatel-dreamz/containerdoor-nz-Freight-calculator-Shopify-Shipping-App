@@ -41,6 +41,11 @@ model AppSetting {
   additionalCostValue        Decimal  @default(0) @db.Decimal(10, 2)
   defaultCurrency            String   @default("NZD")
   defaultServiceType         ServiceType @default(STANDARD_DELIVERY)
+  fafFliway       Decimal  @default(30.5)
+  fafMainfreight  Decimal  @default(36.35)
+  fafTge          Decimal  @default(29.8)
+  fafM2h          Decimal  @default(0)
+  tgeAdminFee     Decimal  @default(12.69)
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }
@@ -58,8 +63,11 @@ model ShippingRate {
   useVolumeRange Boolean     @default(false)
   minVolumeCm3   Int?
   maxVolumeCm3   Int?
-  rate           Decimal     @db.Decimal(10, 2)
+  rate           Decimal     @db.Decimal(10, 4)
   zoneSurcharge  Decimal     @default(0) @db.Decimal(10, 2)
+  signatureSurcharge     Decimal @default(0) @db.Decimal(10, 4)
+  ruralSurcharge         Decimal @default(0) @db.Decimal(10, 4)
+  ageRestrictedSurcharge Decimal @default(0) @db.Decimal(10, 4)
   mode           CarrierMode?
   active         Boolean     @default(true)
   createdAt      DateTime    @default(now())
