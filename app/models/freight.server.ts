@@ -13,6 +13,7 @@ import {
   freightFormula,
   parseBoolean,
   parseDecimalString,
+  parseDecimalStringFull,
   parseOptionalInt,
   serviceTypes,
 } from "../lib/freight";
@@ -249,8 +250,8 @@ export async function importRatesCsv(shop: string, csv: string) {
       useVolumeRange,
       minVolumeCm3,
       maxVolumeCm3,
-      rate: parseDecimalString(row.rate),
-      zoneSurcharge: parseDecimalString(row.zoneSurcharge),
+      rate: parseDecimalStringFull(row.rate),
+      zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
       active: row.active === "" ? true : normaliseBoolean(row.active),
     };

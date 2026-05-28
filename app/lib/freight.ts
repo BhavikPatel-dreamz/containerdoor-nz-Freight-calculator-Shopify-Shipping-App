@@ -113,3 +113,9 @@ export function parseDecimalString(value: FormDataEntryValue | null) {
   const parsed = Number.parseFloat(String(value ?? "0"));
   return Number.isFinite(parsed) ? parsed.toFixed(2) : "0.00";
 }
+
+//  only for CSV import to preserve full precision
+export function parseDecimalStringFull(value: string | undefined) {
+  const parsed = Number.parseFloat(String(value ?? "0"));
+  return Number.isFinite(parsed) ? String(parsed) : "0";
+}
