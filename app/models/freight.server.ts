@@ -13,6 +13,7 @@ import {
   freightFormula,
   parseBoolean,
   parseDecimalString,
+  parseDecimalStringFull,
   parseOptionalInt,
   serviceTypes,
 } from "../lib/freight";
@@ -37,6 +38,9 @@ export type RateCandidate = Pick<
   | "maxVolumeCm3"
   | "rate"
   | "zoneSurcharge"
+  | "signatureSurcharge"
+  | "ruralSurcharge"
+  | "ageRestrictedSurcharge"
   | "mode"
 >;
 
@@ -48,6 +52,13 @@ export type FreightPackage = {
   volumeCm3: number;
   boxes: number;
   hiabRequired: boolean;
+  homeDelivery: boolean;
+  nzpSignature: boolean;
+  nzpRural: boolean;
+  nzpAgeRestricted: boolean;
+  castleSignature: boolean;
+  castleRural: boolean;
+  castleWaiheke: boolean;
 };
 
 export type CalculatedServiceRate = {
@@ -74,23 +85,24 @@ export async function getAppSettings(shop: string) {
 }
 
 export async function updateAppSettings(shop: string, formData: FormData) {
+  const data = {
+    fuelSurchargePercent: parseDecimalString(formData.get("fuelSurchargePercent")),
+    additionalCostType: String(formData.get("additionalCostType") || "FIXED") as CostType,
+    additionalCostValue: parseDecimalString(formData.get("additionalCostValue")),
+    defaultCurrency: String(formData.get("defaultCurrency") || "NZD").toUpperCase(),
+    defaultServiceType: String(formData.get("defaultServiceType") || "STANDARD_DELIVERY") as ServiceType,
+    // ADD THESE:
+    fafFliway: parseDecimalString(formData.get("fafFliway")),
+    fafMainfreight: parseDecimalString(formData.get("fafMainfreight")),
+    fafTge: parseDecimalString(formData.get("fafTge")),
+    fafM2h: parseDecimalString(formData.get("fafM2h")),
+    tgeAdminFee: parseDecimalString(formData.get("tgeAdminFee")),  
+  };
+
   return prisma.appSetting.upsert({
     where: { shop },
-    update: {
-      fuelSurchargePercent: parseDecimalString(formData.get("fuelSurchargePercent")),
-      additionalCostType: String(formData.get("additionalCostType") || "FIXED") as CostType,
-      additionalCostValue: parseDecimalString(formData.get("additionalCostValue")),
-      defaultCurrency: String(formData.get("defaultCurrency") || "NZD").toUpperCase(),
-      defaultServiceType: String(formData.get("defaultServiceType") || "STANDARD_DELIVERY") as ServiceType,
-    },
-    create: {
-      shop,
-      fuelSurchargePercent: parseDecimalString(formData.get("fuelSurchargePercent")),
-      additionalCostType: String(formData.get("additionalCostType") || "FIXED") as CostType,
-      additionalCostValue: parseDecimalString(formData.get("additionalCostValue")),
-      defaultCurrency: String(formData.get("defaultCurrency") || "NZD").toUpperCase(),
-      defaultServiceType: String(formData.get("defaultServiceType") || "STANDARD_DELIVERY") as ServiceType,
-    },
+    update: data,
+    create: { shop, ...data },
   });
 }
 
@@ -133,11 +145,14 @@ export async function listRates(
     prisma.shippingRate.count({ where }),
   ]);
 
-  return {
+   return {
     rates: rates.map((rate) => ({
       ...rate,
       rate: rate.rate.toString(),
       zoneSurcharge: rate.zoneSurcharge.toString(),
+      signatureSurcharge: rate.signatureSurcharge.toString(),
+      ruralSurcharge: rate.ruralSurcharge.toString(),
+      ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
       createdAt: rate.createdAt.toISOString(),
       updatedAt: rate.updatedAt.toISOString(),
     })),
@@ -249,8 +264,8 @@ export async function importRatesCsv(shop: string, csv: string) {
       useVolumeRange,
       minVolumeCm3,
       maxVolumeCm3,
-      rate: parseDecimalString(row.rate),
-      zoneSurcharge: parseDecimalString(row.zoneSurcharge),
+      rate: parseDecimalStringFull(row.rate),
+      zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
       active: row.active === "" ? true : normaliseBoolean(row.active),
     };
@@ -286,7 +301,6 @@ export async function importRatesCsv(shop: string, csv: string) {
 
   return { ok: true, message: `${created} rates created, ${updated} rates updated` };
 }
-
 export async function calculateServiceRates(
   shop: string,
   destination: { city?: string; postalCode?: string },
@@ -324,9 +338,10 @@ export async function calculateServiceRates(
 
     for (const freightPackage of variantPackages) {
       const matchedRates = await findMatchingRates(shop, destination, freightPackage);
+      console.log(`[DEBUG] matched rate serviceTypes: ${matchedRates.map(r => r.serviceType).join(", ")}`);
 
       for (const matchedRate of matchedRates) {
-        const amount = calculateFreightRate(freightPackage, matchedRate);
+        const amount = calculateFreightRate(freightPackage, matchedRate, settings);
         if (amount === null) continue;
 
         const current = bestByService.get(matchedRate.serviceType);
@@ -444,12 +459,15 @@ function readRateForm(shop: string, formData: FormData) {
     maxVolumeCm3,
     rate: parseDecimalString(formData.get("rate")),
     zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
+    signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
+    ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
+    ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
     mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,
     active: parseBoolean(formData.get("active")),
   };
 }
 
-function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidate) {
+function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
   if (
     rate.serviceType === "DEPOT_DELIVERY" &&
     !freightFormula.depotCollectionCompanies.includes(rate.company)
@@ -473,27 +491,44 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
 
   // NEW: pick base value depending on which range the rate uses
   const baseValue = rate.useWeightRange
-    ? freightPackage.weightGrams / 1000  // kg
-    : freightPackage.volumeCm3 / 1_000_000; // CBM
-
-  const baseFreight = baseValue * Number(rate.rate);
-  const zoneSurcharge = rate.serviceType === "STANDARD_DELIVERY" ? Number(rate.zoneSurcharge) : 0;
+    ? freightPackage.weightGrams / 1000        // kg
+    : freightPackage.volumeCm3 / 1_000_000;    // CBM
+  const rawBaseFreight = baseValue * Number(rate.rate);
+  const minCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;  // TGE reuses zoneSurcharge as minCharge — see note below
+  const baseFreight = minCharge > 0 ? Math.max(rawBaseFreight, minCharge) : rawBaseFreight;
+  const zoneSurcharge = rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge); // TGE: zoneSurcharge IS the minCharge, not added on top
+  const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
   const homeDeliveryFee =
-    rate.serviceType === "STANDARD_DELIVERY"
+    rate.serviceType === "STANDARD_DELIVERY" && freightPackage.homeDelivery
       ? freightFormula.homeDeliveryFees[rate.company] ?? 0
       : 0;
-  const subtotal = baseFreight + zoneSurcharge + homeDeliveryFee;
+  const fafRate = resolveFafRate(rate.company, settings);
+  const withFaf = (baseFreight + zoneSurcharge + adminFee) * (1 + fafRate);
+  const subtotal = withFaf + homeDeliveryFee;
   const withMargin = subtotal * (1 + freightFormula.marginRate);
+  const final = withMargin * (1 + freightFormula.gstRate);
 
-  return withMargin * (1 + freightFormula.gstRate);
+  console.log(`[CALC] rateId:${rate.id} serviceType:${rate.serviceType} company:${rate.company}`);
+  console.log(`[CALC] baseValue:${baseValue} × rate:${rate.rate} = rawBaseFreight:${rawBaseFreight} (minCharge:${minCharge}) → baseFreight:${baseFreight}`);
+  console.log(`[CALC] adminFee:${adminFee} zoneSurcharge:${zoneSurcharge} homeDeliveryFee:${homeDeliveryFee} fafRate:${fafRate}`);
+  console.log(`[CALC] (${baseFreight} + ${zoneSurcharge} + ${adminFee}) × ${1 + fafRate} = withFaf:${withFaf}`);
+  console.log(`[CALC] withFaf:${withFaf} + homeDelivery:${homeDeliveryFee} = subtotal:${subtotal}`);
+  console.log(`[CALC] subtotal:${subtotal} × margin:${1 + freightFormula.marginRate} = withMargin:${withMargin}`);
+  console.log(`[CALC] withMargin:${withMargin} × gst:${1 + freightFormula.gstRate} = FINAL:${final}`);
+
+  return final;
 }
 
 // NEW: NZP rate calculation
 // rate.rate = base charge (max of kg-bracket and CBM-bracket rate, pre-stored)
 // rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
 function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
-  const baseCharge = Number(rate.rate);
-  const additionalCharges = Number(rate.zoneSurcharge); // rural/signature stored here
+  const baseCharge = Number(rate.rate); // pre-stored: max(kgRate, cbmRate)
+  const signatureFee = freightPackage.nzpSignature ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = freightPackage.nzpRural ? Number(rate.ruralSurcharge) : 0;
+  const ageRestrictedFee = freightPackage.nzpAgeRestricted ? Number(rate.ageRestrictedSurcharge) : 0;
+  const additionalCharges = signatureFee + ruralFee + ageRestrictedFee;
+  console.log(`[NZP] base:${baseCharge} signature:${signatureFee} rural:${ruralFee} ageRestricted:${ageRestrictedFee}`);
   const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
   const withMargin = subtotal * (1 + freightFormula.marginRate);
   return withMargin * (1 + freightFormula.gstRate);
@@ -504,18 +539,39 @@ function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
 // rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
 function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate) {
   const baseCharge = Number(rate.rate);
-  const additionalCharges = Number(rate.zoneSurcharge); // residential always included
-  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.castle.totalVariableRate);
+  const residentialFee = Number(rate.zoneSurcharge); // always applied — stored in zoneSurcharge
+  const signatureFee = freightPackage.castleSignature ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = freightPackage.castleRural ? Number(rate.ruralSurcharge) : 0;
+  const waihekeFee = freightPackage.castleWaiheke ? Number(rate.ageRestrictedSurcharge) : 0; // reuse field for waiheke
+  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee) * (1 + freightFormula.castle.totalVariableRate);
   const withMargin = subtotal * (1 + freightFormula.marginRate);
   return withMargin * (1 + freightFormula.gstRate);
 }
 
 function applySettings(baseRate: number, settings: AppSetting) {
-  const withFuel = baseRate + baseRate * (Number(settings.fuelSurchargePercent) / 100);
+  // FAF is now applied per-carrier in calculateFreightRate via resolveFafRate.
+  // fuelSurchargePercent is the fallback for NZP/CASTLE and is already applied there.
+  // This function only applies the shop-level additional cost markup.
   if (settings.additionalCostType === "PERCENTAGE") {
-    return withFuel + withFuel * (Number(settings.additionalCostValue) / 100);
+    return baseRate + baseRate * (Number(settings.additionalCostValue) / 100);
   }
-  return withFuel + Number(settings.additionalCostValue);
+  return baseRate + Number(settings.additionalCostValue);
+}
+
+//resolve FAF rate for a carrier from DB settings, fall back to fuelSurchargePercent
+export function resolveFafRate(company: CarrierCompany, settings: AppSetting): number {
+  const carrierFafMap: Partial<Record<CarrierCompany, string>> = {
+    FLIWAY:      "fafFliway",
+    MAINFREIGHT: "fafMainfreight",
+    TGE:         "fafTge",
+    M2H:         "fafM2h",
+  };
+  const field = carrierFafMap[company];
+  if (field && field in settings) {
+    return Number((settings as unknown as Record<string, unknown>)[field]) / 100;
+  }
+  // NZP, CASTLE, and any future carriers fall back to fuelSurchargePercent
+  return Number(settings.fuelSurchargePercent) / 100;
 }
 
 function postalCodeInRange(postalCode: string, range: string) {

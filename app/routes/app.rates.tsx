@@ -415,6 +415,7 @@ function InlineRateRow({
   selected: boolean;
   onToggle: (id: string) => void;
 }) {
+  const [company, setCompany] = useState(rate.company);
   return (
     <tr>
       <td>
@@ -428,7 +429,7 @@ function InlineRateRow({
         <Form method="post" id={`rate-${rate.id}`}>
           <input type="hidden" name="intent" value="save" />
           <input type="hidden" name="id" value={rate.id} />
-          <select name="company" defaultValue={rate.company} aria-label="Company">
+          <select name="company" value={company} onChange={(e) => setCompany(e.target.value)} aria-label="Company">
             {carrierCompanies.map((company) => (
               <option key={company} value={company}>
                 {companyLabels[company]}
@@ -474,7 +475,45 @@ function InlineRateRow({
         <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
       </td>
       <td>
-        <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
+        {company !== "CASTLE" && (
+          <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
+        )}
+        {company === "NZP" && (
+          <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Signature ($)
+              <input form={`rate-${rate.id}`} name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.signatureSurcharge ?? 0)} aria-label="Signature surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Rural ($)
+              <input form={`rate-${rate.id}`} name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ruralSurcharge ?? 0)} aria-label="Rural surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Age restricted ($)
+              <input form={`rate-${rate.id}`} name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ageRestrictedSurcharge ?? 0)} aria-label="Age restricted surcharge" />
+            </label>
+          </div>
+        )}
+        {company === "CASTLE" && (
+          <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Residential ($) <span style={{ fontWeight: 400 }}>(always applied)</span>
+              <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge ?? 1)} aria-label="Residential surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Signature ($)
+              <input form={`rate-${rate.id}`} name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.signatureSurcharge ?? 1)} aria-label="Signature surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Rural ($)
+              <input form={`rate-${rate.id}`} name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ruralSurcharge ?? 1)} aria-label="Rural surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Waiheke ($)
+              <input form={`rate-${rate.id}`} name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ageRestrictedSurcharge ?? 1)} aria-label="Waiheke surcharge" />
+            </label>
+          </div>
+        )}
       </td>
       <td>
         <select form={`rate-${rate.id}`} name="mode" defaultValue={rate.mode ?? ""} aria-label="Mode">
@@ -562,6 +601,19 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Zone surcharge
           <input name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.zoneSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        {/* NZP-only surcharge fields */}
+        <label>
+          Signature / Waiheke surcharge ($)
+          <input name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.signatureSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Rural surcharge ($)
+          <input name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.ruralSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Age restricted / Waiheke ($)
+          <input name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.ageRestrictedSurcharge?.toString?.() ?? "0.00"} />
         </label>
         <label>
           Mode

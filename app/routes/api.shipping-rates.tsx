@@ -66,9 +66,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const serviceRates = await calculateServiceRates(shop, destination, packages);
 
     // Filter to Standard Delivery only; one combined rate shown to customer
-    const standardRate = serviceRates.find((r) => r.serviceType === "STANDARD_DELIVERY");
+const serviceNameMap: Partial<Record<string, string>> = {
+      STANDARD_DELIVERY: "Standard Delivery",
+      DEPOT_DELIVERY: "Depot Collection",
+      CUSTOMER_PICKUP: "Customer Pickup",
+    };
 
-    if (!standardRate) {
+    const shopifyRates: Array<{
+      service_name: string;
+      service_code: string;
+      currency: string;
+      total_price: string;
+    }> = [];
+
+    for (const serviceRate of serviceRates) {
+      const serviceName = serviceNameMap[serviceRate.serviceType] ?? serviceRate.serviceType;
+
+      // Log per-line-item breakdown for internal visibility
+      console.log(
+        `[FREIGHT] ${serviceName} breakdown for ${shop}:`,
+        JSON.stringify(serviceRate.lineItemBreakdown, null, 2),
+      );
+
+      // Build a compact metadata string saved natively on the Shopify order shipping line
+      const lineItemSummary = serviceRate.lineItemBreakdown
+        .map((l) => `${l.variantId.split("/").pop()}:${l.company}x${l.boxes}`)
+        .join("|");
+
+      // This service_code is stored verbatim on the Shopify order — visible in admin + API
+      // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
+      const companies = [...new Set(serviceRate.lineItemBreakdown.map((l) => l.company))].join(",");
+      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::${lineItemSummary}`;
+
+      shopifyRates.push({
+        service_name: serviceName,
+        service_code: serviceCode,
+        currency: serviceRate.currency || payload.rate?.currency || "NZD",
+        total_price: Math.round(serviceRate.total * 100).toString(),
+      });
+    }
+
+    if (shopifyRates.length === 0) {
       // No valid carrier found for this address — show manual quote message
       return Response.json({
         rates: [
@@ -83,33 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     }
 
-    // Log per-line-item breakdown for internal visibility
-    console.log(
-      `[FREIGHT] Standard Delivery breakdown for ${shop}:`,
-      JSON.stringify(standardRate.lineItemBreakdown, null, 2),
-    );
-
-
-    // Build a compact metadata string saved natively on the Shopify order shipping line
-    const lineItemSummary = standardRate.lineItemBreakdown
-      .map((l) => `${l.variantId.split("/").pop()}:${l.company}x${l.boxes}`)
-      .join("|");
-
-    // This service_code is stored verbatim on the Shopify order — visible in admin + API
-    // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
-    const companies = [...new Set(standardRate.lineItemBreakdown.map((l) => l.company))].join(",");
-    const serviceCode = `standard_delivery::${companies}::${standardRate.packageCount}boxes::${lineItemSummary}`;
-
-    const rates = [
-      {
-        service_name: "Standard Delivery",
-        service_code: serviceCode,
-        currency: standardRate.currency || payload.rate?.currency || "NZD",
-        total_price: Math.round(standardRate.total * 100).toString(),
-      },
-    ];
-
-    return Response.json({ rates });
+    return Response.json({ rates: shopifyRates });
   } catch (error) {
     console.error("Shipping callback failed", error);
     return Response.json({ rates: [] });
@@ -205,6 +217,20 @@ async function getFreightPackages(
         volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),
+        homeDelivery:
+          isTrue(metafields.home_delivery) || isTrue(properties.home_delivery),
+        nzpSignature:
+          isTrue(metafields.nzp_signature) || isTrue(properties.nzp_signature),
+        nzpRural:
+          isTrue(metafields.nzp_rural) || isTrue(properties.nzp_rural),
+        nzpAgeRestricted:
+          isTrue(metafields.nzp_age_restricted) || isTrue(properties.nzp_age_restricted),
+        castleSignature:
+          isTrue(metafields.castle_signature) || isTrue(properties.castle_signature),
+        castleRural:
+          isTrue(metafields.castle_rural) || isTrue(properties.castle_rural),
+        castleWaiheke:
+          isTrue(metafields.castle_waiheke) || isTrue(properties.castle_waiheke),
       });
     }
   }

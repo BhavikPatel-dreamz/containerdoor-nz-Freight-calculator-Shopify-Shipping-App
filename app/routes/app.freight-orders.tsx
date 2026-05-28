@@ -110,9 +110,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
 // ─── Parse service_code and build row ─────────────────────────────────────────
 // service_code format: standard_delivery::TGE,MAINFREIGHT::4boxes::variantId:COMPANYxBoxes|...
 
+const FREIGHT_SERVICE_PREFIXES = [
+  "standard_delivery::",
+  "depot_delivery::",
+  "customer_pickup::",
+];
+
 function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
   const shippingLine = order.shippingLines.nodes.find((s) =>
-    s.code?.startsWith("standard_delivery::")
+    FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
   );
   if (!shippingLine) return null;
 
