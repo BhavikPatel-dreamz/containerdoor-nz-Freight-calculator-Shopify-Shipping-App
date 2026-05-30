@@ -54,7 +54,6 @@ export type FreightPackage = {
   volumeCm3: number;
   boxes: number;
   hiabRequired: boolean;
-  homeDelivery: boolean;
   nzpSignature: boolean;
   nzpRural: boolean;
   nzpAgeRestricted: boolean;
@@ -517,12 +516,14 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const tgeMinCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;
   const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
-  const homeDeliveryFee =
-    rate.serviceType === "STANDARD_DELIVERY" && freightPackage.homeDelivery
-      ? rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
-        ? Number(rate.homeDeliveryFee)  // per-rate override
-        : resolveHomeDeliveryFee(rate.company, settings)  // global fallback
-      : 0;
+  const resolvedHomeDeliveryFee =
+  rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
+    ? Number(rate.homeDeliveryFee)
+    : resolveHomeDeliveryFee(rate.company, settings);
+const homeDeliveryFee =
+  rate.serviceType === "STANDARD_DELIVERY" && resolvedHomeDeliveryFee > 0
+    ? resolvedHomeDeliveryFee
+    : 0;
   const fafRate = resolveFafRate(rate.company, settings);
   const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
   const withFaf = (effectiveBase + adminFee) * (1 + fafRate);

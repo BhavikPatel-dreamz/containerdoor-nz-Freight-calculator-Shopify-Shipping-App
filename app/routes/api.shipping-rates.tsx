@@ -217,8 +217,6 @@ async function getFreightPackages(
         volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),
-        homeDelivery:
-          isTrue(metafields.home_delivery) || isTrue(properties.home_delivery),
         nzpSignature:
           isTrue(metafields.nzp_signature) || isTrue(properties.nzp_signature),
         nzpRural:
