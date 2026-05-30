@@ -37,13 +37,6 @@ export const companyLabels: Record<CarrierCompany, string> = {
 };
 
 export const freightFormula = {
-  marginRate: 0.1,
-  gstRate: 0.15,
-  homeDeliveryFees: {
-    FLIWAYLINEHAUL: 45,
-    FLIWAYMIDSIZE: 45,
-    TGE: 25,
-  } as Partial<Record<CarrierCompany, number>>,
   depotCollectionCompanies: ["FLIWAYLINEHAUL", "FLIWAYMIDSIZE", "MAINFREIGHT", "TGE"] as CarrierCompany[],
 
   // NEW: NZP-specific

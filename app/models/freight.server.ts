@@ -102,7 +102,9 @@ export async function updateAppSettings(shop: string, formData: FormData) {
     tgeAdminFee: parseDecimalString(formData.get("tgeAdminFee")),
     homeDeliveryFeeFliway: parseDecimalString(formData.get("homeDeliveryFeeFliway")),
     homeDeliveryFeeFliwayMidsize: parseDecimalString(formData.get("homeDeliveryFeeFliwayMidsize")),
-    homeDeliveryFeeTge: parseDecimalString(formData.get("homeDeliveryFeeTge")),  
+    homeDeliveryFeeTge: parseDecimalString(formData.get("homeDeliveryFeeTge")),
+    marginRate: parseDecimalString(formData.get("marginRate")),
+    gstRate: parseDecimalString(formData.get("gstRate")),  
   };
 
   return prisma.appSetting.upsert({
@@ -496,12 +498,12 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
 
   // NEW: NZP uses weight/CBM lookup table pricing
   if (rate.company === "NZP") {
-    return calculateNzpRate(freightPackage, rate);
+    return calculateNzpRate(freightPackage, rate, settings);
   }
 
   // NEW: Castle Parcels uses CBM lookup table pricing
   if (rate.company === "CASTLE") {
-    return calculateCastleRate(freightPackage, rate);
+    return calculateCastleRate(freightPackage, rate, settings);
   }
 
   // NEW: pick base value depending on which range the rate uses
@@ -525,16 +527,18 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
   const withFaf = (effectiveBase + adminFee) * (1 + fafRate);
   const subtotal = withFaf + homeDeliveryFee;
-  const withMargin = subtotal * (1 + freightFormula.marginRate);
-  const final = withMargin * (1 + freightFormula.gstRate);
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  const final = withMargin * (1 + gstRate);
 
   console.log(`[CALC] rateId:${rate.id} serviceType:${rate.serviceType} company:${rate.company}`);
   console.log(`[CALC] baseValue:${baseValue} × rate:${rate.rate} = rawBaseFreight:${rawBaseFreight} rawTransport:${rawTransportCost} minCharge:${minimumCharge} → effectiveBase:${effectiveBase}`);
   console.log(`[CALC] adminFee:${adminFee} homeDeliveryFee:${homeDeliveryFee} fafRate:${fafRate}`);
   console.log(`[CALC] (${effectiveBase} + ${adminFee}) × ${1 + fafRate} = withFaf:${withFaf}`);
   console.log(`[CALC] withFaf:${withFaf} + homeDelivery:${homeDeliveryFee} = subtotal:${subtotal}`);
-  console.log(`[CALC] subtotal:${subtotal} × margin:${1 + freightFormula.marginRate} = withMargin:${withMargin}`);
-  console.log(`[CALC] withMargin:${withMargin} × gst:${1 + freightFormula.gstRate} = FINAL:${final}`);
+  console.log(`[CALC] subtotal:${subtotal} × margin:${1 + marginRate} = withMargin:${withMargin}`);
+  console.log(`[CALC] withMargin:${withMargin} × gst:${1 + gstRate} = FINAL:${final}`);
 
   return final;
 }
@@ -542,31 +546,35 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
 // NEW: NZP rate calculation
 // rate.rate = base charge (max of kg-bracket and CBM-bracket rate, pre-stored)
 // rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
-function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate) {
-  const baseCharge = Number(rate.rate); // pre-stored: max(kgRate, cbmRate)
+function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
+  const baseCharge = Number(rate.rate);
   const signatureFee = freightPackage.nzpSignature ? Number(rate.signatureSurcharge) : 0;
   const ruralFee = freightPackage.nzpRural ? Number(rate.ruralSurcharge) : 0;
   const ageRestrictedFee = freightPackage.nzpAgeRestricted ? Number(rate.ageRestrictedSurcharge) : 0;
   const additionalCharges = signatureFee + ruralFee + ageRestrictedFee;
   console.log(`[NZP] base:${baseCharge} signature:${signatureFee} rural:${ruralFee} ageRestricted:${ageRestrictedFee}`);
   const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
-  const withMargin = subtotal * (1 + freightFormula.marginRate);
-  return withMargin * (1 + freightFormula.gstRate);
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  return withMargin * (1 + gstRate);
 }
 
 // NEW: Castle Parcels rate calculation
 // rate.rate = CBM bracket base charge
 // rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
-function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate) {
+function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
   const baseCharge = Number(rate.rate);
-  const residentialFee = Number(rate.zoneSurcharge); // always applied
-  const signatureFee = freightPackage.castleSignature ? 1.00 : 0;  // hardcoded
-  const ruralFee = freightPackage.castleRural ? 1.00 : 0;          // hardcoded
-  const waihekeFee = freightPackage.castleWaiheke ? 1.00 : 0;      // hardcoded
-  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee) 
+  const residentialFee = Number(rate.zoneSurcharge);
+  const signatureFee = freightPackage.castleSignature ? 1.00 : 0;
+  const ruralFee = freightPackage.castleRural ? 1.00 : 0;
+  const waihekeFee = freightPackage.castleWaiheke ? 1.00 : 0;
+  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee)
     * (1 + freightFormula.castle.totalVariableRate);
-  const withMargin = subtotal * (1 + freightFormula.marginRate);
-  return withMargin * (1 + freightFormula.gstRate);
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  return withMargin * (1 + gstRate);
 }
 
 function applySettings(baseRate: number, settings: AppSetting) {

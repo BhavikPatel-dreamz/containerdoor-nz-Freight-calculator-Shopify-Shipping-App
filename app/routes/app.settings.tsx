@@ -32,7 +32,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
        tgeAdminFee: (settings.tgeAdminFee ?? 12.69).toString(),
       homeDeliveryFeeFliway: (settings.homeDeliveryFeeFliway ?? 45).toString(),
       homeDeliveryFeeFliwayMidsize: (settings.homeDeliveryFeeFliwayMidsize ?? 45).toString(),
-      homeDeliveryFeeTge: (settings.homeDeliveryFeeTge ?? 25).toString(), 
+      homeDeliveryFeeTge: (settings.homeDeliveryFeeTge ?? 25).toString(),
+      marginRate: (settings.marginRate ?? 10).toString(),
+      gstRate: (settings.gstRate ?? 15).toString(), 
     },
     metafields: variantFreightMetafields,
   };
@@ -146,7 +148,6 @@ export default function SettingsPage() {
         }
         .settings-field input,
         .settings-field select {
-          width: 100%;
           border: 1px solid #bec5cc;
           border-radius: 8px;
           padding: 8px 10px;
@@ -238,6 +239,20 @@ export default function SettingsPage() {
                 <label className="settings-field">
                   TGE admin fee ($)
                   <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
+                </label>
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <p className="settings-group-title">Mark-up & Tax (applied to all carriers)</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  Mark-up %
+                  <input name="marginRate" type="number" step="0.01" min="0" defaultValue={settings.marginRate} />
+                </label>
+                <label className="settings-field">
+                  GST %
+                  <input name="gstRate" type="number" step="0.01" min="0" defaultValue={settings.gstRate} />
                 </label>
               </div>
             </div>
