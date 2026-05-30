@@ -282,6 +282,7 @@ export async function importRatesCsv(shop: string, csv: string) {
       minVolumeCm3,
       maxVolumeCm3,
       rate: parseDecimalStringFull(row.rate),
+      baseFee: parseDecimalStringFull(row.baseFee ?? "0"),
       zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
       minimumCharge: parseDecimalStringFull(row.minimumCharge ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
