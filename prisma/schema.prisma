@@ -46,6 +46,9 @@ model AppSetting {
   fafTge          Decimal  @default(29.8)
   fafM2h          Decimal  @default(0)
   tgeAdminFee     Decimal  @default(12.69)
+  homeDeliveryFeeFliway     Decimal  @default(45) @db.Decimal(10, 2)
+  homeDeliveryFeeFliwayMidsize Decimal @default(45) @db.Decimal(10, 2)
+  homeDeliveryFeeTge        Decimal  @default(25) @db.Decimal(10, 2)
   createdAt                  DateTime @default(now())
   updatedAt                  DateTime @updatedAt
 }
@@ -66,6 +69,7 @@ model ShippingRate {
   rate           Decimal     @db.Decimal(10, 4)
   zoneSurcharge  Decimal     @default(0) @db.Decimal(10, 2)
   minimumCharge  Decimal     @default(0) @db.Decimal(10, 2)
+  homeDeliveryFee Decimal?   @db.Decimal(10, 2)
   signatureSurcharge     Decimal @default(0) @db.Decimal(10, 4)
   ruralSurcharge         Decimal @default(0) @db.Decimal(10, 4)
   ageRestrictedSurcharge Decimal @default(0) @db.Decimal(10, 4)

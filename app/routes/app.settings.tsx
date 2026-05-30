@@ -28,7 +28,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       fafMainfreight: (settings.fafMainfreight ?? 36.35).toString(),
       fafTge: (settings.fafTge ?? 29.8).toString(),
       fafM2h: (settings.fafM2h ?? 0).toString(),
-       tgeAdminFee: (settings.tgeAdminFee ?? 12.69).toString(), 
+       tgeAdminFee: (settings.tgeAdminFee ?? 12.69).toString(),
+      homeDeliveryFeeFliway: (settings.homeDeliveryFeeFliway ?? 45).toString(),
+      homeDeliveryFeeFliwayMidsize: (settings.homeDeliveryFeeFliwayMidsize ?? 45).toString(),
+      homeDeliveryFeeTge: (settings.homeDeliveryFeeTge ?? 25).toString(), 
     },
     metafields: variantFreightMetafields,
   };
@@ -182,6 +185,18 @@ export default function SettingsPage() {
               <label className="settings-field">
                 TGE admin fee ($)
                 <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
+              </label>
+              <label className="settings-field">
+                Fliway Linehaul home delivery fee ($)
+                <input name="homeDeliveryFeeFliway" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliway} />
+              </label>
+              <label className="settings-field">
+                Fliway Midsize home delivery fee ($)
+                <input name="homeDeliveryFeeFliwayMidsize" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliwayMidsize} />
+              </label>
+              <label className="settings-field">
+                TGE home delivery fee ($)
+                <input name="homeDeliveryFeeTge" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeTge} />
               </label>
               <label className="settings-field">
                 Fuel surcharge % <span style={{ fontWeight: 400, color: "#90a4ae" }}>(NZP / Castle fallback)</span>

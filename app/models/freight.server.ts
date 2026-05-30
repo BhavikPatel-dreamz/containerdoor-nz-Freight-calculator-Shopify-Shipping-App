@@ -39,6 +39,7 @@ export type RateCandidate = Pick<
   | "rate"
   | "zoneSurcharge"
   | "minimumCharge"
+  | "homeDeliveryFee"
   | "signatureSurcharge"
   | "ruralSurcharge"
   | "ageRestrictedSurcharge"
@@ -97,7 +98,10 @@ export async function updateAppSettings(shop: string, formData: FormData) {
     fafMainfreight: parseDecimalString(formData.get("fafMainfreight")),
     fafTge: parseDecimalString(formData.get("fafTge")),
     fafM2h: parseDecimalString(formData.get("fafM2h")),
-    tgeAdminFee: parseDecimalString(formData.get("tgeAdminFee")),  
+    tgeAdminFee: parseDecimalString(formData.get("tgeAdminFee")),
+    homeDeliveryFeeFliway: parseDecimalString(formData.get("homeDeliveryFeeFliway")),
+    homeDeliveryFeeFliwayMidsize: parseDecimalString(formData.get("homeDeliveryFeeFliwayMidsize")),
+    homeDeliveryFeeTge: parseDecimalString(formData.get("homeDeliveryFeeTge")),  
   };
 
   return prisma.appSetting.upsert({
@@ -152,6 +156,7 @@ export async function listRates(
       rate: rate.rate.toString(),
       zoneSurcharge: rate.zoneSurcharge.toString(),
       minimumCharge: rate.minimumCharge.toString(),
+      homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
       signatureSurcharge: rate.signatureSurcharge.toString(),
       ruralSurcharge: rate.ruralSurcharge.toString(),
       ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
@@ -465,6 +470,9 @@ function readRateForm(shop: string, formData: FormData) {
     rate: parseDecimalString(formData.get("rate")),
     zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
     minimumCharge: parseDecimalString(formData.get("minimumCharge")),
+    homeDeliveryFee: formData.get("homeDeliveryFee") !== "" && formData.get("homeDeliveryFee") !== null
+      ? parseDecimalString(formData.get("homeDeliveryFee"))
+      : null,
     signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
     ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
@@ -508,7 +516,9 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
   const homeDeliveryFee =
     rate.serviceType === "STANDARD_DELIVERY" && freightPackage.homeDelivery
-      ? freightFormula.homeDeliveryFees[rate.company] ?? 0
+      ? rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
+        ? Number(rate.homeDeliveryFee)  // per-rate override
+        : resolveHomeDeliveryFee(rate.company, settings)  // global fallback
       : 0;
   const fafRate = resolveFafRate(rate.company, settings);
   const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
@@ -583,6 +593,20 @@ export function resolveFafRate(company: CarrierCompany, settings: AppSetting): n
   }
   // NZP, CASTLE, and any future carriers fall back to fuelSurchargePercent
   return Number(settings.fuelSurchargePercent) / 100;
+}
+
+// Resolve global home delivery fee for a carrier from DB settings
+export function resolveHomeDeliveryFee(company: CarrierCompany, settings: AppSetting): number {
+  const map: Partial<Record<CarrierCompany, string>> = {
+    FLIWAYLINEHAUL: "homeDeliveryFeeFliway",
+    FLIWAYMIDSIZE:  "homeDeliveryFeeFliwayMidsize",
+    TGE:            "homeDeliveryFeeTge",
+  };
+  const field = map[company];
+  if (field && field in settings) {
+    return Number((settings as unknown as Record<string, unknown>)[field]);
+  }
+  return 0;
 }
 
 function postalCodeInRange(postalCode: string, range: string) {

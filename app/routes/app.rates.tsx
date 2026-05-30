@@ -477,6 +477,12 @@ function InlineRateRow({
       </td>
       <td>
         <input form={`rate-${rate.id}`} name="minimumCharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.minimumCharge ?? 0)} aria-label="Minimum charge" />
+        <div style={{ marginTop: 4 }}>
+          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+            Home delivery override ($)
+            <input form={`rate-${rate.id}`} name="homeDeliveryFee" type="number" step="0.01" min="0" defaultValue={rate.homeDeliveryFee ?? ""} placeholder="use global" aria-label="Home delivery fee override" />
+          </label>
+        </div>
       </td>
       <td>
         {company !== "CASTLE" && (
@@ -605,6 +611,10 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Minimum charge ($)
           <input name="minimumCharge" type="number" step="0.01" min="0" defaultValue={rate?.minimumCharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Home delivery fee override ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(leave blank to use global setting)</span>
+          <input name="homeDeliveryFee" type="number" step="0.01" min="0" defaultValue={rate?.homeDeliveryFee?.toString?.() ?? ""} placeholder="use global" />
         </label>
         <label>
           Zone surcharge
