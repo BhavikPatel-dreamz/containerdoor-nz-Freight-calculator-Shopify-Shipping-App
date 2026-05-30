@@ -42,6 +42,7 @@ model AppSetting {
   defaultCurrency            String   @default("NZD")
   defaultServiceType         ServiceType @default(STANDARD_DELIVERY)
   fafFliway       Decimal  @default(30.5)
+  fafFliwayMidsize Decimal  @default(30.5)
   fafMainfreight  Decimal  @default(36.35)
   fafTge          Decimal  @default(29.8)
   fafM2h          Decimal  @default(0)

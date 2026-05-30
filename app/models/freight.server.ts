@@ -95,6 +95,7 @@ export async function updateAppSettings(shop: string, formData: FormData) {
     defaultServiceType: String(formData.get("defaultServiceType") || "STANDARD_DELIVERY") as ServiceType,
     // ADD THESE:
     fafFliway: parseDecimalString(formData.get("fafFliway")),
+    fafFliwayMidsize: parseDecimalString(formData.get("fafFliwayMidsize")),
     fafMainfreight: parseDecimalString(formData.get("fafMainfreight")),
     fafTge: parseDecimalString(formData.get("fafTge")),
     fafM2h: parseDecimalString(formData.get("fafM2h")),
@@ -581,11 +582,11 @@ function applySettings(baseRate: number, settings: AppSetting) {
 //resolve FAF rate for a carrier from DB settings, fall back to fuelSurchargePercent
 export function resolveFafRate(company: CarrierCompany, settings: AppSetting): number {
   const carrierFafMap: Partial<Record<CarrierCompany, string>> = {
-    FLIWAYLINEHAUL:      "fafFliwayLinehaul",
-    FLIWAYMIDSIZE:       "fafFliwayMidsize",
-    MAINFREIGHT: "fafMainfreight",
-    TGE:         "fafTge",
-    M2H:         "fafM2h",
+    FLIWAYLINEHAUL: "fafFliway",
+    FLIWAYMIDSIZE:  "fafFliwayMidsize",
+    MAINFREIGHT:    "fafMainfreight",
+    TGE:            "fafTge",
+    M2H:            "fafM2h",
   };
   const field = carrierFafMap[company];
   if (field && field in settings) {

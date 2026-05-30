@@ -25,6 +25,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       defaultCurrency: settings.defaultCurrency,
       defaultServiceType: settings.defaultServiceType,
       fafFliway: (settings.fafFliway ?? 30.5).toString(),
+      fafFliwayMidsize: (settings.fafFliwayMidsize ?? 30.5).toString(),
       fafMainfreight: (settings.fafMainfreight ?? 36.35).toString(),
       fafTge: (settings.fafTge ?? 29.8).toString(),
       fafM2h: (settings.fafM2h ?? 0).toString(),
@@ -113,17 +114,33 @@ export default function SettingsPage() {
         .settings-card {
           border: 1px solid #d5d9dd;
           border-radius: 12px;
-          padding: 14px;
+          padding: 20px;
           background: #fff;
+        }
+        .settings-group {
+          margin-bottom: 20px;
+        }
+        .settings-group:last-of-type {
+          margin-bottom: 0;
+        }
+        .settings-group-title {
+          font-size: 12px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: #8896a4;
+          margin: 0 0 10px 0;
+          padding-bottom: 6px;
+          border-bottom: 1px solid #edf0f2;
         }
         .settings-grid {
           display: grid;
           gap: 12px;
-          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
         }
         .settings-field {
           display: grid;
-          gap: 6px;
+          gap: 5px;
           font-size: 13px;
           color: #455a64;
         }
@@ -135,6 +152,7 @@ export default function SettingsPage() {
           padding: 8px 10px;
           background: #fff;
           color: #1f2933;
+          box-sizing: border-box;
         }
         .meta-list {
           display: grid;
@@ -165,73 +183,100 @@ export default function SettingsPage() {
         ) : null}
         <div className="settings-card">
           <Form method="post">
-            <div className="settings-grid">
-              <label className="settings-field">
-                Fliway FAF %
-                <input name="fafFliway" type="number" step="0.01" min="0" defaultValue={settings.fafFliway} />
-              </label>
-              <label className="settings-field">
-                Mainfreight FAF %
-                <input name="fafMainfreight" type="number" step="0.01" min="0" defaultValue={settings.fafMainfreight} />
-              </label>
-              <label className="settings-field">
-                TGE FAF %
-                <input name="fafTge" type="number" step="0.01" min="0" defaultValue={settings.fafTge} />
-              </label>
-              <label className="settings-field">
-                M2H FAF %
-                <input name="fafM2h" type="number" step="0.01" min="0" defaultValue={settings.fafM2h} />
-              </label>
-              <label className="settings-field">
-                TGE admin fee ($)
-                <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
-              </label>
-              <label className="settings-field">
-                Fliway Linehaul home delivery fee ($)
-                <input name="homeDeliveryFeeFliway" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliway} />
-              </label>
-              <label className="settings-field">
-                Fliway Midsize home delivery fee ($)
-                <input name="homeDeliveryFeeFliwayMidsize" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliwayMidsize} />
-              </label>
-              <label className="settings-field">
-                TGE home delivery fee ($)
-                <input name="homeDeliveryFeeTge" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeTge} />
-              </label>
-              <label className="settings-field">
-                Fuel surcharge % <span style={{ fontWeight: 400, color: "#90a4ae" }}>(NZP / Castle fallback)</span>
-                <input name="fuelSurchargePercent" type="number" step="0.01" min="0" defaultValue={settings.fuelSurchargePercent} />
-              </label>
-              <label className="settings-field">
-                Additional cost type
-                <select name="additionalCostType" defaultValue={settings.additionalCostType}>
-                  {costTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {costTypeLabels[type]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="settings-field">
-                Additional cost value
-                <input name="additionalCostValue" type="number" step="0.01" min="0" defaultValue={settings.additionalCostValue} />
-              </label>
-              <label className="settings-field">
-                Default currency
-                <input name="defaultCurrency" type="text" maxLength={3} defaultValue={settings.defaultCurrency} />
-              </label>
-              <label className="settings-field">
-                Default service
-                <select name="defaultServiceType" defaultValue={settings.defaultServiceType}>
-                  {serviceTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {serviceLabels[type]}
-                    </option>
-                  ))}
-                </select>
-              </label>
+
+            <div className="settings-group">
+              <p className="settings-group-title">Fuel Adjustment Factor (FAF) %</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  Fliway Linehaul
+                  <input name="fafFliway" type="number" step="0.01" min="0" defaultValue={settings.fafFliway} />
+                </label>
+                <label className="settings-field">
+                  Fliway Midsize
+                  <input name="fafFliwayMidsize" type="number" step="0.01" min="0" defaultValue={settings.fafFliwayMidsize} />
+                </label>
+                <label className="settings-field">
+                  Mainfreight
+                  <input name="fafMainfreight" type="number" step="0.01" min="0" defaultValue={settings.fafMainfreight} />
+                </label>
+                <label className="settings-field">
+                  TGE
+                  <input name="fafTge" type="number" step="0.01" min="0" defaultValue={settings.fafTge} />
+                </label>
+                <label className="settings-field">
+                  M2H
+                  <input name="fafM2h" type="number" step="0.01" min="0" defaultValue={settings.fafM2h} />
+                </label>
+                <label className="settings-field">
+                  NZP / Castle <span style={{ fontWeight: 400, color: "#90a4ae" }}>(fuel surcharge fallback)</span>
+                  <input name="fuelSurchargePercent" type="number" step="0.01" min="0" defaultValue={settings.fuelSurchargePercent} />
+                </label>
+              </div>
             </div>
-            <div style={{ marginTop: 12 }}>
+
+            <div className="settings-group">
+              <p className="settings-group-title">Home Delivery Fee ($) — global defaults</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  Fliway Linehaul
+                  <input name="homeDeliveryFeeFliway" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliway} />
+                </label>
+                <label className="settings-field">
+                  Fliway Midsize
+                  <input name="homeDeliveryFeeFliwayMidsize" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeFliwayMidsize} />
+                </label>
+                <label className="settings-field">
+                  TGE
+                  <input name="homeDeliveryFeeTge" type="number" step="0.01" min="0" defaultValue={settings.homeDeliveryFeeTge} />
+                </label>
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <p className="settings-group-title">Carrier-specific fees</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  TGE admin fee ($)
+                  <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
+                </label>
+              </div>
+            </div>
+
+            <div className="settings-group">
+              <p className="settings-group-title">Additional cost & defaults</p>
+              <div className="settings-grid">
+                <label className="settings-field">
+                  Additional cost type
+                  <select name="additionalCostType" defaultValue={settings.additionalCostType}>
+                    {costTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {costTypeLabels[type]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="settings-field">
+                  Additional cost value
+                  <input name="additionalCostValue" type="number" step="0.01" min="0" defaultValue={settings.additionalCostValue} />
+                </label>
+                <label className="settings-field">
+                  Default currency
+                  <input name="defaultCurrency" type="text" maxLength={3} defaultValue={settings.defaultCurrency} />
+                </label>
+                <label className="settings-field">
+                  Default service
+                  <select name="defaultServiceType" defaultValue={settings.defaultServiceType}>
+                    {serviceTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {serviceLabels[type]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 16 }}>
               <s-button type="submit" {...(saving ? { loading: true } : {})}>
                 Save settings
               </s-button>
