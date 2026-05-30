@@ -372,6 +372,7 @@ export default function RatesPage() {
                 <th>Weight (g)</th>
                 <th>Volume (cm3)</th>
                 <th>Rate</th>
+                <th>Min Charge</th>
                 <th>Surcharge</th>
                 <th>Mode</th>
                 <th>Active</th>
@@ -473,6 +474,9 @@ function InlineRateRow({
       </td>
       <td>
         <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
+      </td>
+      <td>
+        <input form={`rate-${rate.id}`} name="minimumCharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.minimumCharge ?? 0)} aria-label="Minimum charge" />
       </td>
       <td>
         {company !== "CASTLE" && (
@@ -597,6 +601,10 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Rate
           <input name="rate" type="number" step="0.01" min="0" required defaultValue={rate?.rate?.toString?.() ?? ""} />
+        </label>
+        <label>
+          Minimum charge ($)
+          <input name="minimumCharge" type="number" step="0.01" min="0" defaultValue={rate?.minimumCharge?.toString?.() ?? "0.00"} />
         </label>
         <label>
           Zone surcharge

@@ -38,6 +38,7 @@ export type RateCandidate = Pick<
   | "maxVolumeCm3"
   | "rate"
   | "zoneSurcharge"
+  | "minimumCharge"
   | "signatureSurcharge"
   | "ruralSurcharge"
   | "ageRestrictedSurcharge"
@@ -150,6 +151,7 @@ export async function listRates(
       ...rate,
       rate: rate.rate.toString(),
       zoneSurcharge: rate.zoneSurcharge.toString(),
+      minimumCharge: rate.minimumCharge.toString(),
       signatureSurcharge: rate.signatureSurcharge.toString(),
       ruralSurcharge: rate.ruralSurcharge.toString(),
       ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
@@ -207,6 +209,7 @@ export async function exportRatesCsv(shop: string) {
       "maxVolumeCm3",
       "rate",
       "zoneSurcharge",
+      "minimumCharge",
       "mode",
       "active",
       "id",
@@ -224,6 +227,7 @@ export async function exportRatesCsv(shop: string) {
       rate.maxVolumeCm3 ?? "",
       rate.rate.toString(),
       rate.zoneSurcharge.toString(),
+      rate.minimumCharge.toString(),
       rate.mode ?? "",
       String(rate.active),
       rate.id,
@@ -266,6 +270,7 @@ export async function importRatesCsv(shop: string, csv: string) {
       maxVolumeCm3,
       rate: parseDecimalStringFull(row.rate),
       zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
+      minimumCharge: parseDecimalStringFull(row.minimumCharge ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
       active: row.active === "" ? true : normaliseBoolean(row.active),
     };
@@ -459,6 +464,7 @@ function readRateForm(shop: string, formData: FormData) {
     maxVolumeCm3,
     rate: parseDecimalString(formData.get("rate")),
     zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
+    minimumCharge: parseDecimalString(formData.get("minimumCharge")),
     signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
     ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
@@ -494,24 +500,27 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
   const rawBaseFreight = baseValue * Number(rate.rate);
-  const minCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;  // TGE reuses zoneSurcharge as minCharge — see note below
-  const baseFreight = minCharge > 0 ? Math.max(rawBaseFreight, minCharge) : rawBaseFreight;
-  const zoneSurcharge = rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge); // TGE: zoneSurcharge IS the minCharge, not added on top
+  const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
+  const minimumCharge = Number(rate.minimumCharge ?? 0);
+  const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
+  const tgeMinCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;
+  const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
   const homeDeliveryFee =
     rate.serviceType === "STANDARD_DELIVERY" && freightPackage.homeDelivery
       ? freightFormula.homeDeliveryFees[rate.company] ?? 0
       : 0;
   const fafRate = resolveFafRate(rate.company, settings);
-  const withFaf = (baseFreight + zoneSurcharge + adminFee) * (1 + fafRate);
+  const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
+  const withFaf = (effectiveBase + adminFee) * (1 + fafRate);
   const subtotal = withFaf + homeDeliveryFee;
   const withMargin = subtotal * (1 + freightFormula.marginRate);
   const final = withMargin * (1 + freightFormula.gstRate);
 
   console.log(`[CALC] rateId:${rate.id} serviceType:${rate.serviceType} company:${rate.company}`);
-  console.log(`[CALC] baseValue:${baseValue} × rate:${rate.rate} = rawBaseFreight:${rawBaseFreight} (minCharge:${minCharge}) → baseFreight:${baseFreight}`);
-  console.log(`[CALC] adminFee:${adminFee} zoneSurcharge:${zoneSurcharge} homeDeliveryFee:${homeDeliveryFee} fafRate:${fafRate}`);
-  console.log(`[CALC] (${baseFreight} + ${zoneSurcharge} + ${adminFee}) × ${1 + fafRate} = withFaf:${withFaf}`);
+  console.log(`[CALC] baseValue:${baseValue} × rate:${rate.rate} = rawBaseFreight:${rawBaseFreight} rawTransport:${rawTransportCost} minCharge:${minimumCharge} → effectiveBase:${effectiveBase}`);
+  console.log(`[CALC] adminFee:${adminFee} homeDeliveryFee:${homeDeliveryFee} fafRate:${fafRate}`);
+  console.log(`[CALC] (${effectiveBase} + ${adminFee}) × ${1 + fafRate} = withFaf:${withFaf}`);
   console.log(`[CALC] withFaf:${withFaf} + homeDelivery:${homeDeliveryFee} = subtotal:${subtotal}`);
   console.log(`[CALC] subtotal:${subtotal} × margin:${1 + freightFormula.marginRate} = withMargin:${withMargin}`);
   console.log(`[CALC] withMargin:${withMargin} × gst:${1 + freightFormula.gstRate} = FINAL:${final}`);
