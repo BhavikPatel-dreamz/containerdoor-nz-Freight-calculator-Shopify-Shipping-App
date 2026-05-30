@@ -44,8 +44,10 @@ export type RateCandidate = Pick<
   | "ruralSurcharge"
   | "ageRestrictedSurcharge"
   | "mode"
+  | "baseFee"
 >;
 
+ 
 export type FreightPackage = {
   variantId?: string;
   quantity: number;
@@ -54,6 +56,7 @@ export type FreightPackage = {
   volumeCm3: number;
   boxes: number;
   hiabRequired: boolean;
+  homeDelivery: boolean;
   nzpSignature: boolean;
   nzpRural: boolean;
   nzpAgeRestricted: boolean;
@@ -156,6 +159,7 @@ export async function listRates(
     rates: rates.map((rate) => ({
       ...rate,
       rate: rate.rate.toString(),
+      baseFee: (rate as any).baseFee?.toString() ?? "0",
       zoneSurcharge: rate.zoneSurcharge.toString(),
       minimumCharge: rate.minimumCharge.toString(),
       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
@@ -215,6 +219,7 @@ export async function exportRatesCsv(shop: string) {
       "minVolumeCm3",
       "maxVolumeCm3",
       "rate",
+      "baseFee",
       "zoneSurcharge",
       "minimumCharge",
       "mode",
@@ -233,6 +238,7 @@ export async function exportRatesCsv(shop: string) {
       rate.minVolumeCm3 ?? "",
       rate.maxVolumeCm3 ?? "",
       rate.rate.toString(),
+      ((rate as any).baseFee ?? 0).toString(),
       rate.zoneSurcharge.toString(),
       rate.minimumCharge.toString(),
       rate.mode ?? "",
@@ -478,6 +484,7 @@ function readRateForm(shop: string, formData: FormData) {
     signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
     ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
+    baseFee: parseDecimalString(formData.get("baseFee")),
     mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,
     active: parseBoolean(formData.get("active")),
   };
@@ -509,7 +516,9 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseValue = rate.useWeightRange
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
-  const rawBaseFreight = baseValue * Number(rate.rate);
+  const baseFee = rate.company === "MAINFREIGHT" ? Number((rate as any).baseFee ?? 0) : 0;
+
+  const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee;
   const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
   const minimumCharge = Number(rate.minimumCharge ?? 0);
   const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;

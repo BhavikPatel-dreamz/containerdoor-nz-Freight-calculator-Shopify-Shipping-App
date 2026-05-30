@@ -72,6 +72,7 @@ model ShippingRate {
   rate           Decimal     @db.Decimal(10, 4)
   zoneSurcharge  Decimal     @default(0) @db.Decimal(10, 2)
   minimumCharge  Decimal     @default(0) @db.Decimal(10, 2)
+  baseFee        Decimal     @default(0) @db.Decimal(10, 2)
   homeDeliveryFee Decimal?   @db.Decimal(10, 2)
   signatureSurcharge     Decimal @default(0) @db.Decimal(10, 4)
   ruralSurcharge         Decimal @default(0) @db.Decimal(10, 4)

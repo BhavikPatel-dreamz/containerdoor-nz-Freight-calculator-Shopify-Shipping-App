@@ -504,6 +504,20 @@ function InlineRateRow({
             </label>
           </div>
         )}
+        {company === "MAINFREIGHT" && (
+          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2, marginTop: 4 }}>
+            Base fee ($)
+            <input
+              form={`rate-${rate.id}`}
+              name="baseFee"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue={toMoney((rate as any).baseFee ?? 0)}
+              aria-label="Base fee"
+            />
+          </label>
+        )}
         {company === "CASTLE" && (
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
@@ -611,6 +625,10 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Minimum charge ($)
           <input name="minimumCharge" type="number" step="0.01" min="0" defaultValue={rate?.minimumCharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Base fee ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(Mainfreight only)</span>
+          <input name="baseFee" type="number" step="0.01" min="0" defaultValue={(rate as any)?.baseFee?.toString?.() ?? "0.00"} />
         </label>
         <label>
           Home delivery fee override ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(leave blank to use global setting)</span>
