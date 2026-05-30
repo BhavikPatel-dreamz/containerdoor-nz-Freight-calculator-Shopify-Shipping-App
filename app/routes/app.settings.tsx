@@ -33,6 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       homeDeliveryFeeFliway: (settings.homeDeliveryFeeFliway ?? 45).toString(),
       homeDeliveryFeeFliwayMidsize: (settings.homeDeliveryFeeFliwayMidsize ?? 45).toString(),
       homeDeliveryFeeTge: (settings.homeDeliveryFeeTge ?? 25).toString(),
+      mainfreightDepotFee: (settings.mainfreightDepotFee ?? 25).toString(),
       marginRate: (settings.marginRate ?? 10).toString(),
       gstRate: (settings.gstRate ?? 15).toString(), 
     },
@@ -240,6 +241,10 @@ export default function SettingsPage() {
                 <label className="settings-field">
                   TGE admin fee ($)
                   <input name="tgeAdminFee" type="number" step="0.01" min="0" defaultValue={settings.tgeAdminFee} />
+                </label>
+                <label className="settings-field">
+                  Mainfreight depot collection fee ($)
+                  <input name="mainfreightDepotFee" type="number" step="0.01" min="0" defaultValue={settings.mainfreightDepotFee ?? "25"} />
                 </label>
               </div>
             </div>
