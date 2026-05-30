@@ -83,6 +83,7 @@ enum CostType {
 }
 
 enum CarrierCompany {
+  FLIWAY        // legacy – no longer used in new data; kept to avoid enum drop
   FLIWAYLINEHAUL
   FLIWAYMIDSIZE
   NZP

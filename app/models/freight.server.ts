@@ -254,7 +254,7 @@ export async function importRatesCsv(shop: string, csv: string) {
 
     const data = {
       shop,
-      company: normaliseEnum(row.company, carrierCompanies, "FLIWAY"),
+      company: normaliseEnum(row.company, carrierCompanies, "FLIWAYLINEHAUL"),
       serviceType: normaliseEnum(row.serviceType, serviceTypes, "STANDARD_DELIVERY"),
       city: row.city || "All",
       postalCode: row.postalCode || "*",
