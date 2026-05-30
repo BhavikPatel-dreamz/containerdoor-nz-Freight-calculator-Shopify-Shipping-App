@@ -45,6 +45,7 @@ export type RateCandidate = Pick<
   | "ageRestrictedSurcharge"
   | "mode"
   | "baseFee"
+  | "transportCost"
 >;
 
  
@@ -161,6 +162,7 @@ export async function listRates(
       ...rate,
       rate: rate.rate.toString(),
       baseFee: (rate as any).baseFee?.toString() ?? "0",
+      transportCost: (rate as any).transportCost?.toString() ?? null,
       zoneSurcharge: rate.zoneSurcharge.toString(),
       minimumCharge: rate.minimumCharge.toString(),
       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
@@ -220,6 +222,7 @@ export async function exportRatesCsv(shop: string) {
       "minVolumeCm3",
       "maxVolumeCm3",
       "rate",
+      "transportCost",
       "baseFee",
       "zoneSurcharge",
       "minimumCharge",
@@ -240,6 +243,7 @@ export async function exportRatesCsv(shop: string) {
       rate.maxVolumeCm3 ?? "",
       rate.rate.toString(),
       ((rate as any).baseFee ?? 0).toString(),
+      ((rate as any).transportCost ?? "").toString(),
       rate.zoneSurcharge.toString(),
       rate.minimumCharge.toString(),
       rate.mode ?? "",
@@ -284,6 +288,7 @@ export async function importRatesCsv(shop: string, csv: string) {
       maxVolumeCm3,
       rate: parseDecimalStringFull(row.rate),
       baseFee: parseDecimalStringFull(row.baseFee ?? "0"),
+      transportCost: row.transportCost ? parseDecimalStringFull(row.transportCost) : null,
       zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
       minimumCharge: parseDecimalStringFull(row.minimumCharge ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
@@ -487,6 +492,9 @@ function readRateForm(shop: string, formData: FormData) {
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
     ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
     baseFee: parseDecimalString(formData.get("baseFee")),
+    transportCost: formData.get("transportCost") !== "" && formData.get("transportCost") !== null
+      ? parseDecimalString(formData.get("transportCost"))
+      : null,
     mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,
     active: parseBoolean(formData.get("active")),
   };

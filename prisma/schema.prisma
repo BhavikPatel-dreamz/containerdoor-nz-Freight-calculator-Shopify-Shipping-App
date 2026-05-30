@@ -79,6 +79,7 @@ model ShippingRate {
   ruralSurcharge         Decimal @default(0) @db.Decimal(10, 4)
   ageRestrictedSurcharge Decimal @default(0) @db.Decimal(10, 4)
   mode           CarrierMode?
+  transportCost  Decimal?    @db.Decimal(10, 2)
   active         Boolean     @default(true)
   createdAt      DateTime    @default(now())
   updatedAt      DateTime    @updatedAt
