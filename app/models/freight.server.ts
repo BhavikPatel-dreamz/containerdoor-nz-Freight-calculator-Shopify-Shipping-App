@@ -105,6 +105,7 @@ export async function updateAppSettings(shop: string, formData: FormData) {
     homeDeliveryFeeFliway: parseDecimalString(formData.get("homeDeliveryFeeFliway")),
     homeDeliveryFeeFliwayMidsize: parseDecimalString(formData.get("homeDeliveryFeeFliwayMidsize")),
     homeDeliveryFeeTge: parseDecimalString(formData.get("homeDeliveryFeeTge")),
+    mainfreightDepotFee: parseDecimalString(formData.get("mainfreightDepotFee")),
     marginRate: parseDecimalString(formData.get("marginRate")),
     gstRate: parseDecimalString(formData.get("gstRate")),  
   };
@@ -519,7 +520,11 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
   const baseFee = rate.company === "MAINFREIGHT" ? Number((rate as any).baseFee ?? 0) : 0;
 
-  const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee;
+  const depotFee = rate.company === "MAINFREIGHT" && rate.serviceType === "DEPOT_DELIVERY"
+    ? Number((settings as any).mainfreightDepotFee ?? 25)
+    : 0;
+
+  const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee + depotFee;
   const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
   const minimumCharge = Number(rate.minimumCharge ?? 0);
   const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
