@@ -1,7 +1,8 @@
 import type { CarrierCompany, CarrierMode, CostType, ServiceType } from "@prisma/client";
 
 export const carrierCompanies: CarrierCompany[] = [
-  "FLIWAY",
+  "FLIWAYLINEHAUL",
+  "FLIWAYMIDSIZE",
   "NZP",
   "CASTLE",
   "TGE",
@@ -26,7 +27,8 @@ export const serviceLabels: Record<ServiceType, string> = {
 };
 
 export const companyLabels: Record<CarrierCompany, string> = {
-  FLIWAY: "Fliway",
+  FLIWAYLINEHAUL: "Fliway - Linehaul",
+  FLIWAYMIDSIZE: "Fliway - Midsize",
   NZP: "NZP",
   CASTLE: "Castle",
   TGE: "Team Global Express",
@@ -38,10 +40,11 @@ export const freightFormula = {
   marginRate: 0.1,
   gstRate: 0.15,
   homeDeliveryFees: {
-    FLIWAY: 45,
+    FLIWAYLINEHAUL: 45,
+    FLIWAYMIDSIZE: 45,
     TGE: 25,
   } as Partial<Record<CarrierCompany, number>>,
-  depotCollectionCompanies: ["FLIWAY", "MAINFREIGHT", "TGE"] as CarrierCompany[],
+  depotCollectionCompanies: ["FLIWAYLINEHAUL", "FLIWAYMIDSIZE", "MAINFREIGHT", "TGE"] as CarrierCompany[],
 
   // NEW: NZP-specific
   nzp: {

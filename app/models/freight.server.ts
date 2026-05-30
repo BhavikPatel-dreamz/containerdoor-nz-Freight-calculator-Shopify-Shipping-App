@@ -562,7 +562,8 @@ function applySettings(baseRate: number, settings: AppSetting) {
 //resolve FAF rate for a carrier from DB settings, fall back to fuelSurchargePercent
 export function resolveFafRate(company: CarrierCompany, settings: AppSetting): number {
   const carrierFafMap: Partial<Record<CarrierCompany, string>> = {
-    FLIWAY:      "fafFliway",
+    FLIWAYLINEHAUL:      "fafFliwayLinehaul",
+    FLIWAYMIDSIZE:       "fafFliwayMidsize",
     MAINFREIGHT: "fafMainfreight",
     TGE:         "fafTge",
     M2H:         "fafM2h",

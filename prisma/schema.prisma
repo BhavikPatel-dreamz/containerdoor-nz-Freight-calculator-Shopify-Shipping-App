@@ -83,7 +83,8 @@ enum CostType {
 }
 
 enum CarrierCompany {
-  FLIWAY
+  FLIWAYLINEHAUL
+  FLIWAYMIDSIZE
   NZP
   CASTLE
   TGE
