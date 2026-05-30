@@ -89,6 +89,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               key: field.key,
               type: field.type,
               ownerType: "PRODUCTVARIANT",
+              ...('validations' in field ? { validations: field.validations } : {}),
             },
           },
         },
