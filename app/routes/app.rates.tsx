@@ -492,6 +492,9 @@ function InlineRateRow({
           <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2, marginTop: 4 }}>
             Transport cost ($)
             <input form={`rate-${rate.id}`} name="transportCost" type="number" step="0.01" min="0" defaultValue={toMoney((rate as any).transportCost ?? "") || ""} aria-label="Transport cost" />
+            {!(rate as any).transportCost && rate.computedTransportCost ? (
+              <small style={{ color: "#6b7280", marginTop: 4 }}>Auto: ${rate.computedTransportCost}</small>
+            ) : null}
           </label>
         )}
         {company === "NZP" && (
@@ -522,6 +525,15 @@ function InlineRateRow({
               defaultValue={toMoney((rate as any).baseFee ?? 0)}
               aria-label="Base fee"
             />
+          </label>
+        )}
+        {company === "MAINFREIGHT" && (
+          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2, marginTop: 4 }}>
+            Transport cost ($)
+            <input form={`rate-${rate.id}`} name="transportCost" type="number" step="0.01" min="0" defaultValue={toMoney((rate as any).transportCost ?? "") || ""} aria-label="Transport cost" />
+            {!(rate as any).transportCost && rate.computedTransportCost ? (
+              <small style={{ color: "#6b7280", marginTop: 4 }}>Auto: ${rate.computedTransportCost}</small>
+            ) : null}
           </label>
         )}
         {company === "CASTLE" && (
@@ -631,6 +643,9 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Transport cost ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(TGE only)</span>
           <input name="transportCost" type="number" step="0.01" min="0" defaultValue={rate?.transportCost?.toString?.() ?? ""} />
+          {rate?.computedTransportCost && !(rate?.transportCost) ? (
+            <div style={{ fontSize: 12, color: "#486581", marginTop: 6 }}>Auto-calculated (CBM=1.028): ${rate.computedTransportCost}</div>
+          ) : null}
         </label>
         <label>
           Minimum charge ($)

@@ -156,13 +156,41 @@ export async function listRates(
     }),
     prisma.shippingRate.count({ where }),
   ]);
+  // load settings so computedTransportCost can use any carrier-specific depot fees
+  const settings = await getAppSettings(shop);
 
-   return {
+  return {
     rates: rates.map((rate) => ({
       ...rate,
       rate: rate.rate.toString(),
       baseFee: (rate as any).baseFee?.toString() ?? "0",
+      // If a transportCost is stored use that; otherwise compute an example transport cost
       transportCost: (rate as any).transportCost?.toString() ?? null,
+      // Auto-computed transport cost example for CBM = 1.028 when volume-based
+      computedTransportCost: (() => {
+        const sampleCbm = 1.028;
+        try {
+          // If rate uses weight ranges we cannot compute a CBM-based example
+          if (rate.useWeightRange) return null;
+          const baseValue = sampleCbm; // CBM
+          const baseFee = rate.company === "MAINFREIGHT" ? Number((rate as any).baseFee ?? 0) : 0;
+          const depotFee = rate.company === "MAINFREIGHT" && rate.serviceType === "DEPOT_DELIVERY"
+            ? Number((settings as any).mainfreightDepotFee ?? 25)
+            : 0;
+          const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee + depotFee;
+          if (rate.company === "TGE") {
+            const tgeMinCharge = Number(rate.zoneSurcharge ?? 0);
+            const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
+            return baseFreightTge.toFixed(2);
+          }
+          const rawTransportCost = rawBaseFreight + Number(rate.zoneSurcharge ?? 0);
+          const minimumCharge = Number(rate.minimumCharge ?? 0);
+          const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
+          return baseFreight.toFixed(2);
+        } catch (e) {
+          return null;
+        }
+      })(),
       zoneSurcharge: rate.zoneSurcharge.toString(),
       minimumCharge: rate.minimumCharge.toString(),
       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
@@ -533,11 +561,20 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     : 0;
 
   const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee + depotFee;
-  const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
+  const computedRawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
+  // If a transportCost is stored on the rate, treat it as a user-provided override
+  const storedTransport = (rate as any).transportCost !== null && (rate as any).transportCost !== undefined
+    ? Number((rate as any).transportCost)
+    : NaN;
+  const rawTransportCost = Number.isFinite(storedTransport) ? storedTransport : computedRawTransportCost;
   const minimumCharge = Number(rate.minimumCharge ?? 0);
   const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
   const tgeMinCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;
-  const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
+  // For TGE, when a stored transport override exists we compare it against the TGE minimum,
+  // otherwise fall back to the previous rawBaseFreight-based logic
+  const baseFreightTge = Number.isFinite(storedTransport)
+    ? (tgeMinCharge > 0 ? Math.max(storedTransport, tgeMinCharge) : storedTransport)
+    : (tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight);
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
   const resolvedHomeDeliveryFee =
   rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
