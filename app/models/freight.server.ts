@@ -159,7 +159,7 @@ export async function listRates(
     rates: rates.map((rate) => ({
       ...rate,
       rate: rate.rate.toString(),
-      baseFee: rate.baseFee?.toString() ?? "0",
+      baseFee: (rate as any).baseFee?.toString() ?? "0",
       zoneSurcharge: rate.zoneSurcharge.toString(),
       minimumCharge: rate.minimumCharge.toString(),
       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
@@ -238,7 +238,7 @@ export async function exportRatesCsv(shop: string) {
       rate.minVolumeCm3 ?? "",
       rate.maxVolumeCm3 ?? "",
       rate.rate.toString(),
-      (rate.baseFee ?? 0).toString(),
+      ((rate as any).baseFee ?? 0).toString(),
       rate.zoneSurcharge.toString(),
       rate.minimumCharge.toString(),
       rate.mode ?? "",
@@ -525,12 +525,14 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const tgeMinCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;
   const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
-  const homeDeliveryFee =
-    rate.serviceType === "STANDARD_DELIVERY" && freightPackage.homeDelivery
-      ? rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
-        ? Number(rate.homeDeliveryFee)  // per-rate override
-        : resolveHomeDeliveryFee(rate.company, settings)  // global fallback
-      : 0;
+  const resolvedHomeDeliveryFee =
+  rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
+    ? Number(rate.homeDeliveryFee)
+    : resolveHomeDeliveryFee(rate.company, settings);
+const homeDeliveryFee =
+  rate.serviceType === "STANDARD_DELIVERY" && resolvedHomeDeliveryFee > 0
+    ? resolvedHomeDeliveryFee
+    : 0;
   const fafRate = resolveFafRate(rate.company, settings);
   const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
   const withFaf = (effectiveBase + adminFee) * (1 + fafRate);

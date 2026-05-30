@@ -513,7 +513,7 @@ function InlineRateRow({
               type="number"
               step="0.01"
               min="0"
-              defaultValue={toMoney(rate.baseFee ?? 0)}
+              defaultValue={toMoney((rate as any).baseFee ?? 0)}
               aria-label="Base fee"
             />
           </label>
@@ -628,7 +628,7 @@ function RateForm({ rate }: { rate?: any }) {
         </label>
         <label>
           Base fee ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(Mainfreight only)</span>
-          <input name="baseFee" type="number" step="0.01" min="0" defaultValue={rate?.baseFee?.toString?.() ?? "0.00"} />
+          <input name="baseFee" type="number" step="0.01" min="0" defaultValue={(rate as any)?.baseFee?.toString?.() ?? "0.00"} />
         </label>
         <label>
           Home delivery fee override ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(leave blank to use global setting)</span>
