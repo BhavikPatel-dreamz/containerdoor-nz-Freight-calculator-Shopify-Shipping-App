@@ -488,12 +488,6 @@ function InlineRateRow({
         {company !== "CASTLE" && (
           <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
         )}
-        {company === "TGE" && (
-          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2, marginTop: 4 }}>
-            Transport cost ($)
-            <input form={`rate-${rate.id}`} name="transportCost" type="number" step="0.01" min="0" defaultValue={toMoney((rate as any).transportCost ?? "") || ""} aria-label="Transport cost" />
-          </label>
-        )}
         {company === "NZP" && (
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
@@ -627,10 +621,6 @@ function RateForm({ rate }: { rate?: any }) {
         <label>
           Rate
           <input name="rate" type="number" step="0.01" min="0" required defaultValue={rate?.rate?.toString?.() ?? ""} />
-        </label>
-        <label>
-          Transport cost ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(TGE only)</span>
-          <input name="transportCost" type="number" step="0.01" min="0" defaultValue={rate?.transportCost?.toString?.() ?? ""} />
         </label>
         <label>
           Minimum charge ($)
