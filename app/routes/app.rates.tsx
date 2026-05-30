@@ -464,8 +464,8 @@ function InlineRateRow({
       </td>
       <td>
         <div className="range-col">
-          <input form={`rate-${rate.id}`} name="minVolumeCm3" type="number" min="0" defaultValue={rate.minVolumeCm3 ?? ""} aria-label="Min volume" />
-          <input form={`rate-${rate.id}`} name="maxVolumeCm3" type="number" min="0" defaultValue={rate.maxVolumeCm3 ?? ""} aria-label="Max volume" />
+          <input form={`rate-${rate.id}`} name="minVolumeCm3" type="number" min="0" step="any" defaultValue={rate.minVolumeCm3 ?? ""} aria-label="Min volume" />
+          <input form={`rate-${rate.id}`} name="maxVolumeCm3" type="number" min="0" step="any" defaultValue={rate.maxVolumeCm3 ?? ""} aria-label="Max volume" />
         </div>
         <label className="checkbox-row">
           <input form={`rate-${rate.id}`} name="useVolumeRange" type="checkbox" defaultChecked={rate.useVolumeRange} /> Use
@@ -588,11 +588,11 @@ function RateForm({ rate }: { rate?: any }) {
         </label>
         <label>
           Min volume (cm3)
-          <input name="minVolumeCm3" type="number" min="0" defaultValue={rate?.minVolumeCm3 ?? ""} />
+          <input name="minVolumeCm3" type="number" min="0" step="any" defaultValue={rate?.minVolumeCm3 ?? ""} />
         </label>
         <label>
           Max volume (cm3)
-          <input name="maxVolumeCm3" type="number" min="0" defaultValue={rate?.maxVolumeCm3 ?? ""} />
+          <input name="maxVolumeCm3" type="number" min="0" step="any" defaultValue={rate?.maxVolumeCm3 ?? ""} />
         </label>
         <label>
           Rate
