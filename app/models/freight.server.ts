@@ -461,7 +461,7 @@ function readRateForm(shop: string, formData: FormData) {
   const minWeightGrams = parseOptionalInt(formData.get("minWeightGrams"));
   const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
   const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
-  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3")); 
+  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3"));
 
   // FIX: Only use the checkbox value — do NOT auto-force true based on min/max presence
   const useWeightRange = parseBoolean(formData.get("useWeightRange"));
@@ -470,7 +470,9 @@ function readRateForm(shop: string, formData: FormData) {
   return {
     shop,
     company: String(formData.get("company") || "FLIWAY") as CarrierCompany,
-    serviceType: String(formData.get("serviceType") || "STANDARD_DELIVERY") as ServiceType,
+    serviceType: String(
+      formData.get("serviceType") || "STANDARD_DELIVERY",
+    ) as ServiceType,
     city: String(formData.get("city") || "").trim(),
     postalCode: String(formData.get("postalCode") || "*").trim(),
     useWeightRange,
@@ -482,15 +484,21 @@ function readRateForm(shop: string, formData: FormData) {
     rate: parseDecimalString(formData.get("rate")),
     zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
     minimumCharge: parseDecimalString(formData.get("minimumCharge")),
-    homeDeliveryFee: formData.get("homeDeliveryFee") !== "" && formData.get("homeDeliveryFee") !== null
-      ? parseDecimalString(formData.get("homeDeliveryFee"))
-      : null,
+    homeDeliveryFee:
+      formData.get("homeDeliveryFee") !== "" &&
+      formData.get("homeDeliveryFee") !== null
+        ? parseDecimalString(formData.get("homeDeliveryFee"))
+        : null,
     signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
-    ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
+    ageRestrictedSurcharge: parseDecimalString(
+      formData.get("ageRestrictedSurcharge"),
+    ),
     baseFee: parseDecimalString(formData.get("baseFee")),
-residentialFee: parseDecimalString(formData.get("residentialFee")),
-    mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,
+    residentialFee: parseDecimalString(formData.get("residentialFee")),
+    mode: formData.get("mode")
+      ? (String(formData.get("mode")) as CarrierMode)
+      : null,
     active: parseBoolean(formData.get("active")),
   };
 }
@@ -521,7 +529,9 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseValue = rate.useWeightRange
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
-  const baseFee = rate.company === "MAINFREIGHT" ? Number((rate as any).baseFee ?? 0) : 0;
+  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE")
+  ? Number((rate as any).baseFee ?? 0)
+  : 0;
 
   const depotFee = rate.company === "MAINFREIGHT" && rate.serviceType === "DEPOT_DELIVERY"
     ? Number((settings as any).mainfreightDepotFee ?? 25)
