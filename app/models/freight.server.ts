@@ -564,9 +564,11 @@ const homeDeliveryFee =
 // rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
 function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
   const baseCharge = Number(rate.rate);
-  const signatureFee = freightPackage.nzpSignature ? Number(rate.signatureSurcharge) : 0;
-  const ruralFee = freightPackage.nzpRural ? Number(rate.ruralSurcharge) : 0;
-  const ageRestrictedFee = freightPackage.nzpAgeRestricted ? Number(rate.ageRestrictedSurcharge) : 0;
+  // If the matched rate row has a non-zero surcharge for this postal code,
+  // that surcharge applies automatically — no per-product metafield needed.
+  const signatureFee = Number(rate.signatureSurcharge) > 0 ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = Number(rate.ruralSurcharge) > 0 ? Number(rate.ruralSurcharge) : 0;
+  const ageRestrictedFee = Number(rate.ageRestrictedSurcharge) > 0 ? Number(rate.ageRestrictedSurcharge) : 0;
   const additionalCharges = signatureFee + ruralFee + ageRestrictedFee;
   console.log(`[NZP] base:${baseCharge} signature:${signatureFee} rural:${ruralFee} ageRestricted:${ageRestrictedFee}`);
   const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
@@ -581,10 +583,12 @@ function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate, s
 // rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
 function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
   const baseCharge = Number(rate.rate);
-  const residentialFee = Number(rate.zoneSurcharge);
-  const signatureFee = freightPackage.castleSignature ? 1.00 : 0;
-  const ruralFee = freightPackage.castleRural ? 1.00 : 0;
-  const waihekeFee = freightPackage.castleWaiheke ? 1.00 : 0;
+ const residentialFee = freightFormula.castle.residentialSurcharge;
+  // Applied automatically when the matched rate row has a non-zero surcharge
+  const signatureFee = Number(rate.signatureSurcharge) > 0 ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = Number(rate.ruralSurcharge) > 0 ? Number(rate.ruralSurcharge) : 0;
+  // Castle re-uses ageRestrictedSurcharge column to store Waiheke surcharge
+  const waihekeFee = Number(rate.ageRestrictedSurcharge) > 0 ? Number(rate.ageRestrictedSurcharge) : 0;
   const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee)
     * (1 + freightFormula.castle.totalVariableRate);
   const marginRate = Number(settings.marginRate ?? 10) / 100;

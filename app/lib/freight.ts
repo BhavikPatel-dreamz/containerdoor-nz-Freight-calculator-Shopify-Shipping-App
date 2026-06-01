@@ -88,12 +88,7 @@ export const variantFreightMetafields = [
   },
   { key: "hiab_required", name: "HIAB required", type: "boolean" },
   { key: "units_per_box", name: "Units per box", type: "number_integer" },
-  { key: "nzp_signature", name: "NZP Signature required", type: "boolean" },
-  { key: "nzp_rural", name: "NZP Rural delivery", type: "boolean" },
-  { key: "nzp_age_restricted", name: "NZP Age restricted (no ATL)", type: "boolean" },
-{ key: "castle_signature", name: "Castle signature required", type: "boolean" },
-{ key: "castle_rural", name: "Castle rural delivery", type: "boolean" },
-{ key: "castle_waiheke", name: "Castle Waiheke Island delivery", type: "boolean" },
+  // Per-product surcharge metafields removed — surcharges derived from rate rows
 ] as const;
 
 export const freightMetafieldNamespace = "containerdoor_freight";
