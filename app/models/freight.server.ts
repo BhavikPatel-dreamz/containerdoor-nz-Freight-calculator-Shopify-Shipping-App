@@ -43,6 +43,7 @@ export type RateCandidate = Pick<
   | "signatureSurcharge"
   | "ruralSurcharge"
   | "ageRestrictedSurcharge"
+  | "residentialFee"  
   | "mode"
   | "baseFee"
 >;
@@ -157,23 +158,24 @@ export async function listRates(
   ]);
 
    return {
-    rates: rates.map((rate) => ({
-      ...rate,
-      rate: rate.rate.toString(),
-      baseFee: (rate as any).baseFee?.toString() ?? "0",
-      zoneSurcharge: rate.zoneSurcharge.toString(),
-      minimumCharge: rate.minimumCharge.toString(),
-      homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
-      signatureSurcharge: rate.signatureSurcharge.toString(),
-      ruralSurcharge: rate.ruralSurcharge.toString(),
-      ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
-      createdAt: rate.createdAt.toISOString(),
-      updatedAt: rate.updatedAt.toISOString(),
-    })),
-    total,
-    page,
-    pageCount: Math.max(Math.ceil(total / take), 1),
-  };
+     rates: rates.map((rate) => ({
+       ...rate,
+       rate: rate.rate.toString(),
+       baseFee: (rate as any).baseFee?.toString() ?? "0",
+       zoneSurcharge: rate.zoneSurcharge.toString(),
+       minimumCharge: rate.minimumCharge.toString(),
+       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
+       signatureSurcharge: rate.signatureSurcharge.toString(),
+       ruralSurcharge: rate.ruralSurcharge.toString(),
+       ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
+       residentialFee: rate.residentialFee?.toString() ?? "0",
+       createdAt: rate.createdAt.toISOString(),
+       updatedAt: rate.updatedAt.toISOString(),
+     })),
+     total,
+     page,
+     pageCount: Math.max(Math.ceil(total / take), 1),
+   };
 }
 
 export async function upsertRate(shop: string, formData: FormData) {
@@ -487,6 +489,7 @@ function readRateForm(shop: string, formData: FormData) {
     ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
     ageRestrictedSurcharge: parseDecimalString(formData.get("ageRestrictedSurcharge")),
     baseFee: parseDecimalString(formData.get("baseFee")),
+residentialFee: parseDecimalString(formData.get("residentialFee")),
     mode: formData.get("mode") ? (String(formData.get("mode")) as CarrierMode) : null,
     active: parseBoolean(formData.get("active")),
   };
@@ -579,11 +582,9 @@ function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate, s
 }
 
 // NEW: Castle Parcels rate calculation
-// rate.rate = CBM bracket base charge
-// rate.zoneSurcharge = additional surcharges (residential always, rural/signature/waiheke where applicable)
 function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
   const baseCharge = Number(rate.rate);
- const residentialFee = freightFormula.castle.residentialSurcharge;
+  const residentialFee = Number(rate.residentialFee);
   // Applied automatically when the matched rate row has a non-zero surcharge
   const signatureFee = Number(rate.signatureSurcharge) > 0 ? Number(rate.signatureSurcharge) : 0;
   const ruralFee = Number(rate.ruralSurcharge) > 0 ? Number(rate.ruralSurcharge) : 0;
