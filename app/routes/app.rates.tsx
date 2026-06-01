@@ -522,7 +522,7 @@ function InlineRateRow({
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
               Residential ($) <span style={{ fontWeight: 400 }}>(always applied)</span>
-              <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge ?? 1)} aria-label="Residential surcharge" />
+              <input form={`rate-${rate.id}`} name="residentialFee" type="number" step="0.01" min="0" defaultValue={toMoney(rate.residentialFee ?? 1)} aria-label="Residential surcharge" />
             </label>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
               Signature ($)

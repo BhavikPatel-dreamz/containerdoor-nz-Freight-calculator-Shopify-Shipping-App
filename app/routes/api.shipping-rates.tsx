@@ -217,18 +217,16 @@ async function getFreightPackages(
         volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),
-        nzpSignature:
-          isTrue(metafields.nzp_signature) || isTrue(properties.nzp_signature),
-        nzpRural:
-          isTrue(metafields.nzp_rural) || isTrue(properties.nzp_rural),
-        nzpAgeRestricted:
-          isTrue(metafields.nzp_age_restricted) || isTrue(properties.nzp_age_restricted),
-        castleSignature:
-          isTrue(metafields.castle_signature) || isTrue(properties.castle_signature),
-        castleRural:
-          isTrue(metafields.castle_rural) || isTrue(properties.castle_rural),
-        castleWaiheke:
-          isTrue(metafields.castle_waiheke) || isTrue(properties.castle_waiheke),
+        // Home delivery determination is performed by matched rate rows / DB settings
+        homeDelivery: false,
+        // These are now derived from the matched rate row surcharge values
+        // (set to false here; overridden in calculateNzpRate / calculateCastleRate)
+        nzpSignature: false,
+        nzpRural: false,
+        nzpAgeRestricted: false,
+        castleSignature: false,
+        castleRural: false,
+        castleWaiheke: false,
       });
     }
   }
