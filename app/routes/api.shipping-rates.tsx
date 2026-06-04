@@ -2,7 +2,7 @@ import type { ActionFunctionArgs } from "react-router";
 import type { CarrierCompany } from "@prisma/client";
 import {
   carrierCompanies,
-  // companyLabels,
+  companyLabels,  
   freightMetafieldNamespace,
   // serviceLabels,
 } from "../lib/freight";
@@ -80,7 +80,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }> = [];
 
     for (const serviceRate of serviceRates) {
-      const serviceName = serviceNameMap[serviceRate.serviceType] ?? serviceRate.serviceType;
+      const serviceName = serviceRate.serviceType === "DEPOT_DELIVERY"
+  ? `${companyLabels[serviceRate.companies[0]] ?? serviceRate.companies[0]} Depot Collection – ${destination.city ?? "Depot"}`
+  : (serviceNameMap[serviceRate.serviceType] ?? serviceRate.serviceType);
 
       // Log per-line-item breakdown for internal visibility
       console.log(
