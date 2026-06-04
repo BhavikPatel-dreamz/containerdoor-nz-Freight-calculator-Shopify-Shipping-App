@@ -536,7 +536,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseValue = rate.useWeightRange
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
-  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE")
+  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE" || rate.company === "FLIWAYMIDSIZE")
   ? Number((rate as any).baseFee ?? 0)
   : 0;
 
