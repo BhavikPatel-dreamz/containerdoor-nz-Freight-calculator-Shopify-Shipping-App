@@ -516,7 +516,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   }
 
   // NEW: NZP uses weight/CBM lookup table pricing
-  if (rate.company === "NZP") {
+  if (rate.company === "NZP" || rate.company === "NZP_AGE_RESTRICTED") {
     return calculateNzpRate(freightPackage, rate, settings);
   }
 

@@ -66,7 +66,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const serviceRates = await calculateServiceRates(shop, destination, packages);
 
     // Filter to Standard Delivery only; one combined rate shown to customer
-const serviceNameMap: Partial<Record<string, string>> = {
+    const serviceNameMap: Partial<Record<string, string>> = {
       STANDARD_DELIVERY: "Standard Delivery",
       DEPOT_DELIVERY: "Depot Collection",
       CUSTOMER_PICKUP: "Customer Pickup",
@@ -190,15 +190,18 @@ async function getFreightPackages(
     const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
     const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
     const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
-    const explicitCbm = positiveNumber(metafields.box_cbm || properties.box_cbm);
-    const volumeCm3 = explicitCbm > 0 ? explicitCbm * 1_000_000 : length * width * height * boxes;
+    const volumeCm3 = length > 0 && width > 0 && height > 0 ? length * width * height * boxes : 0;
     const companyRaw = metafields.courier_company || properties.courier_company || "";
-    const companies = companyRaw
-      .split(",")
-      .map((c) => normaliseCompany(c.trim()))
-      .filter((c): c is CarrierCompany => c !== null);
 
-    console.log(`[DEBUG] computed → boxes:${boxes} length:${length} width:${width} height:${height} companies:${companies} volumeCm3:${length * width * height * boxes}`);
+const companyValues: string[] = Array.isArray(JSON.parse(companyRaw || "[]"))
+  ? JSON.parse(companyRaw || "[]")
+  : [];
+
+const companies = companyValues
+  .map((c) => normaliseCompany(c.trim()))
+  .filter((c): c is CarrierCompany => c !== null);
+
+    console.log(`[DEBUG] computed → boxes:${boxes} length:${length} width:${width} height:${height} companies:${companies} volumeCm3:${volumeCm3}`);
 
     if (companies.length === 0) {
       console.log(`[DEBUG] skipping item — no valid company found`);

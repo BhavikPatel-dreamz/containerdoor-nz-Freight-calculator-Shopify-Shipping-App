@@ -488,7 +488,7 @@ function InlineRateRow({
         {company !== "CASTLE" && (
           <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
         )}
-        {company === "NZP" && (
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") && (
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
               Signature ($)
