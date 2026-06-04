@@ -98,7 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // This service_code is stored verbatim on the Shopify order — visible in admin + API
       // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
       const companies = [...new Set(serviceRate.lineItemBreakdown.map((l) => l.company))].join(",");
-      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::${lineItemSummary}`;
+      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::$${serviceRate.total.toFixed(2)}::${lineItemSummary}`;
 
       shopifyRates.push({
         service_name: serviceName,
