@@ -472,8 +472,19 @@ function InlineRateRow({
           <input form={`rate-${rate.id}`} name="useVolumeRange" type="checkbox" defaultChecked={rate.useVolumeRange} /> Use
         </label>
       </td>
-      <td>
-        <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
+       <td>
+        {company !== "MAINFREIGHT" && (
+          <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
+        )}
+        {company === "MAINFREIGHT" && (
+          <>
+            <input type="hidden" form={`rate-${rate.id}`} name="rate" value="0" />
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Base fee ($)
+              <input form={`rate-${rate.id}`} name="baseFee" type="number" step="0.01" min="0" defaultValue={toMoney((rate as any).baseFee ?? 0)} aria-label="Base fee" />
+            </label>
+          </>
+        )}
       </td>
       <td>
         <input form={`rate-${rate.id}`} name="minimumCharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.minimumCharge ?? 0)} aria-label="Minimum charge" />
@@ -488,7 +499,7 @@ function InlineRateRow({
         {company !== "CASTLE" && (
           <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
         )}
-        {company === "NZP" && (
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") && (
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
             <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
               Signature ($)
@@ -503,20 +514,6 @@ function InlineRateRow({
               <input form={`rate-${rate.id}`} name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ageRestrictedSurcharge ?? 0)} aria-label="Age restricted surcharge" />
             </label>
           </div>
-        )}
-        {company === "MAINFREIGHT" && (
-          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2, marginTop: 4 }}>
-            Base fee ($)
-            <input
-              form={`rate-${rate.id}`}
-              name="baseFee"
-              type="number"
-              step="0.01"
-              min="0"
-              defaultValue={toMoney((rate as any).baseFee ?? 0)}
-              aria-label="Base fee"
-            />
-          </label>
         )}
         {company === "CASTLE" && (
           <div style={{ marginTop: 6, display: "grid", gap: 4 }}>

@@ -94,10 +94,11 @@ enum CostType {
 }
 
 enum CarrierCompany {
-  FLIWAY        // legacy – no longer used in new data; kept to avoid enum drop
+  FLIWAY
   FLIWAYLINEHAUL
   FLIWAYMIDSIZE
   NZP
+  NZP_AGE_RESTRICTED
   CASTLE
   TGE
   M2H

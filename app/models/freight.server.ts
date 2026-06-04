@@ -340,81 +340,88 @@ export async function calculateServiceRates(
 
   // For each service type, accumulate cheapest-per-variant totals
   // serviceType -> { total, packageCount, lineItems, coveredVariants }
-  const serviceAccum = new Map<ServiceType, {
-      total: number;
-      packageCount: number;
-      coveredVariants: number;
-      lineItemBreakdown: Array<{
-        variantId: string;
-        company: CarrierCompany;
-        amount: number;
-        boxes: number;
-      }>;
-    }
-  >();
+  const serviceAccum = new Map<string, {
+    serviceType: ServiceType;
+    total: number;
+    packageCount: number;
+    coveredVariants: number;
+    lineItemBreakdown: Array<{
+      variantId: string;
+      company: CarrierCompany;
+      amount: number;
+      boxes: number;
+    }>;
+  }
+>();
 
   for (const [variantId, variantPackages] of packagesByVariant) {
     // For each serviceType, find the cheapest company across all packages for this variant
     // Each package in variantPackages has its own allowed company
-    const bestByService = new Map<ServiceType, { company: CarrierCompany; amount: number; boxes: number }>();
+    // serviceType -> best per company (depot keeps all companies, others keep cheapest)
+const bestByService = new Map<string, { serviceType: ServiceType; company: CarrierCompany; amount: number; boxes: number }>();
 
-    for (const freightPackage of variantPackages) {
-      const matchedRates = await findMatchingRates(shop, destination, freightPackage);
-      console.log(`[DEBUG] matched rate serviceTypes: ${matchedRates.map(r => r.serviceType).join(", ")}`);
+for (const freightPackage of variantPackages) {
+  const matchedRates = await findMatchingRates(shop, destination, freightPackage);
+  console.log(`[DEBUG] matched rate serviceTypes: ${matchedRates.map(r => r.serviceType).join(", ")}`);
 
-      for (const matchedRate of matchedRates) {
-        const amount = calculateFreightRate(freightPackage, matchedRate, settings);
-        if (amount === null) continue;
+  for (const matchedRate of matchedRates) {
+    const amount = calculateFreightRate(freightPackage, matchedRate, settings);
+    if (amount === null) continue;
 
-        const current = bestByService.get(matchedRate.serviceType);
-        if (!current || amount < current.amount) {
-          bestByService.set(matchedRate.serviceType, {
-            company: matchedRate.company,
-            amount,
-            boxes: freightPackage.boxes,
-          });
-        }
-      }
-    }
+    // Depot: separate key per company so each depot appears as its own option
+    // Others: one key per serviceType, keep cheapest only
+    const key = matchedRate.serviceType === "DEPOT_DELIVERY"
+      ? `DEPOT_DELIVERY::${matchedRate.company}`
+      : matchedRate.serviceType;
 
-    // Accumulate into serviceAccum
-    for (const [serviceType, best] of bestByService) {
-      const existing = serviceAccum.get(serviceType) ?? {
-        total: 0,
-        packageCount: 0,
-        coveredVariants: 0,
-        lineItemBreakdown: [],
-      };
-      existing.total += best.amount;
-      existing.packageCount += best.boxes;
-      existing.coveredVariants += 1;
-      existing.lineItemBreakdown.push({
-        variantId,
-        company: best.company,
-        amount: best.amount,
-        boxes: best.boxes,
+    const current = bestByService.get(key);
+    if (!current || amount < current.amount) {
+      bestByService.set(key, {
+        serviceType: matchedRate.serviceType,
+        company: matchedRate.company,
+        amount,
+        boxes: freightPackage.boxes,
       });
-      serviceAccum.set(serviceType, existing);
     }
+  }
+}
+
+// Accumulate into serviceAccum
+for (const [key, best] of bestByService) {
+  const existing = serviceAccum.get(key) ?? {
+    serviceType: best.serviceType,
+    total: 0,
+    packageCount: 0,
+    coveredVariants: 0,
+    lineItemBreakdown: [],
+  };
+  existing.total += best.amount;
+  existing.packageCount += best.boxes;
+  existing.coveredVariants += 1;
+  existing.lineItemBreakdown.push({
+    variantId,
+    company: best.company,
+    amount: best.amount,
+    boxes: best.boxes,
+  });
+  serviceAccum.set(key, existing);
+}
   }
 
   const completeServiceRates: CalculatedServiceRate[] = [];
 
-  for (const [serviceType, accum] of serviceAccum) {
-    // Only include if every variant is covered
-    if (accum.coveredVariants !== packagesByVariant.size) continue;
-
-    const companies = [...new Set(accum.lineItemBreakdown.map((l) => l.company))];
-
-    completeServiceRates.push({
-      serviceType,
-      total: applySettings(accum.total, settings),
-      currency: settings.defaultCurrency,
-      packageCount: accum.packageCount,
-      companies,
-      lineItemBreakdown: accum.lineItemBreakdown,
-    });
-  }
+  for (const [, accum] of serviceAccum) {
+  if (accum.coveredVariants !== packagesByVariant.size) continue;
+  const companies = [...new Set(accum.lineItemBreakdown.map((l) => l.company))];
+  completeServiceRates.push({
+    serviceType: accum.serviceType,
+    total: applySettings(accum.total, settings),
+    currency: settings.defaultCurrency,
+    packageCount: accum.packageCount,
+    companies,
+    lineItemBreakdown: accum.lineItemBreakdown,
+  });
+}
 
   return completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
 }
@@ -516,7 +523,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   }
 
   // NEW: NZP uses weight/CBM lookup table pricing
-  if (rate.company === "NZP") {
+  if (rate.company === "NZP" || rate.company === "NZP_AGE_RESTRICTED") {
     return calculateNzpRate(freightPackage, rate, settings);
   }
 
@@ -529,7 +536,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseValue = rate.useWeightRange
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
-  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE")
+  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE" || rate.company === "FLIWAYMIDSIZE")
   ? Number((rate as any).baseFee ?? 0)
   : 0;
 

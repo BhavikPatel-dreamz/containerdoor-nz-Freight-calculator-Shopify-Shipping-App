@@ -1,9 +1,15 @@
-import type { CarrierCompany, CarrierMode, CostType, ServiceType } from "@prisma/client";
+import type {
+  CarrierCompany,
+  CarrierMode,
+  CostType,
+  ServiceType,
+} from "@prisma/client";
 
 export const carrierCompanies: CarrierCompany[] = [
   "FLIWAYLINEHAUL",
   "FLIWAYMIDSIZE",
   "NZP",
+  "NZP_AGE_RESTRICTED",
   "CASTLE",
   "TGE",
   "M2H",
@@ -30,6 +36,7 @@ export const companyLabels: Record<string, string> = {
   FLIWAYLINEHAUL: "Fliway - Linehaul",
   FLIWAYMIDSIZE: "Fliway - Midsize",
   NZP: "NZP",
+  NZP_AGE_RESTRICTED: "NZP - Age Restricted",
   CASTLE: "Castle",
   TGE: "Team Global Express",
   M2H: "M2H",
@@ -37,21 +44,26 @@ export const companyLabels: Record<string, string> = {
 };
 
 export const freightFormula = {
-  depotCollectionCompanies: ["FLIWAYLINEHAUL", "FLIWAYMIDSIZE", "MAINFREIGHT", "TGE"] as CarrierCompany[],
+  depotCollectionCompanies: [
+    "FLIWAYLINEHAUL",
+    "FLIWAYMIDSIZE",
+    "MAINFREIGHT",
+    "TGE",
+  ] as CarrierCompany[],
 
   // NEW: NZP-specific
   nzp: {
-    totalVariableRate: 0.114,   // TVR = VFR (10.8%) + RUC (0.6%)
+    totalVariableRate: 0.114, // TVR = VFR (10.8%) + RUC (0.6%)
     ruralSurcharge: 4.7854,
     signatureSurcharge: 0.5662,
     ageRestrictedSurcharge: 2.2835,
-    residentialSurcharge: 0,    // NZP has no residential fee
+    residentialSurcharge: 0, // NZP has no residential fee
   },
 
   // NEW: Castle-specific
   castle: {
-    totalVariableRate: 0.167,   // TVR = VFF (12.2%) + RUC (4.5%)
-    residentialSurcharge: 1,    // Always applied
+    totalVariableRate: 0.167, // TVR = VFF (12.2%) + RUC (4.5%)
+    residentialSurcharge: 1, // Always applied
     ruralSurcharge: 1,
     signatureSurcharge: 1,
     waihekeSurcharge: 1,
@@ -70,7 +82,6 @@ export const costTypeLabels: Record<CostType, string> = {
 
 export const variantFreightMetafields = [
   { key: "box_length_cm", name: "Box length (cm)", type: "number_decimal" },
-  { key: "box_cbm", name: "Box CBM", type: "number_decimal" },
   { key: "box_width_cm", name: "Box width (cm)", type: "number_decimal" },
   { key: "box_height_cm", name: "Box height (cm)", type: "number_decimal" },
   { key: "number_of_boxes", name: "Number of boxes", type: "number_integer" },
@@ -78,11 +89,20 @@ export const variantFreightMetafields = [
   {
     key: "courier_company",
     name: "Courier company",
-    type: "single_line_text_field",
+    type: "list.single_line_text_field",
     validations: [
       {
         name: "choices",
-        value: JSON.stringify(["FLIWAYLINEHAUL", "FLIWAYMIDSIZE", "NZP", "CASTLE", "TGE", "M2H", "MAINFREIGHT"]),
+        value: JSON.stringify([
+          "FLIWAYLINEHAUL",
+          "FLIWAYMIDSIZE",
+          "NZP",
+          "NZP_AGE_RESTRICTED",
+          "CASTLE",
+          "TGE",
+          "M2H",
+          "MAINFREIGHT",
+        ]),
       },
     ],
   },
