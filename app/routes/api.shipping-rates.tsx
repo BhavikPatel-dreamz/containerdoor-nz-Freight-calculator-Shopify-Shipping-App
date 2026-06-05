@@ -189,10 +189,43 @@ async function getFreightPackages(
     const unitsPerBox = positiveInt(metafields.units_per_box || properties.units_per_box) || 1;
     const explicitBoxes = positiveInt(metafields.number_of_boxes || properties.number_of_boxes);
     const boxes = Math.max(explicitBoxes || Math.ceil(quantity / unitsPerBox), 1);
-    const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
-    const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
-    const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
-    const volumeCm3 = length > 0 && width > 0 && height > 0 ? length * width * height * boxes : 0;
+    type BoxDimension = { l?: number; b?: number; h?: number; weight_grams?: number };
+
+// Try multi-box JSON first
+const boxDimensionsRaw = metafields.box_dimensions || properties.box_dimensions || "";
+let parsedBoxDimensions: BoxDimension[] = [];
+try {
+  const parsed = JSON.parse(boxDimensionsRaw || "[]");
+  if (Array.isArray(parsed) && parsed.length > 0) parsedBoxDimensions = parsed;
+} catch { /* ignore */ }
+
+let volumeCm3: number;
+let totalWeightGrams: number;
+
+if (parsedBoxDimensions.length > 0) {
+  // Multi-box: sum CBM and weight across all box entries
+  volumeCm3 = parsedBoxDimensions.reduce((sum, box) => {
+    const l = positiveNumber(String(box.l ?? 0));
+    const b = positiveNumber(String(box.b ?? 0));
+    const h = positiveNumber(String(box.h ?? 0));
+    return sum + (l > 0 && b > 0 && h > 0 ? l * b * h : 0);
+  }, 0);
+  totalWeightGrams = parsedBoxDimensions.reduce((sum, box) => {
+    return sum + positiveInt(String(box.weight_grams ?? 0));
+  }, 0);
+  console.log(`[DEBUG] multi-box dimensions:`, JSON.stringify(parsedBoxDimensions));
+  console.log(`[DEBUG] multi-box totalVolumeCm3:${volumeCm3} totalWeightGrams:${totalWeightGrams}`);
+} else {
+  // Fallback: single box dimensions (existing behaviour)
+  const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
+  const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
+  const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
+  volumeCm3 = length > 0 && width > 0 && height > 0 ? length * width * height * boxes : 0;
+  totalWeightGrams = 0; // will use item.grams fallback below
+}
+
+const effectiveBoxes = parsedBoxDimensions.length > 0 ? parsedBoxDimensions.length : boxes;
+
     const companyRaw = metafields.courier_company || properties.courier_company || "";
 
 const companyValues: string[] = Array.isArray(JSON.parse(companyRaw || "[]"))
@@ -215,10 +248,12 @@ const companies = companyValues
         variantId: variantGid,
         quantity,
         company,
-        boxes,
+        boxes: effectiveBoxes,
         weightGrams:
-          positiveInt(metafields.weight_grams || properties.weight_grams) ||
-          Number(item.grams ?? 0) * quantity,
+  (totalWeightGrams > 0
+    ? totalWeightGrams                          // summed from multi-box JSON
+    : positiveInt(metafields.weight_grams || properties.weight_grams)) ||
+  Number(item.grams ?? 0) * quantity,
         volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),

@@ -108,6 +108,11 @@ export const variantFreightMetafields = [
   },
   { key: "hiab_required", name: "HIAB required", type: "boolean" },
   { key: "units_per_box", name: "Units per box", type: "number_integer" },
+  {
+  key: "box_dimensions",
+  name: "Box dimensions (JSON)",
+  type: "json",
+},
   // Per-product surcharge metafields removed — surcharges derived from rate rows
 ] as const;
 
