@@ -13,22 +13,22 @@ importers:
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
       '@react-router/dev':
         specifier: ^7.12.0
-        version: 7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)
+        version: 7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)
       '@react-router/fs-routes':
         specifier: ^7.12.0
-        version: 7.15.0(@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4))(typescript@5.9.3)
+        version: 7.15.0(@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4))(typescript@5.9.3)
       '@react-router/node':
         specifier: ^7.12.0
-        version: 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+        version: 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       '@react-router/serve':
         specifier: ^7.12.0
-        version: 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+        version: 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       '@shopify/app-bridge-react':
         specifier: ^4.2.4
-        version: 4.2.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 4.2.10(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
       '@shopify/shopify-app-react-router':
         specifier: ^1.1.0
-        version: 1.2.0(react-dom@18.3.1(react@18.3.1))(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
+        version: 1.2.0(react-dom@19.2.7(react@18.3.1))(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(react@18.3.1)
       '@shopify/shopify-app-session-storage-prisma':
         specifier: ^8.0.0
         version: 8.0.1(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@shopify/shopify-api@13.0.0)(@shopify/shopify-app-session-storage@5.0.0(@shopify/shopify-api@13.0.0))(prisma@6.19.3(typescript@5.9.3))
@@ -39,14 +39,17 @@ importers:
         specifier: ^6.16.3
         version: 6.19.3(typescript@5.9.3)
       react:
-        specifier: ^18.3.1
+        specifier: 18.3.1
         version: 18.3.1
       react-dom:
-        specifier: ^18.3.1
-        version: 18.3.1(react@18.3.1)
+        specifier: ^19.2.7
+        version: 19.2.7(react@18.3.1)
+      react-reconciler:
+        specifier: 0.29.0
+        version: 0.29.0(react@18.3.1)
       react-router:
         specifier: ^7.12.0
-        version: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        version: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
       vite-tsconfig-paths:
         specifier: ^5.1.4
         version: 5.1.4(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))
@@ -3073,13 +3076,19 @@ packages:
   rc9@2.1.2:
     resolution: {integrity: sha512-btXCnMmRIBINM2LDZoEmOogIZU7Qe7zn4BpomSKZ/ykbLObuBdvG+mFq11DL6fjH1DRwHhrlgtYWG96bJiC7Cg==}
 
-  react-dom@18.3.1:
-    resolution: {integrity: sha512-5m4nQKp+rZRb09LNH59GM4BxTh9251/ylbKIbpe7TpGxfJ+9kv6BLkLBXIjjspbgbnIBNqlI23tRnTWT0snUIw==}
+  react-dom@19.2.7:
+    resolution: {integrity: sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==}
     peerDependencies:
-      react: ^18.3.1
+      react: ^19.2.7
 
   react-is@16.13.1:
     resolution: {integrity: sha512-24e6ynE2H+OKt4kqsOvNd8kBpV65zoxbA4BVsEOB3ARVWQki/DHzaUoC5KuON/BiccDaCCTZBuOcfZs70kR8bQ==}
+
+  react-reconciler@0.29.0:
+    resolution: {integrity: sha512-wa0fGj7Zht1EYMRhKWwoo1H9GApxYLBuhoAuXN0TlltESAjDssB+Apf0T/DngVqaMyPypDmabL37vw/2aRM98Q==}
+    engines: {node: '>=0.10.0'}
+    peerDependencies:
+      react: ^18.2.0
 
   react-refresh@0.14.2:
     resolution: {integrity: sha512-jCvmsr+1IUSMUyzOkRcvnVbX3ZYC6g9TDrDbFuFmRDq7PD4yaGbLKNQL6k2jnArV8hjYxh7hVhAZB6s9HDGpZA==}
@@ -3198,6 +3207,9 @@ packages:
 
   scheduler@0.23.2:
     resolution: {integrity: sha512-UOShsPwz7NrMUqhR6t0hWjFduvOzbtv7toDH1/hIrfRNIDBnnBWd0CwJTGvTpngVlmwGCdP9/Zl/tVrDqcuYzQ==}
+
+  scheduler@0.27.0:
+    resolution: {integrity: sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q==}
 
   scuid@1.1.0:
     resolution: {integrity: sha512-MuCAyrGZcTLfQoH2XoBlQ8C6bzwN88XT/0slOGz0pn8+gIP85BOAfYa44ZXQUTOwRwPU0QvgU+V+OSajl/59Xg==}
@@ -4749,7 +4761,7 @@ snapshots:
     dependencies:
       '@prisma/debug': 6.19.3
 
-  '@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)':
+  '@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)':
     dependencies:
       '@babel/core': 7.29.0
       '@babel/generator': 7.29.1
@@ -4758,7 +4770,7 @@ snapshots:
       '@babel/preset-typescript': 7.28.5(@babel/core@7.29.0)
       '@babel/traverse': 7.29.0
       '@babel/types': 7.29.0
-      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       '@remix-run/node-fetch-server': 0.13.1
       arg: 5.0.2
       babel-dead-code-elimination: 1.0.12
@@ -4775,14 +4787,14 @@ snapshots:
       pkg-types: 2.3.1
       prettier: 3.8.3
       react-refresh: 0.14.2
-      react-router: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-router: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
       semver: 7.7.4
       tinyglobby: 0.2.16
       valibot: 1.4.0(typescript@5.9.3)
       vite: 6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4)
       vite-node: 3.2.4(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4)
     optionalDependencies:
-      '@react-router/serve': 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+      '@react-router/serve': 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       typescript: 5.9.3
     transitivePeerDependencies:
       - '@types/node'
@@ -4799,38 +4811,38 @@ snapshots:
       - tsx
       - yaml
 
-  '@react-router/express@7.15.0(express@4.22.1)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
+  '@react-router/express@7.15.0(express@4.22.1)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
     dependencies:
-      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       express: 4.22.1
-      react-router: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-router: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
     optionalDependencies:
       typescript: 5.9.3
 
-  '@react-router/fs-routes@7.15.0(@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4))(typescript@5.9.3)':
+  '@react-router/fs-routes@7.15.0(@react-router/dev@7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4))(typescript@5.9.3)':
     dependencies:
-      '@react-router/dev': 7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)
+      '@react-router/dev': 7.15.0(@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3))(@types/node@22.19.18)(jiti@2.7.0)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)(vite@6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4))(yaml@2.8.4)
       minimatch: 9.0.9
     optionalDependencies:
       typescript: 5.9.3
 
-  '@react-router/node@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
+  '@react-router/node@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
     dependencies:
       '@mjackson/node-fetch-server': 0.2.0
-      react-router: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-router: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
     optionalDependencies:
       typescript: 5.9.3
 
-  '@react-router/serve@7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
+  '@react-router/serve@7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)':
     dependencies:
       '@mjackson/node-fetch-server': 0.2.0
-      '@react-router/express': 7.15.0(express@4.22.1)(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
-      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+      '@react-router/express': 7.15.0(express@4.22.1)(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
+      '@react-router/node': 7.15.0(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(typescript@5.9.3)
       compression: 1.8.1
       express: 4.22.1
       get-port: 5.1.1
       morgan: 1.10.1
-      react-router: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-router: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
       source-map-support: 0.5.21
     transitivePeerDependencies:
       - supports-color
@@ -4942,11 +4954,11 @@ snapshots:
       - typescript
       - utf-8-validate
 
-  '@shopify/app-bridge-react@4.2.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+  '@shopify/app-bridge-react@4.2.10(react-dom@19.2.7(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@shopify/app-bridge-types': 0.7.0
       react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
+      react-dom: 19.2.7(react@18.3.1)
 
   '@shopify/app-bridge-types@0.7.0':
     dependencies:
@@ -4977,7 +4989,7 @@ snapshots:
       lossless-json: 4.3.0
       tslib: 2.8.1
 
-  '@shopify/shopify-app-react-router@1.2.0(react-dom@18.3.1(react@18.3.1))(react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)':
+  '@shopify/shopify-app-react-router@1.2.0(react-dom@19.2.7(react@18.3.1))(react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@shopify/admin-api-client': 1.1.2
       '@shopify/shopify-api': 13.0.0
@@ -4986,8 +4998,8 @@ snapshots:
       compare-versions: 6.1.1
       isbot: 5.1.40
       react: 18.3.1
-      react-dom: 18.3.1(react@18.3.1)
-      react-router: 7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      react-dom: 19.2.7(react@18.3.1)
+      react-router: 7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1)
 
   '@shopify/shopify-app-session-storage-prisma@8.0.1(@prisma/client@6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3))(@shopify/shopify-api@13.0.0)(@shopify/shopify-app-session-storage@5.0.0(@shopify/shopify-api@13.0.0))(prisma@6.19.3(typescript@5.9.3))':
     dependencies:
@@ -7069,23 +7081,28 @@ snapshots:
       defu: 6.1.7
       destr: 2.0.5
 
-  react-dom@18.3.1(react@18.3.1):
+  react-dom@19.2.7(react@18.3.1):
+    dependencies:
+      react: 18.3.1
+      scheduler: 0.27.0
+
+  react-is@16.13.1: {}
+
+  react-reconciler@0.29.0(react@18.3.1):
     dependencies:
       loose-envify: 1.4.0
       react: 18.3.1
       scheduler: 0.23.2
 
-  react-is@16.13.1: {}
-
   react-refresh@0.14.2: {}
 
-  react-router@7.15.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1):
+  react-router@7.15.0(react-dom@19.2.7(react@18.3.1))(react@18.3.1):
     dependencies:
       cookie: 1.1.1
       react: 18.3.1
       set-cookie-parser: 2.7.2
     optionalDependencies:
-      react-dom: 18.3.1(react@18.3.1)
+      react-dom: 19.2.7(react@18.3.1)
 
   react@18.3.1:
     dependencies:
@@ -7224,6 +7241,8 @@ snapshots:
   scheduler@0.23.2:
     dependencies:
       loose-envify: 1.4.0
+
+  scheduler@0.27.0: {}
 
   scuid@1.1.0: {}
 
