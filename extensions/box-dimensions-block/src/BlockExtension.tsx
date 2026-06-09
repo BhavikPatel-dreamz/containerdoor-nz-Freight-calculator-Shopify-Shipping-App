@@ -115,8 +115,9 @@ function BoxDimensionsBlock() {
         {
           metafields: [
             { key: "box_length_cm", value: boxes.map((b) => b.length).join(",") },
-            { key: "box_width_cm",  value: boxes.map((b) => b.width).join(",")  },
+            { key: "box_width_cm", value: boxes.map((b) => b.width).join(",") },
             { key: "box_height_cm", value: boxes.map((b) => b.height).join(",") },
+            { key: "number_of_boxes", value: String(boxes.length) },
             {
               key: "weight_grams",
               value: boxes
@@ -128,7 +129,7 @@ function BoxDimensionsBlock() {
             namespace: NAMESPACE,
             key: m.key,
             value: m.value,
-            type: "single_line_text_field",
+            type: m.key === "number_of_boxes" ? "number_integer" : "single_line_text_field",
           })),
         }
       );
