@@ -77,6 +77,10 @@ export default function RatesPage() {
   const [searchParams] = useSearchParams();
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const isExporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "export";
+const isImporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "import";
+const isDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "delete";
+const isBulkDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkDelete";
 
   useEffect(() => {
     if (actionData && "csv" in actionData && actionData.csv) {
@@ -299,7 +303,7 @@ export default function RatesPage() {
               <input key={id} type="hidden" name="ids" value={id} />
             ))}
             <button className="top-btn" type="submit" style={{ color: "#c0392b", borderColor: "#c0392b" }}>
-              🗑 Delete selected ({selectedIds.size})
+             {isBulkDeleting ? "Deleting..." : `🗑 Delete selected (${selectedIds.size})`}
             </button>
           </Form>
         ) : null}
@@ -309,7 +313,7 @@ export default function RatesPage() {
         <Form method="post" encType="multipart/form-data">
           <input type="hidden" name="intent" value="import" />
           <label className="top-btn import-btn">
-            Import CSV
+            {isImporting ? "Importing..." : "Import CSV"}
             <input
               type="file"
               name="csv"
@@ -361,7 +365,9 @@ export default function RatesPage() {
           </Form>
           <Form method="post">
   <input type="hidden" name="intent" value="export" />
-  <button className="top-btn" type="submit">Export CSV</button>
+  <button className="top-btn" type="submit" disabled={isExporting}>
+  {isExporting ? "Exporting..." : "Export CSV"}
+</button>
 </Form>
         </div>
 
@@ -400,6 +406,7 @@ export default function RatesPage() {
                   key={rate.id}
                   rate={rate}
                   selected={selectedIds.has(rate.id)}
+                  isDeleting={isDeleting}
                   onToggle={(id) =>
                     setSelectedIds((prev) => {
                       const next = new Set(prev);
@@ -426,10 +433,12 @@ function InlineRateRow({
   rate,
   selected,
   onToggle,
+  isDeleting,
 }: {
   rate: any;
   selected: boolean;
   onToggle: (id: string) => void;
+  isDeleting: boolean;
 }) {
   const [company, setCompany] = useState(rate.company);
   return (
@@ -572,7 +581,7 @@ function InlineRateRow({
           <Form method="post">
             <input type="hidden" name="intent" value="delete" />
             <input type="hidden" name="id" value={rate.id} />
-            <s-button type="submit" tone="critical" variant="tertiary">Delete</s-button>
+            <s-button type="submit" tone="critical" variant="tertiary" {...(isDeleting ? { loading: true } : {})}>Delete</s-button>
           </Form>
         </div>
       </td>
