@@ -1,0 +1,27 @@
+api_version = "2025-07"
+
+[[extensions]]
+name = "box-dimensions-block"
+handle = "box-dimensions-block"
+uid = "9cef5f11-5af7-6e49-ca22-c417d233df737c2dd472"
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/BlockExtension.tsx"
+  target = "admin.product-variant-details.block.render"
+
+  [[extensions.metafields]]
+  namespace = "containerdoor_freight"
+  key = "box_length_cm"
+
+  [[extensions.metafields]]
+  namespace = "containerdoor_freight"
+  key = "box_width_cm"
+
+  [[extensions.metafields]]
+  namespace = "containerdoor_freight"
+  key = "box_height_cm"
+
+  [[extensions.metafields]]
+  namespace = "containerdoor_freight"
+  key = "weight_grams"

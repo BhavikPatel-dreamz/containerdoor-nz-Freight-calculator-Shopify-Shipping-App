@@ -98,7 +98,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // This service_code is stored verbatim on the Shopify order — visible in admin + API
       // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
       const companies = [...new Set(serviceRate.lineItemBreakdown.map((l) => l.company))].join(",");
-      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::${lineItemSummary}`;
+      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::$${serviceRate.total.toFixed(2)}::${lineItemSummary}`;
 
       shopifyRates.push({
         service_name: serviceName,
@@ -189,10 +189,30 @@ async function getFreightPackages(
     const unitsPerBox = positiveInt(metafields.units_per_box || properties.units_per_box) || 1;
     const explicitBoxes = positiveInt(metafields.number_of_boxes || properties.number_of_boxes);
     const boxes = Math.max(explicitBoxes || Math.ceil(quantity / unitsPerBox), 1);
-    const length = positiveNumber(metafields.box_length_cm || properties.box_length_cm);
-    const width = positiveNumber(metafields.box_width_cm || properties.box_width_cm);
-    const height = positiveNumber(metafields.box_height_cm || properties.box_height_cm);
-    const volumeCm3 = length > 0 && width > 0 && height > 0 ? length * width * height * boxes : 0;
+    const lengthRaw = metafields.box_length_cm || properties.box_length_cm || "";
+const widthRaw  = metafields.box_width_cm  || properties.box_width_cm  || "";
+const heightRaw = metafields.box_height_cm || properties.box_height_cm || "";
+const weightRaw = metafields.weight_grams  || properties.weight_grams  || "";
+
+const lengths = lengthRaw.split(",").map((v) => positiveNumber(v.trim()));
+const widths  = widthRaw.split(",").map((v) => positiveNumber(v.trim()));
+const heights = heightRaw.split(",").map((v) => positiveNumber(v.trim()));
+const weights = weightRaw.split(",").map((v) => positiveInt(v.trim()));
+
+const boxCount = Math.max(lengths.length, widths.length, heights.length, 1);
+let volumeCm3 = 0;
+let multiBoxWeightGrams = 0;
+
+for (let i = 0; i < boxCount; i++) {
+  const l = lengths[i] ?? 0;
+  const w = widths[i] ?? 0;
+  const h = heights[i] ?? 0;
+  if (l > 0 && w > 0 && h > 0) volumeCm3 += l * w * h;
+  multiBoxWeightGrams += weights[i] ?? 0;
+}
+
+console.log(`[DEBUG] computed → boxCount:${boxCount} volumeCm3:${volumeCm3} multiBoxWeightGrams:${multiBoxWeightGrams}`);
+
     const companyRaw = metafields.courier_company || properties.courier_company || "";
 
 const companyValues: string[] = Array.isArray(JSON.parse(companyRaw || "[]"))
@@ -203,7 +223,7 @@ const companies = companyValues
   .map((c) => normaliseCompany(c.trim()))
   .filter((c): c is CarrierCompany => c !== null);
 
-    console.log(`[DEBUG] computed → boxes:${boxes} length:${length} width:${width} height:${height} companies:${companies} volumeCm3:${volumeCm3}`);
+    console.log(`[DEBUG] companies:${companies}`);
 
     if (companies.length === 0) {
       console.log(`[DEBUG] skipping item — no valid company found`);
@@ -215,10 +235,11 @@ const companies = companyValues
         variantId: variantGid,
         quantity,
         company,
-        boxes,
-        weightGrams:
-          positiveInt(metafields.weight_grams || properties.weight_grams) ||
-          Number(item.grams ?? 0) * quantity,
+        boxes: boxCount,
+weightGrams:
+  multiBoxWeightGrams > 0
+    ? multiBoxWeightGrams
+    : Number(item.grams ?? 0) * quantity,
         volumeCm3,
         hiabRequired:
           isTrue(metafields.hiab_required) || isTrue(properties.hiab_required),

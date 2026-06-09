@@ -122,7 +122,7 @@ function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
   );
   if (!shippingLine) return null;
 
-  const [, carriers, packageCount, lineItemsRaw] = shippingLine.code.split("::");
+  const [, carriers, packageCount, , , , lineItemsRaw] = shippingLine.code.split("::");
   if (!carriers || !lineItemsRaw) return null;
 
   // Map numeric variantId -> title from lineItems

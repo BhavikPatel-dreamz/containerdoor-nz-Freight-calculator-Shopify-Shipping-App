@@ -81,11 +81,11 @@ export const costTypeLabels: Record<CostType, string> = {
 };
 
 export const variantFreightMetafields = [
-  { key: "box_length_cm", name: "Box length (cm)", type: "number_decimal" },
-  { key: "box_width_cm", name: "Box width (cm)", type: "number_decimal" },
-  { key: "box_height_cm", name: "Box height (cm)", type: "number_decimal" },
+  { key: "box_length_cm", name: "Box length (cm)", type: "single_line_text_field" },
+{ key: "box_width_cm",  name: "Box width (cm)",  type: "single_line_text_field" },
+{ key: "box_height_cm", name: "Box height (cm)", type: "single_line_text_field" },
   { key: "number_of_boxes", name: "Number of boxes", type: "number_integer" },
-  { key: "weight_grams", name: "Weight (g)", type: "number_integer" },
+  { key: "weight_grams",  name: "Weight (g)",      type: "single_line_text_field" },
   {
     key: "courier_company",
     name: "Courier company",
@@ -108,6 +108,11 @@ export const variantFreightMetafields = [
   },
   { key: "hiab_required", name: "HIAB required", type: "boolean" },
   { key: "units_per_box", name: "Units per box", type: "number_integer" },
+  {
+  key: "box_dimensions",
+  name: "Box dimensions (JSON)",
+  type: "json",
+},
   // Per-product surcharge metafields removed — surcharges derived from rate rows
 ] as const;
 
