@@ -202,6 +202,14 @@ export async function deleteRate(shop: string, id: string) {
   await prisma.shippingRate.deleteMany({ where: { id, shop } });
   return { ok: true, message: "Rate deleted" };
 }
+//for bulk delete
+export async function bulkDeleteRates(shop: string, ids: string[]) {
+  if (ids.length === 0) return { ok: true, message: "0 rates deleted" };
+  const result = await prisma.shippingRate.deleteMany({
+    where: { id: { in: ids }, shop },
+  });
+  return { ok: true, message: `${result.count} rates deleted` };
+}
 
 export async function exportRatesCsv(shop: string) {
   const rates = await prisma.shippingRate.findMany({
@@ -210,45 +218,55 @@ export async function exportRatesCsv(shop: string) {
   });
 
   const rows = [
-    [
-      "company",
-      "serviceType",
-      "city",
-      "postalCode",
-      "useWeightRange",
-      "minWeightGrams",
-      "maxWeightGrams",
-      "useVolumeRange",
-      "minVolumeCm3",
-      "maxVolumeCm3",
-      "rate",
-      "baseFee",
-      "zoneSurcharge",
-      "minimumCharge",
-      "mode",
-      "active",
-      "id",
-    ],
-    ...rates.map((rate) => [
-      rate.company,
-      rate.serviceType,
-      rate.city,
-      rate.postalCode,
-      String(rate.useWeightRange),
-      rate.minWeightGrams ?? "",
-      rate.maxWeightGrams ?? "",
-      String(rate.useVolumeRange),
-      rate.minVolumeCm3 ?? "",
-      rate.maxVolumeCm3 ?? "",
-      rate.rate.toString(),
-      ((rate as any).baseFee ?? 0).toString(),
-      rate.zoneSurcharge.toString(),
-      rate.minimumCharge.toString(),
-      rate.mode ?? "",
-      String(rate.active),
-      rate.id,
-    ]),
-  ];
+  [
+    "company",
+    "serviceType",
+    "city",
+    "postalCode",
+    "useWeightRange",
+    "minWeightGrams",
+    "maxWeightGrams",
+    "useVolumeRange",
+    "minVolumeCm3",
+    "maxVolumeCm3",
+    "rate",
+    "baseFee",
+    "zoneSurcharge",
+    "minimumCharge",
+    "signatureSurcharge",   
+    "ruralSurcharge",       
+    "ageRestrictedSurcharge", 
+    "homeDeliveryFee",      
+    "residentialFee",       
+    "mode",
+    "active",
+    "id",
+  ],
+  ...rates.map((rate) => [
+    rate.company,
+    rate.serviceType,
+    rate.city,
+    rate.postalCode,
+    String(rate.useWeightRange),
+    rate.minWeightGrams ?? "",
+    rate.maxWeightGrams ?? "",
+    String(rate.useVolumeRange),
+    rate.minVolumeCm3 ?? "",
+    rate.maxVolumeCm3 ?? "",
+    rate.rate.toString(),
+    ((rate as any).baseFee ?? 0).toString(),
+    rate.zoneSurcharge.toString(),
+    rate.minimumCharge.toString(),
+    rate.signatureSurcharge.toString(),        
+    rate.ruralSurcharge.toString(),            
+    rate.ageRestrictedSurcharge.toString(),    
+    rate.homeDeliveryFee?.toString() ?? "",    
+    ((rate as any).residentialFee ?? 0).toString(), 
+    rate.mode ?? "",
+    String(rate.active),
+    rate.id,
+  ]),
+];
 
   return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
 }
@@ -261,16 +279,12 @@ export async function importRatesCsv(shop: string, csv: string) {
   let created = 0;
   let updated = 0;
 
+  // Build all data objects first — no DB calls yet
+  const rowsToProcess: Array<{ id: string; data: any }> = [];
+
   for (const line of lines) {
     const cells = parseCsvLine(line);
     const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
-    const minWeightGrams = toNullableInt(row.minWeightGrams);
-    const maxWeightGrams = toNullableInt(row.maxWeightGrams);
-    const minVolumeCm3 = toNullableInt(row.minVolumeCm3);
-    const maxVolumeCm3 = toNullableInt(row.maxVolumeCm3);
-    const useWeightRange = normaliseBoolean(row.useWeightRange);
-    const useVolumeRange = normaliseBoolean(row.useVolumeRange);
-
 
     const data = {
       shop,
@@ -278,47 +292,54 @@ export async function importRatesCsv(shop: string, csv: string) {
       serviceType: normaliseEnum(row.serviceType, serviceTypes, "STANDARD_DELIVERY"),
       city: row.city || "All",
       postalCode: row.postalCode || "*",
-      useWeightRange,
-      minWeightGrams,
-      maxWeightGrams,
-      useVolumeRange,
-      minVolumeCm3,
-      maxVolumeCm3,
+      useWeightRange: normaliseBoolean(row.useWeightRange),
+      minWeightGrams: toNullableInt(row.minWeightGrams),
+      maxWeightGrams: toNullableInt(row.maxWeightGrams),
+      useVolumeRange: normaliseBoolean(row.useVolumeRange),
+      minVolumeCm3: toNullableInt(row.minVolumeCm3),
+      maxVolumeCm3: toNullableInt(row.maxVolumeCm3),
       rate: parseDecimalStringFull(row.rate),
       baseFee: parseDecimalStringFull(row.baseFee ?? "0"),
       zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
       minimumCharge: parseDecimalStringFull(row.minimumCharge ?? "0"),
+      signatureSurcharge: parseDecimalStringFull(row.signatureSurcharge ?? "0"),
+      ruralSurcharge: parseDecimalStringFull(row.ruralSurcharge ?? "0"),
+      ageRestrictedSurcharge: parseDecimalStringFull(row.ageRestrictedSurcharge ?? "0"),
+      homeDeliveryFee: row.homeDeliveryFee ? parseDecimalStringFull(row.homeDeliveryFee) : null,
+      residentialFee: parseDecimalStringFull(row.residentialFee ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
       active: row.active === "" ? true : normaliseBoolean(row.active),
     };
-    if (!isServiceSupportedByCompany(data.company, data.serviceType)) {
-      continue;
-    }
 
-    const existing = row.id
-      ? await prisma.shippingRate.findFirst({ where: { id: row.id, shop } })
-      : await prisma.shippingRate.findFirst({
-          where: {
-            shop,
-            company: data.company,
-            serviceType: data.serviceType,
-            city: data.city,
-            postalCode: data.postalCode,
-            mode: data.mode,
-            minWeightGrams: data.minWeightGrams,
-            maxWeightGrams: data.maxWeightGrams,
-            minVolumeCm3: data.minVolumeCm3,
-            maxVolumeCm3: data.maxVolumeCm3,
-          },
-        });
+    if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
 
-    if (existing) {
-      await prisma.shippingRate.update({ where: { id: existing.id }, data });
-      updated += 1;
-    } else {
-      await prisma.shippingRate.create({ data });
-      created += 1;
-    }
+    rowsToProcess.push({ id: row.id || "", data });
+  }
+
+  // Rows WITH id → upsert in parallel
+  const rowsWithId = rowsToProcess.filter((r) => r.id);
+  // Rows WITHOUT id → single createMany
+  const rowsWithoutId = rowsToProcess.filter((r) => !r.id);
+
+  if (rowsWithoutId.length > 0) {
+    const result = await prisma.shippingRate.createMany({
+      data: rowsWithoutId.map((r) => r.data),
+      skipDuplicates: true,
+    });
+    created = result.count;
+  }
+
+  if (rowsWithId.length > 0) {
+    await Promise.all(
+      rowsWithId.map((r) =>
+        prisma.shippingRate.upsert({
+          where: { id: r.id },
+          update: r.data,
+          create: { ...r.data, id: r.id },
+        })
+      )
+    );
+    updated = rowsWithId.length;
   }
 
   return { ok: true, message: `${created} rates created, ${updated} rates updated` };
