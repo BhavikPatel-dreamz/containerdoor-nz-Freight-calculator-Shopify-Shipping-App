@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
@@ -17,7 +17,7 @@ import {
   serviceTypes,
   toMoney,
 } from "../lib/freight";
-import { deleteRate, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
+import { deleteRate, bulkDeleteRates, exportRatesCsv, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -52,10 +52,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "bulkDelete") {
-    const ids = formData.getAll("ids").map(String);
-    await Promise.all(ids.map((id) => deleteRate(session.shop, id)));
-    return { ok: true, message: `${ids.length} rates deleted` };
-  }
+  const ids = formData.getAll("ids").map(String);
+  return bulkDeleteRates(session.shop, ids);
+}
+
+  if (intent === "export") {
+  const csv = await exportRatesCsv(session.shop);
+  return { csv };
+}
 
   if (intent === "import") {
     const file = formData.get("csv");
@@ -74,10 +78,20 @@ export default function RatesPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
+  useEffect(() => {
+    if (actionData && "csv" in actionData && actionData.csv) {
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(new Blob([actionData.csv], { type: "text/csv" })),
+        download: "rates.csv",
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  }, [actionData]);
+
   const query = searchParams.get("q") || "";
   const selectedCompany = searchParams.get("company") || "";
   const selectedServiceType = searchParams.get("serviceType") || "";
-  const isSubmitting = navigation.state === "submitting";
 
   const buildPageLink = (nextPage: number) => {
     const params = new URLSearchParams();
@@ -345,9 +359,10 @@ export default function RatesPage() {
             </select>
             <s-button type="submit">Search</s-button>
           </Form>
-          <s-button href="/api/rates/export" {...(isSubmitting ? { loading: true } : {})}>
-            Export CSV
-          </s-button>
+          <Form method="post">
+  <input type="hidden" name="intent" value="export" />
+  <button className="top-btn" type="submit">Export CSV</button>
+</Form>
         </div>
 
         <div className="table-wrap">
