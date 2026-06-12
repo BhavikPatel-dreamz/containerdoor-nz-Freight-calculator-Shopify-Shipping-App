@@ -109,6 +109,54 @@ importers:
         specifier: ^6.3.6
         version: 6.4.2(@types/node@22.19.18)(jiti@2.7.0)(yaml@2.8.4)
 
+  extensions/box-dimensions-block:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
+  extensions/order-freight-block:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
+  extensions/order-freight-customer:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
+  extensions/order-freight-customer-page:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
 packages:
 
   '@ardatan/relay-compiler@13.0.1':
@@ -1019,6 +1067,27 @@ packages:
   '@remix-run/node-fetch-server@0.13.1':
     resolution: {integrity: sha512-dOL+A/C84EA47gO/ps52KGrVSiYy96512rwtbXmJfWKYFm1FbrbjA3jao1hcIfao+jwVNEaZ1kTMwFjiino+HQ==}
 
+  '@remote-ui/async-subscription@2.1.18':
+    resolution: {integrity: sha512-O+76qOiTGN6iJZBFncELNIBnhCbHAIYrsrG0n3SjmwXE9Gy6nl4xZoa5FqIcw5VPz7EAdwKBkFsRE5uyQB7FOw==}
+
+  '@remote-ui/core@2.2.7':
+    resolution: {integrity: sha512-9eiTKy2eNKcT76xS0Dpz06ae2oClGAUUjx+HTDsz6fh7n/SS8Avid5N7GOaRiny/6T/cMJxaCeycMQJsEviGjA==}
+
+  '@remote-ui/react@5.0.8':
+    resolution: {integrity: sha512-GUwqP0b4m2TQ8THbsjhBvvYXZfvyWbP6HlYtzKw7izW9C49DWrixLuSz41kB4Ae7MI1OUfKy3xHtwXeLWa+nuA==}
+    peerDependencies:
+      react: '>=17.0.0 <19.0.0'
+      react-reconciler: '>=0.26.0 <0.30.0'
+    peerDependenciesMeta:
+      react-reconciler:
+        optional: true
+
+  '@remote-ui/rpc@1.4.7':
+    resolution: {integrity: sha512-ORiaKsbVBSEi3Z4YWOj5Ucrp70NrkNktI1hdqqfBW7Z3o0YoxTX9MIqtLmsc6721IbjmExvLrLip5I5Y7uAbng==}
+
+  '@remote-ui/types@1.1.3':
+    resolution: {integrity: sha512-P1kN1F3p0oMgnLN8Of1Ie9am3sLvJ7nhqHH1pvzkrxqjVwhhyPVZNcwOHyUNZPKp62izhDavdrcnqrdXzVJqGA==}
+
   '@repeaterjs/repeater@3.0.6':
     resolution: {integrity: sha512-Javneu5lsuhwNCryN+pXH93VPQ8g0dBX7wItHFgYiwQmzE1sVdg5tWHiOgHywzL2W21XQopa7IwIEnNbmeUJYA==}
 
@@ -1219,6 +1288,15 @@ packages:
   '@shopify/storefront-api-client@1.0.10':
     resolution: {integrity: sha512-A0ItFW58L5+y/jnnJDEsmt2YcQSt2BG+pNoQOYRpPBJaOLpTj7A13q1QVrE5XYVGZCA6ZQ6FqAtgosHHrkut0Q==}
 
+  '@shopify/ui-extensions-react@2025.7.3':
+    resolution: {integrity: sha512-XNi91jm5oMhJG4ktoUeIQyvajDMse+MkOwc6x39NHDrjDbOEEoqBKqY+AB7ef+T9I0FDw9vkN9PdzDnXQJqEow==}
+    peerDependencies:
+      '@shopify/ui-extensions': 2025.7.3
+      react: '>=18.0.0'
+
+  '@shopify/ui-extensions@2025.7.3':
+    resolution: {integrity: sha512-XqTEzLnU0YOD7s9vd2EEBdXuqxL6H2VMBkwXuHNHdohwMtN/50S5/OsKRrEsE97D3/+/TcEEhQywocA8z4IvSw==}
+
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
@@ -1253,6 +1331,11 @@ packages:
     resolution: {integrity: sha512-MEe3UeoENYVFXzoXEWsvcpg6ZvlrFNlOQ7EOsvhI3CfAXwzPfO8Qwuxd40nepsYKqyyVQnTdEfv68q91yLcKrQ==}
     peerDependencies:
       '@types/react': ^18.0.0
+
+  '@types/react-reconciler@0.28.9':
+    resolution: {integrity: sha512-HHM3nxyUZ3zAylX8ZEyrDNd2XZOnQ0D5XfunJF5FLQnZbHHYq4UWvW1QfelQNXv1ICNkwYhfxjwfnqivYB6bFg==}
+    peerDependencies:
+      '@types/react': '*'
 
   '@types/react@18.3.28':
     resolution: {integrity: sha512-z9VXpC7MWrhfWipitjNdgCauoMLRdIILQsAEV+ZesIzBq/oUlxk0m3ApZuMFCXdnS4U7KrI+l3WRUEGQ8K1QKw==}
@@ -4847,6 +4930,30 @@ snapshots:
 
   '@remix-run/node-fetch-server@0.13.1': {}
 
+  '@remote-ui/async-subscription@2.1.18':
+    dependencies:
+      '@remote-ui/rpc': 1.4.7
+
+  '@remote-ui/core@2.2.7':
+    dependencies:
+      '@remote-ui/rpc': 1.4.7
+      '@remote-ui/types': 1.1.3
+
+  '@remote-ui/react@5.0.8(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@remote-ui/async-subscription': 2.1.18
+      '@remote-ui/core': 2.2.7
+      '@remote-ui/rpc': 1.4.7
+      '@types/react': 18.3.28
+      '@types/react-reconciler': 0.28.9(@types/react@18.3.28)
+      react: 18.3.1
+    optionalDependencies:
+      react-reconciler: 0.29.0(react@18.3.1)
+
+  '@remote-ui/rpc@1.4.7': {}
+
+  '@remote-ui/types@1.1.3': {}
+
   '@repeaterjs/repeater@3.0.6': {}
 
   '@rollup/rollup-android-arm-eabi@4.60.3':
@@ -5013,6 +5120,21 @@ snapshots:
     dependencies:
       '@shopify/graphql-client': 1.4.2
 
+  '@shopify/ui-extensions-react@2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)':
+    dependencies:
+      '@remote-ui/async-subscription': 2.1.18
+      '@remote-ui/react': 5.0.8(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      '@shopify/ui-extensions': 2025.7.3
+      '@types/react': 18.3.28
+      react: 18.3.1
+    transitivePeerDependencies:
+      - react-reconciler
+
+  '@shopify/ui-extensions@2025.7.3':
+    dependencies:
+      '@remote-ui/async-subscription': 2.1.18
+      '@remote-ui/core': 2.2.7
+
   '@standard-schema/spec@1.1.0': {}
 
   '@tybys/wasm-util@0.10.2':
@@ -5042,6 +5164,10 @@ snapshots:
   '@types/prop-types@15.7.15': {}
 
   '@types/react-dom@18.3.7(@types/react@18.3.28)':
+    dependencies:
+      '@types/react': 18.3.28
+
+  '@types/react-reconciler@0.28.9(@types/react@18.3.28)':
     dependencies:
       '@types/react': 18.3.28
 
