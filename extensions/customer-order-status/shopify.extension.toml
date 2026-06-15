@@ -1,0 +1,14 @@
+api_version = "2025-07"
+
+[[extensions]]
+type = "ui_extension"
+name = "Customer Freight Status"
+handle = "customer-freight-status"
+uid = "74d42f29-807a-2ae4-abb4-02f1964ed2ab93b99073"
+
+  [[extensions.targeting]]
+  module = "./src/BlockExtension.tsx"
+  target = "customer-account.order-status.block.render"
+
+  [extensions.capabilities]
+  network_access = true

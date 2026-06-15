@@ -88,6 +88,56 @@ model ShippingRate {
   @@index([shop, city, postalCode])
 }
 
+
+model OrderOperationalData {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  customerStatus  String   @default("")
+  warehouseStatus String   @default("")
+  dispatchStatus  String   @default("")
+  trackingNumber  String   @default("")
+  deliveryStatus  String   @default("")
+  poNumber        String   @default("")
+  depositPaid     String   @default("")
+  balanceDue      String   @default("")
+  notes               String   @default("")
+  eddDate             String   @default("")
+  supplierContainer   String   @default("")
+  portArrivalDate     String   @default("")
+  inTransitDate       String   @default("")
+  createdAt           DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([shop, orderId])
+}
+
+model OrderLineItemOperationalData {
+  id                String   @id @default(cuid())
+  shop              String
+  orderId           String
+  variantId         String
+  productTitle      String   @default("")   
+  carrier           String   @default("")
+  customerStatus    String   @default("")
+  warehouseStatus   String   @default("")
+  dispatchStatus    String   @default("")
+  deliveryStatus    String   @default("")
+  trackingNumber    String   @default("")
+  eddDate           String   @default("")
+  depositPaid       String   @default("")
+  balanceDue        String   @default("")
+  notes             String   @default("")
+  supplierContainer String   @default("")
+  portArrivalDate   String   @default("")
+  inTransitDate     String   @default("")
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([shop, orderId, variantId])
+}
+
 enum CostType {
   FIXED
   PERCENTAGE
