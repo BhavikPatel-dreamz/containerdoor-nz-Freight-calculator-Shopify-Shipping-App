@@ -30,6 +30,7 @@ type LineItemRecord = {
   depositPaid: string;
   balanceDue: string;
   notes: string;
+  imageUrl: string;
 };
 
 type ApiResponse = {
@@ -41,7 +42,8 @@ type ApiResponse = {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const TARGET = "customer-account.order-status.block.render";
-const APP_URL = "https://dd-75.dynamicdreamz.com";
+// Use the Vercel deployment (production) instead of the dynamicdreamz preview host
+const APP_URL = "https://containerdoor-nz-freight-calculator.vercel.app";
 
 // ─── Root Extension ───────────────────────────────────────────────────────────
 
@@ -78,10 +80,7 @@ function OrderStatusBlock() {
       const ts = Date.now();
       const res = await fetch(
         `${APP_URL}/api/order-status?orderId=${numericOrderId}&_ts=${ts}`,
-        {
-          cache: "no-store",
-          headers: { "Cache-Control": "no-cache" },
-        }
+        { cache: "no-store" }
       );
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -93,8 +92,17 @@ function OrderStatusBlock() {
       } else {
         setError(data.error ?? "Failed to load");
       }
-    } catch (e) {
-      setError(`Unable to load freight status: ${String(e)}`);
+    } catch (e: any) {
+      // Differentiate common failure modes to give a helpful message in the UI
+      const msg = String(e ?? "Unknown error");
+      if (e instanceof TypeError) {
+        // Often a network failure or CORS blocking will surface as a TypeError
+        setError(
+          `Unable to load freight status: network or CORS error. Check that ${APP_URL} is reachable and returns Access-Control-Allow-Origin.`
+        );
+      } else {
+        setError(`Unable to load freight status: ${msg}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -186,7 +194,7 @@ function OrderStatusBlock() {
                 title={record.productTitle || `Item ${index + 1}`}
                 variantTitle=""
                 quantity={1}
-                image={undefined}
+                image={record.imageUrl || undefined}
                 record={record}
               />
               {!isLast && <Divider />}
@@ -214,7 +222,7 @@ function OrderStatusBlock() {
           item?.featuredImage?.url ??
           item?.variant?.image?.url ??
           item?.product?.featuredImage?.url ??
-          undefined;
+          (record.imageUrl || undefined);
 
         return (
           <View key={item.id ?? variantId}>
@@ -356,8 +364,8 @@ function resolveBadge(
   ds: string,
   dispatchStatus: string
 ): { label: string; tone: Tone } {
-  const d  = ds?.toLowerCase?.() ?? "";
-  const c  = cs?.toLowerCase?.() ?? "";
+  const d = ds?.toLowerCase?.() ?? "";
+  const c = cs?.toLowerCase?.() ?? "";
   const dp = dispatchStatus?.toLowerCase?.() ?? "";
 
   // Prefer dispatch status when present — show meaningful dispatch labels
@@ -392,19 +400,19 @@ function resolveDate(
   dispatchStatus: string,
   record: LineItemRecord
 ): string | null {
-  const d  = ds.toLowerCase();
-  const c  = cs.toLowerCase();
+  const d = ds.toLowerCase();
+  const c = cs.toLowerCase();
   const dp = dispatchStatus.toLowerCase();
 
   // ── Read raw date strings directly — never transform before this point ────
-  const rawEdd        = record.eddDate?.trim()         ?? "";
-  const rawInTransit  = record.inTransitDate?.trim()   ?? "";
-  const rawPort       = record.portArrivalDate?.trim() ?? "";
+  const rawEdd = record.eddDate?.trim() ?? "";
+  const rawInTransit = record.inTransitDate?.trim() ?? "";
+  const rawPort = record.portArrivalDate?.trim() ?? "";
 
   // Format each only if non-empty
-  const edd        = rawEdd        ? formatDate(rawEdd)       : null;
-  const inTransit  = rawInTransit  ? formatDate(rawInTransit) : null;
-  const port       = rawPort       ? formatDate(rawPort)      : null;
+  const edd = rawEdd ? formatDate(rawEdd) : null;
+  const inTransit = rawInTransit ? formatDate(rawInTransit) : null;
+  const port = rawPort ? formatDate(rawPort) : null;
 
   if (d === "delivered") {
     const date = inTransit ?? edd;
@@ -439,10 +447,10 @@ function formatDate(raw: string): string {
     // Expect "YYYY-MM-DD" — split and construct as local date
     const parts = raw.split("-");
     if (parts.length === 3) {
-      const year  = parseInt(parts[0], 10);
+      const year = parseInt(parts[0], 10);
       const month = parseInt(parts[1], 10) - 1; // 0-based
-      const day   = parseInt(parts[2], 10);
-      const date  = new Date(year, month, day); // local time — no UTC shift
+      const day = parseInt(parts[2], 10);
+      const date = new Date(year, month, day); // local time — no UTC shift
       return date.toLocaleDateString("en-NZ", {
         day: "2-digit",
         month: "short",
