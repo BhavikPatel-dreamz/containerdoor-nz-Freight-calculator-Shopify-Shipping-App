@@ -92,13 +92,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       // Build a compact metadata string saved natively on the Shopify order shipping line
       const lineItemSummary = serviceRate.lineItemBreakdown
-        .map((l) => `${l.variantId.split("/").pop()}:${l.company}x${l.boxes}`)
-        .join("|");
+  .map((l) => `${l.variantId.split("/").pop()}:${l.company}x${l.boxes}x${l.amount.toFixed(2)}`)
+  .join("|");
 
       // This service_code is stored verbatim on the Shopify order — visible in admin + API
       // Format: standard_delivery::TGE,MAINFREIGHT::4boxes::v123:TGEx2|v456:MAINFREIGHTx1
       const companies = [...new Set(serviceRate.lineItemBreakdown.map((l) => l.company))].join(",");
-      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::$${serviceRate.total.toFixed(2)}::${lineItemSummary}`;
+      const totalWeightKg = (serviceRate.lineItemBreakdown.reduce((sum, l) => {
+        const pkg = packages.find(p => p.variantId === l.variantId && p.company === l.company);
+        return sum + (pkg ? pkg.weightGrams / 1000 : 0);
+      }, 0)).toFixed(2);
+      const totalCbm = (serviceRate.lineItemBreakdown.reduce((sum, l) => {
+        const pkg = packages.find(p => p.variantId === l.variantId && p.company === l.company);
+        return sum + (pkg ? pkg.volumeCm3 / 1_000_000 : 0);
+      }, 0)).toFixed(4);
+      const serviceCode = `${serviceRate.serviceType.toLowerCase()}::${companies}::${serviceRate.packageCount}boxes::$${serviceRate.total.toFixed(2)}::${lineItemSummary}::${totalWeightKg}kg::${totalCbm}cbm`;
+
 
       shopifyRates.push({
         service_name: serviceName,

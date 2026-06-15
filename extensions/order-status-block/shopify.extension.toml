@@ -1,0 +1,11 @@
+api_version = "2025-07"
+
+[[extensions]]
+type = "ui_extension"
+name = "Freight Order Status"
+handle = "freight-order-status"
+uid = "926fe996-d672-5d27-702a-33d5161c3c53e3a891da"
+
+  [[extensions.targeting]]
+  module = "./src/BlockExtension.tsx"
+  target = "admin.order-details.block.render"

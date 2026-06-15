@@ -1,8 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData, useSearchParams, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import { companyLabels } from "../lib/freight";
+import { useState } from "react";
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,6 +14,7 @@ type FreightLineItem = {
   title?: string;
   company: string;
   boxes: number;
+  amount: number;
 };
 
 type FreightOrderRow = {
@@ -27,6 +30,11 @@ type FreightOrderRow = {
   packageCount: string;
   lineItems: FreightLineItem[];
   shippingTitle: string;
+  customerName: string;
+  email: string;
+  phone: string;
+  financialStatus: string;
+  fullAddress: string;
 };
 
 type ShopifyOrderNode = {
@@ -34,7 +42,10 @@ type ShopifyOrderNode = {
   name: string;
   createdAt: string;
   currencyCode: string;
-  shippingAddress?: { city?: string; zip?: string };
+  email?: string;
+  phone?: string;
+  displayFinancialStatus?: string;
+  shippingAddress?: { city?: string; zip?: string; address1?: string; province?: string; country?: string; firstName?: string; lastName?: string };
   shippingLines: {
     nodes: Array<{
       title: string;
@@ -71,7 +82,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
           name
           createdAt
           currencyCode
-          shippingAddress { city zip }
+          shippingAddress { city zip address1 province country firstName lastName }
+          email
+          phone
+          displayFinancialStatus
           shippingLines(first: 5) {
             nodes {
               title
@@ -122,8 +136,11 @@ function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
   );
   if (!shippingLine) return null;
 
-  const [, carriers, packageCount, , , , lineItemsRaw] = shippingLine.code.split("::");
-  if (!carriers || !lineItemsRaw) return null;
+  const parts = shippingLine.code.split("::");
+const carriers = parts[1];
+const packageCount = parts[2];
+const lineItemsRaw = parts[4]; 
+if (!carriers || !lineItemsRaw) return null;
 
   // Map numeric variantId -> title from lineItems
   const variantTitleMap = new Map<string, string>();
@@ -136,13 +153,14 @@ function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
 
   const lineItems: FreightLineItem[] = lineItemsRaw.split("|").map((part, idx) => {
     const [variantId, rest] = part.split(":");
-    const [company, boxesStr] = (rest ?? "").split("x");
+    const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     return {
       id: `${order.id}-${idx}`,
       variantId,
       title: variantTitleMap.get(variantId),
       company: company ?? "",
       boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
     };
   });
 
@@ -161,6 +179,17 @@ function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
     packageCount,
     shippingTitle: shippingLine.title,
     lineItems,
+    customerName: `${order.shippingAddress?.firstName ?? ""} ${order.shippingAddress?.lastName ?? ""}`.trim() || "—",
+    email: order.email ?? "—",
+    phone: order.phone ?? "—",
+    financialStatus: order.displayFinancialStatus ?? "—",
+    fullAddress: [
+      order.shippingAddress?.address1,
+      order.shippingAddress?.city,
+      order.shippingAddress?.province,
+      order.shippingAddress?.zip,
+      order.shippingAddress?.country,
+    ].filter(Boolean).join(", "),
   };
 }
 
@@ -169,6 +198,7 @@ function buildFreightOrderRow(order: ShopifyOrderNode): FreightOrderRow | null {
 export default function FreightOrdersPage() {
   const { orders, total, page, pageCount } = useLoaderData<typeof loader>();
   const [, setSearchParams] = useSearchParams();
+  const [viewOrder, setViewOrder] = useState<FreightOrderRow | null>(null); 
 
   const formatCurrency = (amount: number, currency: string) =>
     new Intl.NumberFormat("en-NZ", { style: "currency", currency }).format(amount);
@@ -218,6 +248,27 @@ export default function FreightOrdersPage() {
                     {order.packageCount} · {order.carriers}
                   </span>
                 </div>
+                {/* Customer info row */}
+                <div style={{
+                  display: "flex", gap: "24px", padding: "10px 16px",
+                  background: "#fff", borderBottom: "1px solid #e5e7eb",
+                  fontSize: "13px", color: "#374151", flexWrap: "wrap",
+                }}>
+                  <span><span style={{ color: "#6b7280" }}>Customer: </span><strong>{order.customerName}</strong></span>
+                  <span><span style={{ color: "#6b7280" }}>Email: </span>{order.email}</span>
+                  <span><span style={{ color: "#6b7280" }}>Phone: </span>{order.phone}</span>
+                  <span><span style={{ color: "#6b7280" }}>Status: </span>
+                    <span style={{
+                      display: "inline-block", padding: "1px 8px", borderRadius: "10px", fontSize: "12px",
+                      fontWeight: 500,
+                      background: order.financialStatus === "paid" ? "#dcfce7" : "#fef3c7",
+                      color: order.financialStatus === "paid" ? "#166534" : "#92400e",
+                    }}>
+                      {order.financialStatus}
+                    </span>
+                  </span>
+                  <span style={{ color: "#6b7280" }}>{order.fullAddress}</span>
+                </div>
                 <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
                   <span style={{ fontSize: "13px", color: "#6b7280" }}>
                     {new Date(order.createdAt).toLocaleDateString("en-NZ", {
@@ -228,6 +279,28 @@ export default function FreightOrdersPage() {
                     {formatCurrency(order.totalFreight, order.currency)}
                   </span>
                 </div>
+                {/* View / Edit button */}
+                <div style={{ display: "flex", gap: "8px", marginLeft: "8px" }}>
+                  <button
+                    onClick={() => setViewOrder(order)}
+                    style={{
+                      padding: "4px 12px", fontSize: "13px", borderRadius: "6px",
+                      border: "1px solid #e5e7eb", background: "#fff",
+                      color: "#374151", cursor: "pointer",
+                    }}
+                  >
+                    View
+                  </button>
+                  <Link to={`/app/freight-orders/${order.shopifyOrderId}`}
+                    style={{
+                      padding: "4px 12px", fontSize: "13px", borderRadius: "6px",
+                      border: "1px solid #e5e7eb", background: "#111827",
+                      color: "#fff", textDecoration: "none", cursor: "pointer",
+                    }}
+                  >
+                    Edit
+                  </Link>
+                </div>
               </div>
 
               {/* Line items table */}
@@ -237,6 +310,7 @@ export default function FreightOrdersPage() {
                     <th style={thStyle}>Product</th>
                     <th style={thStyle}>Carrier</th>
                     <th style={thStyle}>Boxes</th>
+                    <th style={thStyle}>Amount</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -262,6 +336,9 @@ export default function FreightOrdersPage() {
                         </span>
                       </td>
                       <td style={tdStyle}>{item.boxes}</td>
+                      <td style={tdStyle}>
+                        {item.amount > 0 ? formatCurrency(item.amount, order.currency) : "—"}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -279,8 +356,10 @@ export default function FreightOrdersPage() {
 
             </div>
           ))}
+          
         </div>
       )}
+      
 
       {/* Pagination */}
       {pageCount > 1 && (
@@ -304,9 +383,115 @@ export default function FreightOrdersPage() {
           </button>
         </div>
       )}
-    </div>
+    {/* View Order Modal */}
+      {viewOrder && (
+        <div style={{
+          position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)",
+          display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+        }}
+          onClick={() => setViewOrder(null)}
+        >
+          <div style={{
+            background: "#fff", borderRadius: "10px", padding: "28px",
+            width: "600px", maxWidth: "95vw", maxHeight: "85vh", overflowY: "auto",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.2)",
+          }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "20px" }}>
+              <div>
+                <h2 style={{ fontSize: "18px", fontWeight: 600, margin: 0 }}>{viewOrder.shopifyOrderName}</h2>
+                <p style={{ color: "#6b7280", fontSize: "13px", margin: "4px 0 0" }}>
+                  {new Date(viewOrder.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" })}
+                </p>
+              </div>
+              <button onClick={() => setViewOrder(null)} style={{
+                background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#6b7280", lineHeight: 1,
+              }}>✕</button>
+            </div>
+
+            {/* Info grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+              {[
+                ["Customer", viewOrder.customerName],
+                ["Email", viewOrder.email],
+                ["Phone", viewOrder.phone],
+                ["Status", viewOrder.financialStatus],
+                ["Freight cost", formatCurrency(viewOrder.totalFreight, viewOrder.currency)],
+                ["Shipping method", viewOrder.shippingTitle],
+              ].map(([label, value]) => (
+                <div key={label} style={{ padding: "10px", border: "1px solid #e5e7eb", borderRadius: "6px", background: "#f9fafb" }}>
+                  <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{label}</div>
+                  <div style={{ fontSize: "13px", fontWeight: 500 }}>{value}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Address */}
+            <div style={{ padding: "10px", border: "1px solid #e5e7eb", borderRadius: "6px", background: "#f9fafb", marginBottom: "20px" }}>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "3px", textTransform: "uppercase", letterSpacing: "0.05em" }}>Delivery address</div>
+              <div style={{ fontSize: "13px", fontWeight: 500 }}>{viewOrder.fullAddress || "—"}</div>
+            </div>
+
+            {/* Line items */}
+            <h3 style={{ fontSize: "13px", fontWeight: 600, marginBottom: "8px", color: "#374151" }}>Line items</h3>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "13px", marginBottom: "20px" }}>
+              <thead>
+                <tr style={{ background: "#f9fafb" }}>
+                  {["Product", "Carrier", "Boxes", "Amount"].map((h) => (
+                    <th key={h} style={{ padding: "8px 10px", textAlign: "left", fontSize: "11px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", borderBottom: "1px solid #e5e7eb" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {viewOrder.lineItems.map((item) => (
+                  <tr key={item.id}>
+                    <td style={{ padding: "8px 10px", borderBottom: "1px solid #f3f4f6" }}>
+                      {item.title ?? <span style={{ fontFamily: "monospace", color: "#6b7280" }}>#{item.variantId}</span>}
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: "1px solid #f3f4f6" }}>
+                      <span style={{
+                        display: "inline-block", padding: "2px 8px", borderRadius: "10px", fontSize: "12px", fontWeight: 500,
+                        background: carrierColor(item.company).bg, color: carrierColor(item.company).text,
+                      }}>
+                        {companyLabels[item.company as keyof typeof companyLabels] ?? item.company}
+                      </span>
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: "1px solid #f3f4f6" }}>{item.boxes}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: "1px solid #f3f4f6" }}>
+                      {item.amount > 0 ? formatCurrency(item.amount, viewOrder.currency) : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {/* Footer actions */}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button onClick={() => setViewOrder(null)} style={{
+                padding: "7px 16px", fontSize: "13px", borderRadius: "6px",
+                border: "1px solid #e5e7eb", background: "#fff", color: "#374151", cursor: "pointer",
+              }}>
+                Close
+              </button>
+              <Link to={`/app/freight-orders/${viewOrder.shopifyOrderId}`}
+                onClick={() => setViewOrder(null)}
+                style={{
+                  padding: "7px 16px", fontSize: "13px", borderRadius: "6px",
+                  background: "#111827", color: "#fff", textDecoration: "none", cursor: "pointer",
+                }}
+              >
+                Edit this order
+              </Link>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>  // this is the existing closing div of the component
   );
 }
+
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
