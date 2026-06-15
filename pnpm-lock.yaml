@@ -121,6 +121,18 @@ importers:
         specifier: 18.3.1
         version: 18.3.1
 
+  extensions/customer-order-status:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
   extensions/order-freight-block:
     dependencies:
       '@shopify/ui-extensions':
@@ -146,6 +158,18 @@ importers:
         version: 18.3.1
 
   extensions/order-freight-customer-page:
+    dependencies:
+      '@shopify/ui-extensions':
+        specifier: 2025.7.3
+        version: 2025.7.3
+      '@shopify/ui-extensions-react':
+        specifier: 2025.7.3
+        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+      react:
+        specifier: 18.3.1
+        version: 18.3.1
+
+  extensions/order-status-block:
     dependencies:
       '@shopify/ui-extensions':
         specifier: 2025.7.3
@@ -3511,6 +3535,7 @@ packages:
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
     engines: {node: ^18 || >=20}
+    deprecated: unmaintained
     hasBin: true
     peerDependencies:
       typescript: ^5.0.0
