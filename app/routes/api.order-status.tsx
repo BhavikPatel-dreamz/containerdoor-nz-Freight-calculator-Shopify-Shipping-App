@@ -5,7 +5,8 @@ import { unauthenticated } from "../shopify.server";
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  // Allow Cache-Control here because some clients set it (and it triggers preflight)
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
 };
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -46,11 +47,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       },
     });
 
-    type RecordWithTitle = (typeof records)[number] & { productTitle: string };
-    let lineItems: RecordWithTitle[] = records.map((r) => ({
-      ...r,
-      productTitle: r.productTitle ?? "",
-    }));
+    type RecordWithTitle = (typeof records)[number] & { productTitle: string; imageUrl: string };
+let lineItems: RecordWithTitle[] = records.map((r) => ({
+  ...r,
+  productTitle: r.productTitle ?? "",
+  imageUrl: "",
+}));
 
     // Always fetch live line items from Shopify when shop is available.
     // This gives us: (a) up-to-date titles, (b) a canonical set of variantIds
@@ -60,15 +62,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
     if (shop) {
       try {
         const { admin } = await unauthenticated.admin(shop);
-        const res = await admin.graphql(
-          `#graphql
-          query OrderLineItems($id: ID!) {
-            order(id: $id) {
-              lineItems(first: 50) {
-                nodes { title variant { id } }
-              }
-            }
-          }`,
+        // AFTER
+const res = await admin.graphql(
+  `#graphql
+  query OrderLineItems($id: ID!) {
+    order(id: $id) {
+      lineItems(first: 50) {
+        nodes {
+          title
+          variant {
+            id
+            image { url }
+            product { featuredImage { url } }
+          }
+        }
+      }
+    }
+  }`,
           { variables: { id: `gid://shopify/Order/${orderId}` } }
         );
         const json = await res.json();
@@ -76,35 +86,45 @@ export async function loader({ request }: LoaderFunctionArgs) {
           json.data?.order?.lineItems?.nodes ?? [];
 
         // Build a map of variantId → title from the live order
-        const titleMap = new Map<string, string>();
-        canonicalVariantIds = new Set<string>();
+        // AFTER
+const titleMap = new Map<string, string>();
+const imageMap = new Map<string, string>();
+canonicalVariantIds = new Set<string>();
 
-        for (const li of nodes) {
-          if (li.variant?.id) {
-            const numId = li.variant.id.replace("gid://shopify/ProductVariant/", "");
-            titleMap.set(numId, li.title);
-            canonicalVariantIds.add(numId);
-          }
-        }
+for (const li of nodes) {
+  if (li.variant?.id) {
+    const numId = li.variant.id.replace("gid://shopify/ProductVariant/", "");
+    titleMap.set(numId, li.title);
+    canonicalVariantIds.add(numId);
+    // Prefer variant image, fall back to product featured image
+    const imgUrl =
+      li.variant.image?.url ??
+      li.variant.product?.featuredImage?.url ??
+      "";
+    if (imgUrl) imageMap.set(numId, imgUrl);
+  }
+}
 
         // Apply titles and backfill DB where missing
         lineItems = lineItems.map((r) => {
-          const title = titleMap.get(r.variantId);
-          if (title && !r.productTitle) {
-            prisma.orderLineItemOperationalData
-              .updateMany({
-                where: { orderId, variantId: r.variantId, ...(shop ? { shop } : {}) },
-                data: { productTitle: title },
-              })
-              .catch(() => {});
-            return { ...r, productTitle: title };
-          }
-          // Even if already has a title, refresh it from live data
-          if (title && r.productTitle !== title) {
-            return { ...r, productTitle: title };
-          }
-          return r;
-        });
+  const title = titleMap.get(r.variantId);
+  const imageUrl = imageMap.get(r.variantId) ?? "";
+  const base = { ...r, imageUrl };   // attach image to every record
+
+  if (title && !r.productTitle) {
+    prisma.orderLineItemOperationalData
+      .updateMany({
+        where: { orderId, variantId: r.variantId, ...(shop ? { shop } : {}) },
+        data: { productTitle: title },
+      })
+      .catch(() => {});
+    return { ...base, productTitle: title };
+  }
+  if (title && r.productTitle !== title) {
+    return { ...base, productTitle: title };
+  }
+  return base;
+});
       } catch (e) {
         console.error("[api.order-status] Shopify GraphQL error", e);
       }

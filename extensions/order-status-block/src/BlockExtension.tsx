@@ -99,7 +99,8 @@ function FreightStatusBlock() {
   const appUrl: string =
     (api as any)?.extension?.appUrl ??
     (api as any)?.appUrl ??
-    "https://dd-75.dynamicdreamz.com";
+    // Use production Vercel deployment by default
+    "https://containerdoor-nz-freight-calculator.vercel.app";
 
   const [records, setRecords] = useState<LineItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
