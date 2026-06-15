@@ -14,6 +14,11 @@ type OrderLineItem = {
   properties?: OrderLineItemProperty[];
 };
 
+type OrderShippingLine = {
+  title?: string;
+  code?: string;
+};
+
 type OrderPayload = {
   id?: number;
   name?: string;
@@ -25,15 +30,23 @@ type OrderPayload = {
     zip?: string;
     country_code?: string;
   };
+  shipping_lines?: OrderShippingLine[];
   line_items?: OrderLineItem[];
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { payload, topic, shop } = await authenticate.webhook(request);
+  const { admin, payload, topic, shop } = await authenticate.webhook(request);
   console.log(`Received ${topic} webhook for ${shop}`);
 
   const orderPayload = payload as OrderPayload;
   const syncPayload = buildOrderSyncPayload(shop, orderPayload);
+
+  // Mirror the freight breakdown (encoded in the shipping-line `code`) onto an
+  // order metafield so the customer-account extension — which cannot read
+  // shippingLine.code — can render the same per-variant carrier/box info.
+  if (admin && orderPayload.id) {
+    await writeFreightMetafield(admin, orderPayload);
+  }
 
   const targets = [
     {
@@ -100,6 +113,107 @@ function buildOrderSyncPayload(shop: string, order: OrderPayload) {
       })),
     },
   };
+}
+
+// ─── Freight metafield (for customer-account extension) ─────────────────────────
+
+const FREIGHT_NAMESPACE = "containerdoor_freight";
+const FREIGHT_METAFIELD_KEY = "freight_data";
+
+const FREIGHT_SERVICE_PREFIXES = [
+  "standard_delivery::",
+  "depot_delivery::",
+  "customer_pickup::",
+];
+
+const COMPANY_LABELS: Record<string, string> = {
+  FLIWAYLINEHAUL: "Fliway - Linehaul",
+  FLIWAYMIDSIZE: "Fliway - Midsize",
+  NZP: "NZP",
+  NZP_AGE_RESTRICTED: "NZP - Age Restricted",
+  CASTLE: "Castle",
+  TGE: "Team Global Express",
+  M2H: "M2H",
+  MAINFREIGHT: "Mainfreight",
+};
+
+// service_code format (see app/routes/app.freight-orders.tsx):
+//   standard_delivery::CARRIERS::Nboxes::::::variantId:COMPANYxBoxes|variantId:COMPANYxBoxes
+function parseFreightCode(code: string | undefined, order: OrderPayload) {
+  if (!code) return null;
+  if (!FREIGHT_SERVICE_PREFIXES.some((prefix) => code.startsWith(prefix))) return null;
+
+  const segments = code.split("::");
+  const carriers = segments[1];
+  const packageCount = segments[2];
+  const lineItemsRaw = segments[6];
+  if (!carriers || !lineItemsRaw) return null;
+
+  // Map numeric variant id -> product title from the order line items.
+  const titleByVariant = new Map<string, string>();
+  for (const li of order.line_items ?? []) {
+    const anyLi = li as OrderLineItem & { variant_id?: number; title?: string };
+    if (anyLi.variant_id != null && anyLi.title) {
+      titleByVariant.set(String(anyLi.variant_id), anyLi.title);
+    }
+  }
+
+  const lineItems = lineItemsRaw.split("|").map((part) => {
+    const [variantId, rest] = part.split(":");
+    const [company, boxesStr] = (rest ?? "").split("x");
+    return {
+      variantId,
+      title: titleByVariant.get(variantId),
+      company: company ?? "",
+      companyLabel: COMPANY_LABELS[company ?? ""] ?? company ?? "",
+      boxes: Number(boxesStr ?? 0),
+    };
+  });
+
+  return { carriers, packageCount, lineItems };
+}
+
+async function writeFreightMetafield(
+  admin: { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
+  order: OrderPayload,
+) {
+  try {
+    const freightLine = (order.shipping_lines ?? []).find((s) =>
+      FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix)),
+    );
+    const breakdown = parseFreightCode(freightLine?.code, order);
+    if (!breakdown) return;
+
+    const response = await admin.graphql(
+      `#graphql
+      mutation SetFreightMetafield($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          userErrors { field message }
+        }
+      }`,
+      {
+        variables: {
+          metafields: [
+            {
+              ownerId: `gid://shopify/Order/${order.id}`,
+              namespace: FREIGHT_NAMESPACE,
+              key: FREIGHT_METAFIELD_KEY,
+              type: "json",
+              value: JSON.stringify(breakdown),
+            },
+          ],
+        },
+      },
+    );
+
+    const json = await response.json();
+    const userErrors = json?.data?.metafieldsSet?.userErrors ?? [];
+    if (userErrors.length) {
+      console.error("Freight metafield write errors", userErrors);
+    }
+  } catch (error) {
+    console.error("Failed to write freight metafield", error);
+  }
 }
 
 function extractFreightProperties(properties: OrderLineItemProperty[]) {
