@@ -82,8 +82,14 @@ const res = await admin.graphql(
           { variables: { id: `gid://shopify/Order/${orderId}` } }
         );
         const json = await res.json();
-        const nodes: Array<{ title: string; variant?: { id: string } }> =
-          json.data?.order?.lineItems?.nodes ?? [];
+        const nodes: Array<{
+  title: string;
+  variant?: {
+    id: string;
+    image?: { url: string };
+    product?: { featuredImage?: { url: string } };
+  };
+}> = json.data?.order?.lineItems?.nodes ?? [];
 
         // Build a map of variantId → title from the live order
         // AFTER
@@ -204,9 +210,6 @@ export async function action({ request }: ActionFunctionArgs) {
 
     let updated;
 
-    // If shop was provided, upsert using the unique composite key (shop+orderId+variantId).
-    // If shop is missing, try to find an existing record by orderId+variantId and update it
-    // to avoid creating a duplicate row with an empty shop value.
     if (shopValue) {
       updated = await prisma.orderLineItemOperationalData.upsert({
         where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
@@ -214,7 +217,6 @@ export async function action({ request }: ActionFunctionArgs) {
         create: { shop: shopValue, orderId, variantId, ...updateData },
       });
     } else {
-      // Try to find any existing record that matches orderId+variantId regardless of shop
       const existing = await prisma.orderLineItemOperationalData.findFirst({
         where: { orderId, variantId },
       });
@@ -225,12 +227,27 @@ export async function action({ request }: ActionFunctionArgs) {
           data: updateData,
         });
       } else {
-        // No existing record — create one with empty shop value to preserve previous behaviour
         updated = await prisma.orderLineItemOperationalData.create({
           data: { shop: shopValue, orderId, variantId, ...updateData },
         });
       }
     }
+
+    // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
+    const resolvedShop = shopValue || updated.shop || "";
+
+    fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "order-extension",
+        shop: resolvedShop,
+        orderId,
+        variantId,
+        data: updateData,
+        updatedAt: new Date().toISOString(),
+      }),
+    }).catch((e) => console.error("[webhook] failed to send", e));
 
     return Response.json({ ok: true, record: updated }, { headers: CORS_HEADERS });
   } catch (err) {

@@ -105,6 +105,21 @@ export async function action({ request, params }: ActionFunctionArgs) {
       update: data,
       create: { shop, orderId, variantId, ...data },
     });
+
+
+    // Fire webhook to Cin7 (non-blocking, don't fail the save if this fails)
+    fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "admin-app",
+        shop,
+        orderId,
+        variantId,
+        data,
+        updatedAt: new Date().toISOString(),
+      }),
+    }).catch((e) => console.error("[webhook] failed to send", e));
   }
 
   return { ok: true, message: "Saved successfully" };
