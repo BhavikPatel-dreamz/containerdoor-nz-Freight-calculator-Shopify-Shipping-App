@@ -8,7 +8,7 @@ uid = "74d42f29-807a-2ae4-abb4-02f1964ed2ab93b99073"
 
   [[extensions.targeting]]
   module = "./src/BlockExtension.tsx"
-  target = "customer-account.order-status.block.render"
+  target = "customer-account.order-status.cart-line-item.render-after"
 
   [extensions.capabilities]
   network_access = true

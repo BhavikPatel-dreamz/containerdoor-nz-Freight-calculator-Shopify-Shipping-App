@@ -82,8 +82,14 @@ const res = await admin.graphql(
           { variables: { id: `gid://shopify/Order/${orderId}` } }
         );
         const json = await res.json();
-        const nodes: Array<{ title: string; variant?: { id: string } }> =
-          json.data?.order?.lineItems?.nodes ?? [];
+        const nodes: Array<{
+  title: string;
+  variant?: {
+    id: string;
+    image?: { url: string };
+    product?: { featuredImage?: { url: string } };
+  };
+}> = json.data?.order?.lineItems?.nodes ?? [];
 
         // Build a map of variantId → title from the live order
         // AFTER
