@@ -36,6 +36,7 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
+  base: "https://containerdoor-nz-freight-calculator.vercel.app/", 
   server: {
     allowedHosts: [host],
     cors: {
