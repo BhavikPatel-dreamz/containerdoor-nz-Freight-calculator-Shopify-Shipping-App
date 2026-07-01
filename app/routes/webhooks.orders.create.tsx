@@ -1,5 +1,7 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { createMondayItem } from "../lib/monday.server";
 
 type OrderLineItemProperty = {
   name?: string;
@@ -44,8 +46,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // Mirror the freight breakdown (encoded in the shipping-line `code`) onto an
   // order metafield so the customer-account extension — which cannot read
   // shippingLine.code — can render the same per-variant carrier/box info.
-  if (admin && orderPayload.id) {
+   if (admin && orderPayload.id) {
     await writeFreightMetafield(admin, orderPayload);
+    await createMondayEntriesForOrder(shop, orderPayload);
   }
 
   const targets = [
@@ -146,7 +149,7 @@ function parseFreightCode(code: string | undefined, order: OrderPayload) {
   const segments = code.split("::");
   const carriers = segments[1];
   const packageCount = segments[2];
-  const lineItemsRaw = segments[6];
+  const lineItemsRaw = segments[4];
   if (!carriers || !lineItemsRaw) return null;
 
   // Map numeric variant id -> product title from the order line items.
@@ -215,6 +218,93 @@ async function writeFreightMetafield(
     console.error("Failed to write freight metafield", error);
   }
 }
+
+
+async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
+  console.log("[Monday][Webhook] createMondayEntriesForOrder start for order:", order.id, order.name);
+  try {
+    const { default: prisma } = await import("../db.server");
+
+    const freightLine = (order.shipping_lines ?? []).find((s) =>
+      FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix)),
+    );
+    const breakdown = parseFreightCode(freightLine?.code, order);
+    if (!breakdown || !order.id) {
+      console.log("[Monday][Webhook] No freight breakdown found, skipping. shippingLine:", freightLine);
+      return;
+    }
+    console.log("[Monday][Webhook] Freight breakdown:", breakdown);
+
+    const orderId = String(order.id);
+    const customerName = [
+      (order as any).shipping_address?.first_name,
+      (order as any).shipping_address?.last_name,
+    ].filter(Boolean).join(" ") || "—";
+    const email = (order as any).email ?? "—";
+
+    for (const [idx, li] of breakdown.lineItems.entries()) {
+      if (!li.variantId) {
+        console.log("[Monday][Webhook] Skipping line item with no variantId:", li);
+        continue;
+      }
+
+      const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
+      const itemName = `${order.name ?? orderId}${letterSuffix}`;
+
+      // Atomically claim this line item first (create row with a "claiming" marker)
+      // so a concurrent duplicate webhook delivery can't also pass the check below.
+      let claimed = false;
+      try {
+        await prisma.orderLineItemOperationalData.create({
+          data: {
+            shop,
+            orderId,
+            variantId: li.variantId,
+            productTitle: li.title ?? "",
+            carrier: li.company,
+            mondayItemId: "pending",
+          },
+        });
+        claimed = true;
+      } catch {
+        // Row already exists (created by this call earlier, or a concurrent duplicate webhook) — skip.
+        console.log(`[Monday][Webhook] Row already exists for variant ${li.variantId}, skipping (likely duplicate webhook)`);
+      }
+      if (!claimed) continue;
+
+      console.log(`[Monday][Webhook] Creating Monday item "${itemName}" for variant ${li.variantId}`);
+      const mondayItemId = await createMondayItem(itemName, {
+        customerName,
+        email,
+        carriers: li.company,
+        trackingNumber: "",
+        eddDate: "",
+        originalEddDate: "",
+        productTitle: li.title ?? "",
+        boxes: li.boxes ?? "",
+        customerStatus: "",
+        shop,
+        orderId,
+        variantId: li.variantId,
+        warehouseStatus: "",
+        dispatchStatus: "",
+        deliveryStatus: "",
+        depositPaid: "",
+        balanceDue: "",
+      });
+
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+        data: { mondayItemId },
+      });
+      console.log(`[Monday][Webhook] Saved mondayItemId ${mondayItemId} to DB for variant ${li.variantId}`);
+    }
+    console.log("[Monday][Webhook] createMondayEntriesForOrder done for order:", order.id);
+  } catch (error) {
+    console.error("[Monday][Webhook] Failed to create Monday entries for order", error);
+  }
+}
+
 
 function extractFreightProperties(properties: OrderLineItemProperty[]) {
   const map = Object.fromEntries(

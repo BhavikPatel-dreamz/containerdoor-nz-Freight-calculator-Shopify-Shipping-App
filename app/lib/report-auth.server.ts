@@ -1,0 +1,62 @@
+import { createCookieSessionStorage, redirect } from "react-router";
+import prisma from "../db.server";
+
+const sessionStorage = createCookieSessionStorage({
+  cookie: {
+    name: "__report_session",
+    httpOnly: true,
+    path: "/",
+    sameSite: "lax",
+    secrets: [process.env.SESSION_SECRET ?? "report-secret-fallback-32chars!!"],
+    secure: process.env.NODE_ENV === "production",
+    maxAge: 60 * 60 * 24 * 7, // 7 days
+  },
+});
+
+const SESSION_TOKEN_KEY = "reportToken";
+
+export async function getReportSession(request: Request) {
+  return sessionStorage.getSession(request.headers.get("Cookie"));
+}
+
+export async function getReportUser(request: Request) {
+  const session = await getReportSession(request);
+  const token = session.get(SESSION_TOKEN_KEY);
+  if (!token) return null;
+
+  const extSession = await prisma.externalSession.findUnique({
+    where: { token },
+    include: { user: true },
+  });
+
+  if (!extSession) return null;
+  if (extSession.expiresAt < new Date()) {
+    await prisma.externalSession.delete({ where: { token } });
+    return null;
+  }
+
+  return extSession.user;
+}
+
+export async function requireReportUser(request: Request) {
+  const user = await getReportUser(request);
+  if (!user) {
+    throw redirect("/apps/submit/report/login");
+  }
+  return user;
+}
+
+export async function createReportSession(token: string, redirectTo: string) {
+  const session = await sessionStorage.getSession();
+  session.set(SESSION_TOKEN_KEY, token);
+  return redirect(redirectTo, {
+    headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
+  });
+}
+
+export async function destroyReportSession(request: Request) {
+  const session = await getReportSession(request);
+  return redirect("/apps/submit/report/login", {
+    headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
+  });
+}

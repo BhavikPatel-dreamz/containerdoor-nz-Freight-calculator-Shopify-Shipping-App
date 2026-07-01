@@ -38,6 +38,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         dispatchStatus: true,
         trackingNumber: true,
         eddDate: true,
+        originalEddDate: true,
         supplierContainer: true,
         portArrivalDate: true,
         inTransitDate: true,
@@ -48,11 +49,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     });
 
     type RecordWithTitle = (typeof records)[number] & { productTitle: string; imageUrl: string };
-let lineItems: RecordWithTitle[] = records.map((r) => ({
-  ...r,
-  productTitle: r.productTitle ?? "",
-  imageUrl: "",
-}));
+    let lineItems: RecordWithTitle[] = records.map((r) => ({
+      ...r,
+      productTitle: r.productTitle ?? "",
+      imageUrl: "",
+    }));
 
     // Always fetch live line items from Shopify when shop is available.
     // This gives us: (a) up-to-date titles, (b) a canonical set of variantIds
@@ -62,75 +63,74 @@ let lineItems: RecordWithTitle[] = records.map((r) => ({
     if (shop) {
       try {
         const { admin } = await unauthenticated.admin(shop);
-        // AFTER
-const res = await admin.graphql(
-  `#graphql
-  query OrderLineItems($id: ID!) {
-    order(id: $id) {
-      lineItems(first: 50) {
-        nodes {
-          title
-          variant {
-            id
-            image { url }
+        const res = await admin.graphql(
+          `#graphql
+            query OrderLineItems($id: ID!) {
+              order(id: $id) {
+              lineItems(first: 50) {
+              nodes {
+            title
+              variant {
+              id
+              image { url }
             product { featuredImage { url } }
+            }
+           }
           }
-        }
-      }
-    }
-  }`,
+         }
+        }`,
           { variables: { id: `gid://shopify/Order/${orderId}` } }
         );
         const json = await res.json();
         const nodes: Array<{
-  title: string;
-  variant?: {
-    id: string;
-    image?: { url: string };
-    product?: { featuredImage?: { url: string } };
-  };
-}> = json.data?.order?.lineItems?.nodes ?? [];
+          title: string;
+          variant?: {
+            id: string;
+            image?: { url: string };
+            product?: { featuredImage?: { url: string } };
+          };
+        }> = json.data?.order?.lineItems?.nodes ?? [];
 
         // Build a map of variantId → title from the live order
         // AFTER
-const titleMap = new Map<string, string>();
-const imageMap = new Map<string, string>();
-canonicalVariantIds = new Set<string>();
+        const titleMap = new Map<string, string>();
+        const imageMap = new Map<string, string>();
+        canonicalVariantIds = new Set<string>();
 
-for (const li of nodes) {
-  if (li.variant?.id) {
-    const numId = li.variant.id.replace("gid://shopify/ProductVariant/", "");
-    titleMap.set(numId, li.title);
-    canonicalVariantIds.add(numId);
-    // Prefer variant image, fall back to product featured image
-    const imgUrl =
-      li.variant.image?.url ??
-      li.variant.product?.featuredImage?.url ??
-      "";
-    if (imgUrl) imageMap.set(numId, imgUrl);
-  }
-}
+        for (const li of nodes) {
+          if (li.variant?.id) {
+            const numId = li.variant.id.replace("gid://shopify/ProductVariant/", "");
+            titleMap.set(numId, li.title);
+            canonicalVariantIds.add(numId);
+            // Prefer variant image, fall back to product featured image
+            const imgUrl =
+              li.variant.image?.url ??
+              li.variant.product?.featuredImage?.url ??
+              "";
+            if (imgUrl) imageMap.set(numId, imgUrl);
+          }
+        }
 
         // Apply titles and backfill DB where missing
         lineItems = lineItems.map((r) => {
-  const title = titleMap.get(r.variantId);
-  const imageUrl = imageMap.get(r.variantId) ?? "";
-  const base = { ...r, imageUrl };   // attach image to every record
+          const title = titleMap.get(r.variantId);
+          const imageUrl = imageMap.get(r.variantId) ?? "";
+          const base = { ...r, imageUrl };   // attach image to every record
 
-  if (title && !r.productTitle) {
-    prisma.orderLineItemOperationalData
-      .updateMany({
-        where: { orderId, variantId: r.variantId, ...(shop ? { shop } : {}) },
-        data: { productTitle: title },
-      })
-      .catch(() => {});
-    return { ...base, productTitle: title };
-  }
-  if (title && r.productTitle !== title) {
-    return { ...base, productTitle: title };
-  }
-  return base;
-});
+          if (title && !r.productTitle) {
+            prisma.orderLineItemOperationalData
+              .updateMany({
+                where: { orderId, variantId: r.variantId, ...(shop ? { shop } : {}) },
+                data: { productTitle: title },
+              })
+              .catch(() => { });
+            return { ...base, productTitle: title };
+          }
+          if (title && r.productTitle !== title) {
+            return { ...base, productTitle: title };
+          }
+          return base;
+        });
       } catch (e) {
         console.error("[api.order-status] Shopify GraphQL error", e);
       }
@@ -165,6 +165,7 @@ const EDITABLE_FIELDS = [
   "deliveryStatus",
   "trackingNumber",
   "eddDate",
+  "originalEddDate",
   "supplierContainer",
   "portArrivalDate",
   "inTransitDate",
@@ -209,28 +210,55 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     let updated;
+    const existing = shopValue
+      ? await prisma.orderLineItemOperationalData.findUnique({
+          where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
+        })
+      : await prisma.orderLineItemOperationalData.findFirst({
+          where: { orderId, variantId },
+        });
+
+    const payload = { ...updateData } as Record<string, string | Date>;
+    if (existing) {
+      payload.originalEddDate = existing.originalEddDate
+        ? existing.originalEddDate
+        : existing.eddDate
+          ? existing.eddDate
+          : updateData.eddDate ?? "";
+    } else if (Object.prototype.hasOwnProperty.call(updateData, "eddDate")) {
+      payload.originalEddDate = updateData.eddDate;
+    }
+
+    // ── NEW: stamp field-level timestamps only when that field actually changes ──
+    if (
+      Object.prototype.hasOwnProperty.call(updateData, "customerStatus") &&
+      updateData.customerStatus !== (existing?.customerStatus ?? "")
+    ) {
+      payload.customerStatusUpdatedAt = new Date();
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(updateData, "eddDate") &&
+      updateData.eddDate !== (existing?.eddDate ?? "")
+    ) {
+      payload.eddDateUpdatedAt = new Date();
+    }
+    // ── end new block ──
 
     if (shopValue) {
       updated = await prisma.orderLineItemOperationalData.upsert({
         where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
-        update: updateData,
-        create: { shop: shopValue, orderId, variantId, ...updateData },
+        update: payload,
+        create: { shop: shopValue, orderId, variantId, ...payload },
+      });
+    } else if (existing) {
+      updated = await prisma.orderLineItemOperationalData.update({
+        where: { id: existing.id },
+        data: payload,
       });
     } else {
-      const existing = await prisma.orderLineItemOperationalData.findFirst({
-        where: { orderId, variantId },
+      updated = await prisma.orderLineItemOperationalData.create({
+        data: { shop: shopValue, orderId, variantId, ...payload },
       });
-
-      if (existing) {
-        updated = await prisma.orderLineItemOperationalData.update({
-          where: { id: existing.id },
-          data: updateData,
-        });
-      } else {
-        updated = await prisma.orderLineItemOperationalData.create({
-          data: { shop: shopValue, orderId, variantId, ...updateData },
-        });
-      }
     }
 
     // Fallback: if the client didn't send a shop, use whatever ended up on the saved record

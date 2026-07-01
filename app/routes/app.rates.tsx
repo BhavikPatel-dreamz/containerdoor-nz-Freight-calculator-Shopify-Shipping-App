@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState, useEffect } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
@@ -291,7 +292,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
         }
       `}</style>
 
-      {actionData?.message ? (
+      {actionData && "message" in actionData ? (
         <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
       ) : null}
 

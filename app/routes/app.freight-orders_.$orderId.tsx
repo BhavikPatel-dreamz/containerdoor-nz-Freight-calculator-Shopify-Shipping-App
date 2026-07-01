@@ -83,21 +83,31 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
   for (const variantId of variantIds) {
     const get = (field: string) => String(formData.get(`${field}__${variantId}`) ?? "");
+    const newEdd = get("eddDate");
+    const existingRecord = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    });
+
     const data = {
-      productTitle:     get("productTitle"), 
-      carrier:          get("carrier"),
-      customerStatus:   get("customerStatus"),
-      warehouseStatus:  get("warehouseStatus"),
-      dispatchStatus:   get("dispatchStatus"),
-      deliveryStatus:   get("deliveryStatus"),
-      trackingNumber:   get("trackingNumber"),
-      eddDate:          get("eddDate"),
-      depositPaid:      get("depositPaid"),
-      balanceDue:       get("balanceDue"),
-      notes:            get("notes"),
+      productTitle:      get("productTitle"),
+      carrier:           get("carrier"),
+      customerStatus:    get("customerStatus"),
+      warehouseStatus:   get("warehouseStatus"),
+      dispatchStatus:    get("dispatchStatus"),
+      deliveryStatus:    get("deliveryStatus"),
+      trackingNumber:    get("trackingNumber"),
+      eddDate:           newEdd,
+      originalEddDate:   existingRecord?.originalEddDate
+        ? existingRecord.originalEddDate
+        : existingRecord?.eddDate
+          ? existingRecord.eddDate
+          : newEdd,
+      depositPaid:       get("depositPaid"),
+      balanceDue:        get("balanceDue"),
+      notes:             get("notes"),
       supplierContainer: get("supplierContainer"),
-      portArrivalDate:  get("portArrivalDate"),
-      inTransitDate:    get("inTransitDate"),
+      portArrivalDate:   get("portArrivalDate"),
+      inTransitDate:     get("inTransitDate"),
     };
 
     await prisma.orderLineItemOperationalData.upsert({
