@@ -36,7 +36,6 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
-  base: "https://containerdoor-nz-freight-calculator.vercel.app/", 
   server: {
     allowedHosts: [host],
     cors: {
@@ -50,7 +49,13 @@ export default defineConfig({
     },
   },
   plugins: [
-    reactRouter(),
+    reactRouter({
+      routeDiscovery: {
+        manifestPath: process.env.SHOPIFY_APP_URL
+          ? new URL(process.env.SHOPIFY_APP_URL).origin + "/__manifest"
+          : "/__manifest",
+      },
+    }),
     tsconfigPaths(),
   ],
   build: {
