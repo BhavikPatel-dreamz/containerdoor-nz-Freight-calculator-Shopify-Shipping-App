@@ -199,18 +199,18 @@ async function getFreightPackages(
     const explicitBoxes = positiveInt(metafields.number_of_boxes || properties.number_of_boxes);
     const boxes = Math.max(explicitBoxes || Math.ceil(quantity / unitsPerBox), 1);
     const lengthRaw = metafields.box_length_cm || properties.box_length_cm || "";
-const widthRaw  = metafields.box_width_cm  || properties.box_width_cm  || "";
-const heightRaw = metafields.box_height_cm || properties.box_height_cm || "";
-const weightRaw = metafields.weight_grams  || properties.weight_grams  || "";
+    const widthRaw = metafields.box_width_cm || properties.box_width_cm || "";
+    const heightRaw = metafields.box_height_cm || properties.box_height_cm || "";
+    const weightRaw = metafields.weight_grams || properties.weight_grams || "";
 
-const lengths = lengthRaw.split(",").map((v) => positiveNumber(v.trim()));
-const widths  = widthRaw.split(",").map((v) => positiveNumber(v.trim()));
-const heights = heightRaw.split(",").map((v) => positiveNumber(v.trim()));
-const weights = weightRaw.split(",").map((v) => positiveInt(v.trim()));
+    const lengths = lengthRaw.split(",").map((v) => positiveNumber(v.trim()));
+    const widths = widthRaw.split(",").map((v) => positiveNumber(v.trim()));
+    const heights = heightRaw.split(",").map((v) => positiveNumber(v.trim()));
+    const weights = weightRaw.split(",").map((v) => positiveInt(v.trim()));
 
-const boxCount = Math.max(lengths.length, widths.length, heights.length, 1);
-let volumeCm3 = 0;
-let multiBoxWeightGrams = 0;
+    const boxCount = Math.max(lengths.length, widths.length, heights.length, 1);
+    let volumeCm3 = 0;
+    let multiBoxWeightGrams = 0;
 
 for (let i = 0; i < boxCount; i++) {
   const l = lengths[i] ?? 0;

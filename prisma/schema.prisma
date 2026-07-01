@@ -120,14 +120,19 @@ model OrderLineItemOperationalData {
   productTitle      String   @default("")   
   carrier           String   @default("")
   customerStatus    String   @default("")
+  customerStatusUpdatedAt DateTime?   // NEW
   warehouseStatus   String   @default("")
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
   eddDate           String   @default("")
+  eddDateUpdatedAt        DateTime?   // NEW
+  originalEddDate   String   @default("")
+  mondayItemId      String   @default("")
   depositPaid       String   @default("")
   balanceDue        String   @default("")
   notes             String   @default("")
+  notesPushedCount  Int      @default(0)  
   supplierContainer String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
@@ -136,6 +141,32 @@ model OrderLineItemOperationalData {
   updatedAt         DateTime @updatedAt
 
   @@unique([shop, orderId, variantId])
+}
+
+model ExternalUser {
+  id            String            @id @default(cuid())
+  shop          String
+  name          String
+  email         String
+  passwordHash  String            @default("")
+  isActive      Boolean           @default(false)
+  inviteToken   String?           @unique
+  inviteExpires DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  sessions      ExternalSession[]
+
+  @@unique([shop, email])
+}
+
+model ExternalSession {
+  id        String       @id @default(cuid())
+  userId    String
+  token     String       @unique
+  expiresAt DateTime
+  createdAt DateTime     @default(now())
+
+  user ExternalUser @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 enum CostType {
