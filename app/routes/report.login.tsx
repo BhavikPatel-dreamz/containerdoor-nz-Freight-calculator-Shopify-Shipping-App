@@ -46,7 +46,7 @@ export default function ReportLoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/report-auth", {
+      const res = await fetch("/apps/submit/api/report-auth", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, shop }),
