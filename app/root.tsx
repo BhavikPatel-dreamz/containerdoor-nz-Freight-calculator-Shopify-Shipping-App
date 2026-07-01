@@ -1,4 +1,5 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
+const noJs = location.pathname === "/report/login"; 
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
       <body>
         <Outlet />
         <ScrollRestoration />
+         {!noJs && <Scripts />}
         <Scripts />
       </body>
     </html>
