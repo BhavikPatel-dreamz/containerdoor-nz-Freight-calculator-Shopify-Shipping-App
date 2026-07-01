@@ -112,7 +112,7 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
   const initials = (user.name ?? user.email ?? "U").split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
 
   const handleLogout = async () => {
-    await fetch("/api/report-auth?intent=logout", { method: "POST" });
+    await fetch("/apps/submit/api/report-auth?intent=logout", { method: "POST" });
     window.location.href = "/apps/submit/report/login";
   };
 
