@@ -3,10 +3,18 @@ import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { getReportUser } from "../lib/report-auth.server";
 
+function getReportBasePath(pathname: string) {
+  const cleanPath = pathname.replace(/\/+$/, "");
+  if (cleanPath.endsWith("/report/login")) return cleanPath.replace(/\/report\/login$/, "");
+  if (cleanPath.endsWith("/report/dashboard")) return cleanPath.replace(/\/report\/dashboard$/, "");
+  return cleanPath;
+}
+
 // ── Loader: redirect to dashboard if already logged in ────────────────────────
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await getReportUser(request);
-  if (user) throw redirect("/apps/submit/report/dashboard");
+  const basePath = getReportBasePath(new URL(request.url).pathname);
+  if (user) throw redirect(`${basePath}/report/dashboard`);
   return null;
 }
 
@@ -46,15 +54,17 @@ export default function ReportLoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("/apps/submit/api/report-auth", {
+      const basePath = getReportBasePath(window.location.pathname);
+      const res = await fetch(`${basePath}/api/report-auth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, shop }),
         redirect: "follow",
       });
 
-      if (res.redirected) {
-        window.location.href = res.url;
+      if (res.redirected || res.ok) {
+        const basePath = getReportBasePath(window.location.pathname);
+        window.location.href = `${basePath}/report/dashboard`;
         return;
       }
 
