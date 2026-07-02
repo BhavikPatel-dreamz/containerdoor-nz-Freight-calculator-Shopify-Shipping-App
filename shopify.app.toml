@@ -34,5 +34,5 @@ redirect_urls = [
 
 [app_proxy]
 url = "https://containerdoor-nz-freight-calculator.vercel.app"
-subpath = "submit"       
+subpath = "report"       
 prefix = "apps"

@@ -70,5 +70,5 @@ export async function action({ request }: ActionFunctionArgs) {
     data: { userId: user.id, token, expiresAt },
   });
 
-  return createReportSession(token, "/apps/submit/report/dashboard");
+  return createReportSession(request, token);
 }

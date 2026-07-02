@@ -15,6 +15,16 @@ const sessionStorage = createCookieSessionStorage({
 
 const SESSION_TOKEN_KEY = "reportToken";
 
+// Single source of truth for the mount path — works whether hit directly
+// (local tunnel: /report/login) or via the Shopify app proxy
+// (production: /apps/submit/report/login).
+export function getReportBasePath(pathname: string) {
+  const cleanPath = pathname.replace(/\/+$/, "");
+  if (cleanPath.endsWith("/login")) return cleanPath.replace(/\/login$/, "");
+  if (cleanPath.endsWith("/dashboard")) return cleanPath.replace(/\/dashboard$/, "");
+  return cleanPath;
+}
+
 export async function getReportSession(request: Request) {
   return sessionStorage.getSession(request.headers.get("Cookie"));
 }
@@ -41,22 +51,25 @@ export async function getReportUser(request: Request) {
 export async function requireReportUser(request: Request) {
   const user = await getReportUser(request);
   if (!user) {
-    throw redirect("/apps/submit/report/login");
+    const basePath = getReportBasePath(new URL(request.url).pathname);
+    throw redirect(`${basePath}/login`);
   }
   return user;
 }
 
-export async function createReportSession(token: string, redirectTo: string) {
+export async function createReportSession(request: Request, token: string) {
   const session = await sessionStorage.getSession();
   session.set(SESSION_TOKEN_KEY, token);
-  return redirect(redirectTo, {
+  const basePath = getReportBasePath(new URL(request.url).pathname);
+  return redirect(`${basePath}/dashboard`, {
     headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
   });
 }
 
 export async function destroyReportSession(request: Request) {
   const session = await getReportSession(request);
-  return redirect("/apps/submit/report/login", {
+  const basePath = getReportBasePath(new URL(request.url).pathname);
+  return redirect(`${basePath}/login`, {
     headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
   });
 }
