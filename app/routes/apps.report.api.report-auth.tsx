@@ -9,6 +9,7 @@ function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
   return {
     "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Credentials": origin ? "true" : "false",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
     ...(origin ? { Vary: "Origin" } : {}),
