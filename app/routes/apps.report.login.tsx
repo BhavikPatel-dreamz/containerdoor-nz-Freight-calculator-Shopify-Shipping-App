@@ -61,33 +61,39 @@ export default function ReportLoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, shop }),
-        redirect: "manual",
         credentials: "include",
       });
 
-      // Handle successful login (302 redirect)
-      if (res.status === 302 || res.status === 303) {
-        const location = res.headers.get("Location");
-        if (location) {
-          // Use replace to prevent back button returning to login
-          window.location.replace(location);
+      if (res.ok) {
+        try {
+          const json = await res.json();
+          const location = (json as { redirectTo?: string }).redirectTo;
+          if (location) {
+            try {
+              if (typeof window !== "undefined" && window.top && window.top !== window.self) {
+                window.top.location.replace(location);
+              } else {
+                window.location.replace(location);
+              }
+            } catch {
+              window.location.replace(location);
+            }
+            return;
+          }
+        } catch {
+          const base = getReportBasePath(window.location.pathname);
+          window.location.replace(`${base}/dashboard`);
           return;
         }
       }
 
-      // Handle authentication failure (401/400)
-      if (!res.ok) {
-        try {
-          const json = await res.json();
-          setError((json as { error?: string }).error ?? "Login failed. Please try again.");
-        } catch {
-          setError("Login failed. Please try again.");
-        }
-        return;
+      // Handle authentication failure (401/400) and other non-ok responses
+      try {
+        const json = await res.json();
+        setError((json as { error?: string }).error ?? "Login failed. Please try again.");
+      } catch {
+        setError("Login failed. Please try again.");
       }
-
-      // Unexpected response
-      setError("Unexpected response. Please try again.");
     } catch (err) {
       setError("Network error. Please try again.");
     } finally {
