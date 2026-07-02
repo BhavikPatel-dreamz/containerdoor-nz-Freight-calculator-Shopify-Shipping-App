@@ -4,7 +4,6 @@ export default function App() {
   return (
     <html lang="en">
       <head>
-        <base href="https://containerdoor-nz-freight-calculator.vercel.app/" />
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
         <link rel="preconnect" href="https://cdn.shopify.com/" />
