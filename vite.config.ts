@@ -43,19 +43,14 @@ export default defineConfig({
     },
     port: Number(process.env.PORT || 3000),
     hmr: hmrConfig,
+    origin: host === "localhost" ? undefined : `https://${host}`,
     fs: {
       // See https://vitejs.dev/config/server-options.html#server-fs-allow for more information
       allow: ["app", "node_modules"],
     },
   },
   plugins: [
-    reactRouter({
-      routeDiscovery: {
-        manifestPath: process.env.SHOPIFY_APP_URL
-          ? new URL(process.env.SHOPIFY_APP_URL).origin + "/__manifest"
-          : "/__manifest",
-      },
-    }),
+    reactRouter(),
     tsconfigPaths(),
   ],
   build: {

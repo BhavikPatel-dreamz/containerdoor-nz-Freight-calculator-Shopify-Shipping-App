@@ -21,20 +21,22 @@ const PAGE_SIZE = 25;
 const FREIGHT_SERVICE_PREFIXES = ["standard_delivery::", "depot_delivery::", "customer_pickup::"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
+// ─── Loader ───────────────────────────────────────────────────────────────────
+
+
+// Local copy — client code (UserMenu below) can't import from a .server.ts file.
 function getReportBasePath(pathname: string) {
   const cleanPath = pathname.replace(/\/+$/, "");
-  if (cleanPath.endsWith("/report/login")) return cleanPath.replace(/\/report\/login$/, "");
-  if (cleanPath.endsWith("/report/dashboard")) return cleanPath.replace(/\/report\/dashboard$/, "");
+  if (cleanPath.endsWith("/login")) return cleanPath.replace(/\/login$/, "");
+  if (cleanPath.endsWith("/dashboard")) return cleanPath.replace(/\/dashboard$/, "");
   return cleanPath;
 }
-
-// ─── Loader ───────────────────────────────────────────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await getReportUser(request);
   if (!user) {
     const basePath = getReportBasePath(new URL(request.url).pathname);
-    throw redirect(`${basePath}/report/login`);
+    throw redirect(`${basePath}/login`);
   }
 
   const url = new URL(request.url);
@@ -123,10 +125,10 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
   const [open, setOpen] = useState(false);
   const initials = (user.name ?? user.email ?? "U").split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
 
-  const handleLogout = async () => {
+ const handleLogout = async () => {
     const basePath = getReportBasePath(window.location.pathname);
     await fetch(`${basePath}/api/report-auth?intent=logout`, { method: "POST" });
-    window.location.href = `${basePath}/report/login`;
+    window.location.href = `${basePath}/login`;
   };
 
   // Close on outside click

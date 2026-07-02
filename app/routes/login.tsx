@@ -3,10 +3,12 @@ import { redirect } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { getReportUser } from "../lib/report-auth.server";
 
+
+// Local copy — client code (handleSubmit below) can't import from a .server.ts file.
 function getReportBasePath(pathname: string) {
   const cleanPath = pathname.replace(/\/+$/, "");
-  if (cleanPath.endsWith("/report/login")) return cleanPath.replace(/\/report\/login$/, "");
-  if (cleanPath.endsWith("/report/dashboard")) return cleanPath.replace(/\/report\/dashboard$/, "");
+  if (cleanPath.endsWith("/login")) return cleanPath.replace(/\/login$/, "");
+  if (cleanPath.endsWith("/dashboard")) return cleanPath.replace(/\/dashboard$/, "");
   return cleanPath;
 }
 
@@ -14,7 +16,7 @@ function getReportBasePath(pathname: string) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await getReportUser(request);
   const basePath = getReportBasePath(new URL(request.url).pathname);
-  if (user) throw redirect(`${basePath}/report/dashboard`);
+  if (user) throw redirect(`${basePath}/dashboard`);
   return null;
 }
 
@@ -64,10 +66,10 @@ export default function ReportLoginPage() {
 
       if (res.redirected || res.ok) {
         const basePath = getReportBasePath(window.location.pathname);
-        window.location.href = `${basePath}/report/dashboard`;
+        window.location.href = `${basePath}/dashboard`;
         return;
       }
-
+      
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         setError((json as { error?: string }).error ?? "Login failed. Please try again.");
