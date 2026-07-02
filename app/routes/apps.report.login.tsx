@@ -61,16 +61,18 @@ export default function ReportLoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, shop }),
-        redirect: "follow",
+        redirect: "manual",
         credentials: "include",
       });
 
-      if (res.ok) {
-        const basePath = getReportBasePath(window.location.pathname);
-        window.location.href = `${basePath}/dashboard`;
-        return;
+      if (res.status === 302) {
+        const location = res.headers.get("Location");
+        if (location) {
+          window.location.href = location;
+          return;
+        }
       }
-      
+
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         setError((json as { error?: string }).error ?? "Login failed. Please try again.");
