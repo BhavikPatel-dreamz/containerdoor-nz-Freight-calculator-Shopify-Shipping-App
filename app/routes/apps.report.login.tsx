@@ -47,7 +47,7 @@ export default function ReportLoginPage() {
   }
 
   const t = setTimeout(() => setMounted(true), 50);
-  return () => clearTimeout(t);
+  return () => clearTimeout(t); 
 }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
