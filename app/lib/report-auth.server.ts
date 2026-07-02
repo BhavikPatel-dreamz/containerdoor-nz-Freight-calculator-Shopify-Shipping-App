@@ -15,11 +15,21 @@ const sessionStorage = createCookieSessionStorage({
 
 const SESSION_TOKEN_KEY = "reportToken";
 
-function withCorsHeaders(response: Response) {
+function withCorsHeaders(response: Response, request?: Request) {
   const headers = new Headers(response.headers);
-  headers.set("Access-Control-Allow-Origin", "*");
+  const origin = request?.headers.get("Origin");
+
+  if (origin) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Credentials", "true");
+    headers.set("Vary", "Origin");
+  } else {
+    headers.set("Access-Control-Allow-Origin", "*");
+  }
+
   headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control");
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -84,7 +94,8 @@ export async function createReportSession(request: Request, token: string) {
   return withCorsHeaders(
     redirect(`${basePath}/dashboard`, {
       headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
-    })
+    }),
+    request
   );
 }
 
@@ -94,6 +105,7 @@ export async function destroyReportSession(request: Request) {
   return withCorsHeaders(
     redirect(`${basePath}/login`, {
       headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
-    })
+    }),
+    request
   );
 }
