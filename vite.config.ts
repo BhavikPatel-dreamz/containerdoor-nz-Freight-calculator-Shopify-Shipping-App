@@ -15,11 +15,8 @@ if (
   delete process.env.HOST;
 }
 
-const appOrigin = (process.env.SHOPIFY_APP_URL || "http://localhost")
-  .trim()
-  .replace(/\/+$/, ""); // strip trailing slash(es) so we don't get //assets
-const host = new URL(appOrigin).hostname;
-
+const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
+  .hostname;
 
 let hmrConfig;
 if (host === "localhost") {
@@ -39,15 +36,16 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
-  base: host === "localhost" ? "/" : `${appOrigin}/`,
   server: {
-    allowedHosts: [host],
-    cors: {
-      preflightContinue: true,
+    allowedHosts: true,        // ← changed from [host] to true
+    cors: true,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",   // ← added POST
+      "Access-Control-Allow-Headers": "Origin, Content-Type, Accept",
     },
     port: Number(process.env.PORT || 3000),
     hmr: hmrConfig,
-    origin: host === "localhost" ? undefined : `https://${host}`,
     fs: {
       // See https://vitejs.dev/config/server-options.html#server-fs-allow for more information
       allow: ["app", "node_modules"],

@@ -20,9 +20,17 @@ const SESSION_TOKEN_KEY = "reportToken";
 // (production: /apps/submit/report/login).
 export function getReportBasePath(pathname: string) {
   const cleanPath = pathname.replace(/\/+$/, "");
-  if (cleanPath.endsWith("/login")) return cleanPath.replace(/\/login$/, "");
-  if (cleanPath.endsWith("/dashboard")) return cleanPath.replace(/\/dashboard$/, "");
-  return cleanPath;
+  const trimmedPath = cleanPath.replace(/\/api\/report-auth$/, "");
+
+  if (trimmedPath.endsWith("/login")) return trimmedPath.replace(/\/login$/, "");
+  if (trimmedPath.endsWith("/dashboard")) return trimmedPath.replace(/\/dashboard$/, "");
+  return trimmedPath;
+}
+
+function getRequestBasePath(request: Request) {
+  const referer = request.headers.get("Referer");
+  const pathname = referer ? new URL(referer).pathname : new URL(request.url).pathname;
+  return getReportBasePath(pathname);
 }
 
 export async function getReportSession(request: Request) {
@@ -60,7 +68,7 @@ export async function requireReportUser(request: Request) {
 export async function createReportSession(request: Request, token: string) {
   const session = await sessionStorage.getSession();
   session.set(SESSION_TOKEN_KEY, token);
-  const basePath = getReportBasePath(new URL(request.url).pathname);
+  const basePath = getRequestBasePath(request);
   return redirect(`${basePath}/dashboard`, {
     headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
   });
@@ -68,7 +76,7 @@ export async function createReportSession(request: Request, token: string) {
 
 export async function destroyReportSession(request: Request) {
   const session = await getReportSession(request);
-  const basePath = getReportBasePath(new URL(request.url).pathname);
+  const basePath = getRequestBasePath(request);
   return redirect(`${basePath}/login`, {
     headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
   });
