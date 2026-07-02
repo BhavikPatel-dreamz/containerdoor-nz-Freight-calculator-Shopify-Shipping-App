@@ -15,14 +15,8 @@ if (
   delete process.env.HOST;
 }
 
-const appUrl = process.env.SHOPIFY_APP_URL
-  ? new URL(process.env.SHOPIFY_APP_URL).origin
-  : process.env.VERCEL_URL
-  ? `https://${process.env.VERCEL_URL}`
-  : process.env.URL
-  ? new URL(process.env.URL).origin
-  : "https://containerdoor-nz-freight-calculator.vercel.app";
-const host = new URL(appUrl).hostname;
+const host = new URL(process.env.SHOPIFY_APP_URL || "http://localhost")
+  .hostname;
 
 let hmrConfig;
 if (host === "localhost") {
@@ -42,7 +36,6 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
-  base: appUrl + "/",
   server: {
     allowedHosts: [host],
     cors: {
@@ -56,7 +49,13 @@ export default defineConfig({
     },
   },
   plugins: [
-    reactRouter(),
+    reactRouter({
+      routeDiscovery: {
+        manifestPath: process.env.SHOPIFY_APP_URL
+          ? new URL(process.env.SHOPIFY_APP_URL).origin + "/__manifest"
+          : "/__manifest",
+      },
+    }),
     tsconfigPaths(),
   ],
   build: {
