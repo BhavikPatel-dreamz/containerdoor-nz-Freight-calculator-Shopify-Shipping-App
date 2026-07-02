@@ -8,6 +8,15 @@ import { addDocumentResponseHeaders } from "./shopify.server";
 
 export const streamTimeout = 5000;
 
+function normalizeShopifyProxyUrl(request: Request) {
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/apps/submit")) {
+    url.pathname = url.pathname.replace(/^\/apps\/submit/, "") || "/";
+    return url.toString();
+  }
+  return request.url;
+}
+
 export default async function handleRequest(
   request: Request,
   responseStatusCode: number,
@@ -20,11 +29,13 @@ export default async function handleRequest(
     ? "onAllReady"
     : "onShellReady";
 
+  const routerUrl = normalizeShopifyProxyUrl(request);
+
   return new Promise((resolve, reject) => {
     const { pipe, abort } = renderToPipeableStream(
       <ServerRouter
         context={reactRouterContext}
-        url={request.url}
+        url={routerUrl}
       />,
       {
         [callbackName]: () => {
