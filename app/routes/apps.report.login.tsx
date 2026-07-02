@@ -61,11 +61,11 @@ export default function ReportLoginPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password, shop }),
-        redirect: "manual",
+        redirect: "follow",
         credentials: "include",
       });
 
-      if (res.ok || (res.status >= 300 && res.status < 400)) {
+      if (res.ok) {
         const basePath = getReportBasePath(window.location.pathname);
         window.location.href = `${basePath}/dashboard`;
         return;
