@@ -15,8 +15,11 @@ if (
   delete process.env.HOST;
 }
 
-const appOrigin = process.env.SHOPIFY_APP_URL || "http://localhost";
+const appOrigin = (process.env.SHOPIFY_APP_URL || "http://localhost")
+  .trim()
+  .replace(/\/+$/, ""); // strip trailing slash(es) so we don't get //assets
 const host = new URL(appOrigin).hostname;
+
 
 let hmrConfig;
 if (host === "localhost") {
@@ -36,7 +39,7 @@ if (host === "localhost") {
 }
 
 export default defineConfig({
-   base: host === "localhost" ? "/" : `${appOrigin}/`,
+  base: host === "localhost" ? "/" : `${appOrigin}/`,
   server: {
     allowedHosts: [host],
     cors: {
