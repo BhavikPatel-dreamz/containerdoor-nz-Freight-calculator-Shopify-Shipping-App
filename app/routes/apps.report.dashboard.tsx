@@ -131,7 +131,6 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
     window.location.href = `${basePath}/login`;
   };
 
-  // Close on outside click
   useEffect(() => {
     if (!open) return;
     const close = () => setOpen(false);
