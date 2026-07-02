@@ -22,6 +22,7 @@ function withCorsHeaders(response: Response, request?: Request) {
   if (origin) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Access-Control-Allow-Credentials", "true");
+    headers.set("Access-Control-Expose-Headers", "Location");
     headers.set("Vary", "Origin");
   } else {
     headers.set("Access-Control-Allow-Origin", "*");

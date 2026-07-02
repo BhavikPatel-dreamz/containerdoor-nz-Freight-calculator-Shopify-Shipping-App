@@ -65,19 +65,30 @@ export default function ReportLoginPage() {
         credentials: "include",
       });
 
-      if (res.status === 302) {
+      // Handle successful login (302 redirect)
+      if (res.status === 302 || res.status === 303) {
         const location = res.headers.get("Location");
         if (location) {
-          window.location.href = location;
+          // Use replace to prevent back button returning to login
+          window.location.replace(location);
           return;
         }
       }
 
+      // Handle authentication failure (401/400)
       if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        setError((json as { error?: string }).error ?? "Login failed. Please try again.");
+        try {
+          const json = await res.json();
+          setError((json as { error?: string }).error ?? "Login failed. Please try again.");
+        } catch {
+          setError("Login failed. Please try again.");
+        }
+        return;
       }
-    } catch {
+
+      // Unexpected response
+      setError("Unexpected response. Please try again.");
+    } catch (err) {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);
