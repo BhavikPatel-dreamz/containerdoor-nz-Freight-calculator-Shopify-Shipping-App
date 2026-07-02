@@ -15,6 +15,18 @@ const sessionStorage = createCookieSessionStorage({
 
 const SESSION_TOKEN_KEY = "reportToken";
 
+function withCorsHeaders(response: Response) {
+  const headers = new Headers(response.headers);
+  headers.set("Access-Control-Allow-Origin", "*");
+  headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 // Single source of truth for the mount path — works whether hit directly
 // (local tunnel: /report/login) or via the Shopify app proxy
 // (production: /apps/submit/report/login).
@@ -69,15 +81,19 @@ export async function createReportSession(request: Request, token: string) {
   const session = await sessionStorage.getSession();
   session.set(SESSION_TOKEN_KEY, token);
   const basePath = getRequestBasePath(request);
-  return redirect(`${basePath}/dashboard`, {
-    headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
-  });
+  return withCorsHeaders(
+    redirect(`${basePath}/dashboard`, {
+      headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
+    })
+  );
 }
 
 export async function destroyReportSession(request: Request) {
   const session = await getReportSession(request);
   const basePath = getRequestBasePath(request);
-  return redirect(`${basePath}/login`, {
-    headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
-  });
+  return withCorsHeaders(
+    redirect(`${basePath}/login`, {
+      headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
+    })
+  );
 }
