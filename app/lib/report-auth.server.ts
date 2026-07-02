@@ -98,18 +98,11 @@ export async function createReportSession(request: Request, token: string) {
   const session = await sessionStorage.getSession();
   session.set(SESSION_TOKEN_KEY, token);
   const basePath = getRequestBasePath(request);
-  const cookie = await sessionStorage.commitSession(session);
-  const payload = { redirectTo: `${basePath}/dashboard` };
-
   return withCorsHeaders(
-    new Response(JSON.stringify(payload), {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Set-Cookie": cookie,
-      },
+    redirect(`${basePath}/dashboard`, {
+      headers: { "Set-Cookie": await sessionStorage.commitSession(session) },
     }),
-    request,
+    request
   );
 }
 
