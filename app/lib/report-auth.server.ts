@@ -51,7 +51,13 @@ export function getReportBasePath(pathname: string) {
 
 function getRequestBasePath(request: Request) {
   const referer = request.headers.get("Referer");
-  const pathname = referer ? new URL(referer).pathname : new URL(request.url).pathname;
+  let pathname = referer ? new URL(referer).pathname : new URL(request.url).pathname;
+  
+  // If referer is from a different origin, it may only have "/" — use request URL instead
+  if (!pathname || pathname === "/" || pathname === "") {
+    pathname = new URL(request.url).pathname;
+  }
+  
   return getReportBasePath(pathname);
 }
 
