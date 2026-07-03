@@ -22,6 +22,14 @@ export const serviceTypes: ServiceType[] = [
   "CUSTOMER_PICKUP",
 ];
 
+export const nzpSectors = [
+  "Local",
+  "Local Town",
+  "One Sector",
+  "Two Sector",
+  "Island To Island (Economy)",
+] as const;
+
 export const carrierModes: CarrierMode[] = ["AIR", "ROAD"];
 
 export const costTypes: CostType[] = ["FIXED", "PERCENTAGE"];

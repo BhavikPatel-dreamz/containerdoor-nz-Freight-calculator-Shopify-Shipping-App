@@ -21,14 +21,6 @@ export default async function handleRequest(
     : "onShellReady";
 
   return new Promise((resolve, reject) => {
-    console.log("===== REQUEST =====");
-console.log("URL:", request.url);
-console.log("Path:", new URL(request.url).pathname);
-console.log("Host:", request.headers.get("host"));
-console.log("X-Forwarded-Host:", request.headers.get("x-forwarded-host"));
-console.log("X-Forwarded-Proto:", request.headers.get("x-forwarded-proto"));
-console.log("X-Forwarded-Prefix:", request.headers.get("x-forwarded-prefix"));
-console.log("===================");
     const { pipe, abort } = renderToPipeableStream(
       <ServerRouter
         context={reactRouterContext}

@@ -14,6 +14,7 @@ import {
   carrierModes,
   companyLabels,
   modeLabels,
+  nzpSectors,
   serviceLabels,
   serviceTypes,
   toMoney,
@@ -390,6 +391,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
                 <th>Company</th>
                 <th>Service</th>
                 <th>City</th>
+                <th>Sector</th>
                 <th>Postal</th>
                 <th>Weight (g)</th>
                 <th>Volume (cm3)</th>
@@ -475,6 +477,20 @@ function InlineRateRow({
       </td>
       <td>
         <input form={`rate-${rate.id}`} name="city" required defaultValue={rate.city} aria-label="City" />
+      </td>
+      <td>
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") ? (
+          <select form={`rate-${rate.id}`} name="sector" defaultValue={rate.sector ?? ""} aria-label="Sector">
+            <option value="">Any</option>
+            {nzpSectors.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ color: "#90a4ae" }}>—</span>
+        )}
       </td>
       <td>
         <input form={`rate-${rate.id}`} name="postalCode" required defaultValue={rate.postalCode} aria-label="Postal code" />
@@ -591,6 +607,12 @@ function InlineRateRow({
 }
 
 function RateForm({ rate }: { rate?: any }) {
+  const [company, setCompany] = useState(rate?.company ?? "FLIWAY");
+
+  useEffect(() => {
+    setCompany(rate?.company ?? "FLIWAY");
+  }, [rate?.company]);
+
   return (
     <Form method="post">
       <input type="hidden" name="intent" value="save" />
@@ -598,7 +620,7 @@ function RateForm({ rate }: { rate?: any }) {
       <div className="grid-form">
         <label>
           Company
-          <select name="company" defaultValue={rate?.company ?? "FLIWAY"}>
+          <select name="company" value={company} onChange={(e) => setCompany(e.target.value)}>
             {carrierCompanies.map((company) => (
               <option key={company} value={company}>
                 {companyLabels[company]}
@@ -620,6 +642,19 @@ function RateForm({ rate }: { rate?: any }) {
           City
           <input name="city" required defaultValue={rate?.city ?? ""} />
         </label>
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") ? (
+          <label>
+            Sector
+            <select name="sector" defaultValue={rate?.sector ?? ""}>
+              <option value="">Any</option>
+              {nzpSectors.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <label>
           Postal code/range
           <input name="postalCode" required defaultValue={rate?.postalCode ?? "*"} />
