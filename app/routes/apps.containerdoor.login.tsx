@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { redirect } from "react-router";
+import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
 import { getReportUser } from "../lib/report-auth.server";
 
@@ -16,7 +16,10 @@ function getReportBasePath(pathname: string) {
 export async function loader({ request }: LoaderFunctionArgs) {
   const user = await getReportUser(request);
   const basePath = getReportBasePath(new URL(request.url).pathname);
-  if (user) throw redirect(`${basePath}/dashboard`);
+  if (user) {
+    const shop = new URL(request.url).searchParams.get("shop") || user.shop;
+    return { redirectTo: shop ? `https://${shop}${basePath}/dashboard` : `${basePath}/dashboard` };
+  }
   return null;
 }
 
@@ -30,7 +33,14 @@ export default function ContainerdoorLoginPage() {
   const [loading, setLoading] = useState(false);
   const [mounted, setMounted] = useState(false);
 
+  const data = useLoaderData() as { redirectTo?: string } | null;
+
   useEffect(() => {
+    if (data?.redirectTo && typeof window !== "undefined") {
+      window.location.replace(data.redirectTo);
+      return;
+    }
+
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
       const shopParam = params.get("shop");
@@ -39,7 +49,7 @@ export default function ContainerdoorLoginPage() {
 
     const t = setTimeout(() => setMounted(true), 50);
     return () => clearTimeout(t);
-  }, []);
+  }, [data]);
 
   const getShopFromSearch = () => {
     if (typeof window === "undefined") return "";
