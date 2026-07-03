@@ -25,6 +25,7 @@ function withCorsHeaders(response: Response, request?: Request) {
   if (origin) {
     headers.set("Access-Control-Allow-Origin", origin);
     headers.set("Vary", "Origin");
+    headers.set("Access-Control-Allow-Credentials", "true");
   } else {
     headers.set("Access-Control-Allow-Origin", "*");
   }
@@ -170,23 +171,23 @@ export async function requireReportUser(request: Request) {
 }
 
 export async function createReportSession(request: Request, token: string) {
-  // console.log("[DEBUG] === createReportSession called ===");
   const basePath = getRequestBasePath(request);
-  // console.log("[DEBUG] basePath from getRequestBasePath:", basePath);
-  
-  // Include token as URL parameter so it can be stored client-side
   const redirectUrl = `${basePath}/dashboard?token=${encodeURIComponent(token)}`;
-  // console.log("[DEBUG] Redirecting to:", redirectUrl);
-  
-  // Return JSON response with redirect URL
-  // Token is passed in URL and will be stored in localStorage by the client
   const payload = { redirectTo: redirectUrl };
-  
+
+  const origin = request.headers.get("Origin");
+  const headers: HeadersInit = {
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Credentials": "true",
+  };
+  if (origin) {
+    headers["Access-Control-Allow-Origin"] = origin;
+    headers["Vary"] = "Origin";
+  }
+
   return new Response(JSON.stringify(payload), {
     status: 200,
-    headers: {
-      "Content-Type": "application/json",
-    },
+    headers,
   });
 }
 
