@@ -221,38 +221,50 @@ async function writeFreightMetafield(
 
 
 async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
-  console.log("[Monday][Webhook] createMondayEntriesForOrder start for order:", order.id, order.name);
+  const orderId = String(order.id);
+  console.log(`[Monday][Webhook][${orderId}] START createMondayEntriesForOrder for order ${order.name}`);
+
   try {
     const { default: prisma } = await import("../db.server");
 
     const freightLine = (order.shipping_lines ?? []).find((s) =>
       FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix)),
     );
-    const breakdown = parseFreightCode(freightLine?.code, order);
-    if (!breakdown || !order.id) {
-      console.log("[Monday][Webhook] No freight breakdown found, skipping. shippingLine:", freightLine);
+
+    if (!freightLine) {
+      console.log(`[Monday][Webhook][${orderId}] SKIP - no freight shipping line found. All shipping_lines:`,
+        JSON.stringify(order.shipping_lines));
       return;
     }
-    console.log("[Monday][Webhook] Freight breakdown:", breakdown);
 
-    const orderId = String(order.id);
+    const breakdown = parseFreightCode(freightLine.code, order);
+    if (!breakdown || !order.id) {
+      console.log(`[Monday][Webhook][${orderId}] SKIP - could not parse freight code:`, freightLine.code);
+      return;
+    }
+    console.log(`[Monday][Webhook][${orderId}] Parsed breakdown, ${breakdown.lineItems.length} line item(s):`,
+      JSON.stringify(breakdown.lineItems));
+
     const customerName = [
       (order as any).shipping_address?.first_name,
       (order as any).shipping_address?.last_name,
     ].filter(Boolean).join(" ") || "—";
     const email = (order as any).email ?? "—";
 
+    let createdCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
     for (const [idx, li] of breakdown.lineItems.entries()) {
       if (!li.variantId) {
-        console.log("[Monday][Webhook] Skipping line item with no variantId:", li);
+        console.log(`[Monday][Webhook][${orderId}] SKIP line item idx=${idx} - no variantId`, li);
+        skippedCount++;
         continue;
       }
 
       const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
       const itemName = `${order.name ?? orderId}${letterSuffix}`;
 
-      // Atomically claim this line item first (create row with a "claiming" marker)
-      // so a concurrent duplicate webhook delivery can't also pass the check below.
       let claimed = false;
       try {
         await prisma.orderLineItemOperationalData.create({
@@ -266,42 +278,71 @@ async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
           },
         });
         claimed = true;
-      } catch {
-        // Row already exists (created by this call earlier, or a concurrent duplicate webhook) — skip.
-        console.log(`[Monday][Webhook] Row already exists for variant ${li.variantId}, skipping (likely duplicate webhook)`);
+        console.log(`[Monday][Webhook][${orderId}] Claimed row for variant ${li.variantId} (item "${itemName}")`);
+      } catch (claimError) {
+        console.log(
+          `[Monday][Webhook][${orderId}] SKIP variant ${li.variantId} - row already exists (duplicate webhook or already processed)`,
+        );
+        skippedCount++;
       }
       if (!claimed) continue;
 
-      console.log(`[Monday][Webhook] Creating Monday item "${itemName}" for variant ${li.variantId}`);
-      const mondayItemId = await createMondayItem(itemName, {
-        customerName,
-        email,
-        carriers: li.company,
-        trackingNumber: "",
-        eddDate: "",
-        originalEddDate: "",
-        productTitle: li.title ?? "",
-        boxes: li.boxes ?? "",
-        customerStatus: "",
-        shop,
-        orderId,
-        variantId: li.variantId,
-        warehouseStatus: "",
-        dispatchStatus: "",
-        deliveryStatus: "",
-        depositPaid: "",
-        balanceDue: "",
-      });
+      // Isolate the Monday API call so DB claim vs Monday create vs DB update failures are distinguishable.
+      let mondayItemId: string;
+      try {
+        console.log(`[Monday][Webhook][${orderId}] Calling createMondayItem for "${itemName}" (variant ${li.variantId})...`);
+        mondayItemId = await createMondayItem(itemName, {
+          customerName,
+          email,
+          carriers: li.company,
+          trackingNumber: "",
+          eddDate: "",
+          originalEddDate: "",
+          productTitle: li.title ?? "",
+          boxes: li.boxes ?? "",
+          customerStatus: "",
+          shop,
+          orderId,
+          variantId: li.variantId,
+          warehouseStatus: "",
+          dispatchStatus: "",
+          deliveryStatus: "",
+          depositPaid: "",
+          balanceDue: "",
+        });
+        console.log(`[Monday][Webhook][${orderId}] SUCCESS - Monday item created, id=${mondayItemId} for variant ${li.variantId}`);
+      } catch (mondayError) {
+        failedCount++;
+        console.error(
+          `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}. Row stays "pending" in DB.`,
+          mondayError,
+        );
+        // Leave the DB row as "pending" so it's visible/queryable later; don't attempt the update below.
+        continue;
+      }
 
-      await prisma.orderLineItemOperationalData.update({
-        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
-        data: { mondayItemId },
-      });
-      console.log(`[Monday][Webhook] Saved mondayItemId ${mondayItemId} to DB for variant ${li.variantId}`);
+      try {
+        await prisma.orderLineItemOperationalData.update({
+          where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+          data: { mondayItemId },
+        });
+        createdCount++;
+        console.log(`[Monday][Webhook][${orderId}] DB updated with mondayItemId=${mondayItemId} for variant ${li.variantId}`);
+      } catch (dbUpdateError) {
+        failedCount++;
+        console.error(
+          `[Monday][Webhook][${orderId}] Monday item WAS created (id=${mondayItemId}) but DB update FAILED for variant ${li.variantId}. ` +
+          `This row will show mondayItemId="pending" even though a Monday item exists — check for orphaned Monday items.`,
+          dbUpdateError,
+        );
+      }
     }
-    console.log("[Monday][Webhook] createMondayEntriesForOrder done for order:", order.id);
+
+    console.log(
+      `[Monday][Webhook][${orderId}] DONE - created=${createdCount}, skipped=${skippedCount}, failed=${failedCount}, total=${breakdown.lineItems.length}`,
+    );
   } catch (error) {
-    console.error("[Monday][Webhook] Failed to create Monday entries for order", error);
+    console.error(`[Monday][Webhook][${orderId}] FATAL ERROR - createMondayEntriesForOrder threw:`, error);
   }
 }
 
