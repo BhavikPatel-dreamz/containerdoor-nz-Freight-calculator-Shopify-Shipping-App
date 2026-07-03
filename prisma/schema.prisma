@@ -63,6 +63,7 @@ model ShippingRate {
   company        CarrierCompany
   serviceType    ServiceType
   city           String
+  sector         String?     
   postalCode     String
   useWeightRange Boolean     @default(false)
   minWeightGrams Int?
