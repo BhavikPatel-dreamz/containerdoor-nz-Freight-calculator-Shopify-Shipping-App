@@ -21,7 +21,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function ReportLoginPage() {
+export default function ContainerdoorLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [shop, setShop] = useState("");
@@ -31,70 +31,63 @@ export default function ReportLoginPage() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-  if (typeof window !== "undefined") {
-    const params = new URLSearchParams(window.location.search);
-    const shopParam = params.get("shop");
-    if (shopParam) setShop(shopParam);
-
-    try {
-      if (window.top && window.top !== window.self) {
-        window.top.location.href = window.location.href;
-        return;
-      }
-    } catch (e) {
-      // cross-origin — already top-level, do nothing
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const shopParam = params.get("shop");
+      if (shopParam) setShop(shopParam);
     }
-  }
 
-  const t = setTimeout(() => setMounted(true), 50);
-  return () => clearTimeout(t); 
-}, []);
+    const t = setTimeout(() => setMounted(true), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  const getShopFromSearch = () => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("shop") ?? "";
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
+    const shopName = getShopFromSearch() || shop;
+
     try {
       const basePath = getReportBasePath(window.location.pathname);
       const res = await fetch(`${basePath}/api/report-auth`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, shop }),
+        body: new URLSearchParams({ email, password, shop: shopName }),
         credentials: "include",
       });
 
       if (res.ok) {
         try {
           const json = await res.json();
-          const location = (json as { redirectTo?: string }).redirectTo;
-          if (location) {
-            try {
-              if (typeof window !== "undefined" && window.top && window.top !== window.self) {
-                window.top.location.replace(location);
-              } else {
-                window.location.replace(location);
-              }
-            } catch {
-              window.location.replace(location);
+          const location = (json as { redirectTo?: string }).redirectTo ?? `${basePath}/dashboard`;
+          const target = shopName ? `https://${shopName}${location}` : location;
+          try {
+            if (typeof window !== "undefined" && window.top && window.top !== window.self) {
+              window.top.location.replace(target);
+            } else {
+              window.location.replace(target);
             }
-            return;
+          } catch {
+            window.location.replace(target);
           }
-        } catch {
-          const base = getReportBasePath(window.location.pathname);
-          window.location.replace(`${base}/dashboard`);
           return;
+        } catch {
+          // fall through to the dashboard fallback below
         }
+
+        const target = shopName ? `https://${shopName}${basePath}/dashboard` : `${basePath}/dashboard`;
+        window.location.replace(target);
+        return;
       }
 
-      // Handle authentication failure (401/400) and other non-ok responses
-      try {
-        const json = await res.json();
-        setError((json as { error?: string }).error ?? "Login failed. Please try again.");
-      } catch {
-        setError("Login failed. Please try again.");
-      }
-    } catch (err) {
+      const json = await res.json().catch(() => ({}));
+      setError((json as { error?: string }).error ?? "Login failed. Please try again.");
+    } catch {
       setError("Network error. Please try again.");
     } finally {
       setLoading(false);

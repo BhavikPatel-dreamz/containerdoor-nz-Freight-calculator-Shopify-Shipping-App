@@ -1,14 +1,17 @@
 import { createCookieSessionStorage, redirect } from "react-router";
 import prisma from "../db.server";
 
+const shopifyAppUrl = process.env.SHOPIFY_APP_URL ?? "http://localhost";
+const secureCookie = shopifyAppUrl.startsWith("https://") || process.env.NODE_ENV === "production";
+
 const sessionStorage = createCookieSessionStorage({
   cookie: {
     name: "__report_session",
     httpOnly: true,
     path: "/",
-    sameSite: "lax",
+    sameSite: "none",
     secrets: [process.env.SESSION_SECRET ?? "report-secret-fallback-32chars!!"],
-    secure: process.env.NODE_ENV === "production",
+    secure: secureCookie,
     maxAge: 60 * 60 * 24 * 7, // 7 days
   },
 });
@@ -21,13 +24,13 @@ function withCorsHeaders(response: Response, request?: Request) {
 
   if (origin) {
     headers.set("Access-Control-Allow-Origin", origin);
-    headers.set("Access-Control-Allow-Credentials", "true");
-    headers.set("Access-Control-Expose-Headers", "Location");
     headers.set("Vary", "Origin");
   } else {
     headers.set("Access-Control-Allow-Origin", "*");
   }
 
+  headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Expose-Headers", "Location");
   headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization, Cache-Control");
 
@@ -39,8 +42,8 @@ function withCorsHeaders(response: Response, request?: Request) {
 }
 
 // Single source of truth for the mount path — works whether hit directly
-// (local tunnel: /report/login) or via the Shopify app proxy
-// (production: /apps/submit/report/login).
+// (local tunnel: /apps/containerdoor/login) or via the Shopify app proxy
+// (production: /apps/containerdoor/login).
 export function getReportBasePath(pathname: string) {
   const cleanPath = pathname.replace(/\/+$/, "");
   const trimmedPath = cleanPath.replace(/\/api\/report-auth$/, "");

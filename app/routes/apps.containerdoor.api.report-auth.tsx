@@ -9,7 +9,7 @@ function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
   return {
     "Access-Control-Allow-Origin": origin ?? "*",
-    "Access-Control-Allow-Credentials": origin ? "true" : "false",
+    "Access-Control-Allow-Credentials": "true",
     "Access-Control-Expose-Headers": "Location",
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
@@ -38,12 +38,18 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   // ── Login ─────────────────────────────────────────────────────────────────
-  const body = await request.json();
-  const { email, password, shop } = body as {
-    email: string;
-    password: string;
-    shop?: string;
-  };
+  let body: Record<string, string | undefined> = {};
+  const contentType = request.headers.get("Content-Type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    body = (await request.json()) as Record<string, string>;
+  } else if (contentType.includes("application/x-www-form-urlencoded")) {
+    body = Object.fromEntries(await request.formData()) as Record<string, string>;
+  } else {
+    body = (await request.json().catch(() => ({}))) as Record<string, string>;
+  }
+
+  const { email, password, shop } = body;
 
   const normalizedEmail = email?.trim().toLowerCase();
   const normalizedShop = shop?.trim();

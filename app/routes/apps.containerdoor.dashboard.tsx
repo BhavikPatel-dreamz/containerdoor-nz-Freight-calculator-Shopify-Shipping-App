@@ -119,7 +119,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
   };
 }
 
-// ─── User Avatar / Logout (report-only UI) ────────────────────────────────────
+// ─── User Avatar / Logout (containerdoor dashboard UI) ────────────────────────
 
 function UserMenu({ user }: { user: { name: string; email: string } }) {
   const [open, setOpen] = useState(false);
@@ -179,17 +179,8 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
-export default function ReportDashboard() {
+export default function ContainerdoorDashboard() {
   const { orders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
-
-  // Break out of iframes (same as before)
-  useEffect(() => {
-    try {
-      if (typeof window !== "undefined" && window.top && window.top !== window.self) {
-        window.top.location.href = window.location.href;
-      }
-    } catch { /* cross-origin — ignore */ }
-  }, []);
 
   const noteAuthor = user?.name ?? user?.email ?? "User";
 
