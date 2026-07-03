@@ -57,10 +57,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // console.log("[DEBUG] Token invalid or expired");
     }
   }
-  
+  // this is for token based dashboard use
+  //   if (!user) {
+  //   const basePath = getReportBasePath(new URL(request.url).pathname);
+  //   throw redirect(`${basePath}/login`);
+  // }
+
+  // TEMPORARY DEV BYPASS — set to false before going live.
+// When true, anyone can view the dashboard without logging in — including in production.
+const SKIP_REPORT_AUTH = true;
+const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your Session table
+
   if (!user) {
-    const basePath = getReportBasePath(new URL(request.url).pathname);
-    throw redirect(`${basePath}/login`);
+    if (SKIP_REPORT_AUTH) {
+      user = {
+        id: "dev-user",
+        shop: DEV_SHOP,
+        name: "Dev User",
+        email: "dev@example.com",
+      } as any;
+    } else {
+      const basePath = getReportBasePath(new URL(request.url).pathname);
+      throw redirect(`${basePath}/login`);
+    }
+  }
+
+  if (!user) {
+    throw new Response("Unauthorized", { status: 401 });
   }
 
   const page = Math.max(Number(url.searchParams.get("page") || "1"), 1);
