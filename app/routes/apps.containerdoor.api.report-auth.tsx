@@ -26,6 +26,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
+  // console.log("[DEBUG] === API action called ===");
+  // console.log("[DEBUG] request.method:", request.method);
+  // console.log("[DEBUG] request.url:", request.url);
+  // console.log("[DEBUG] Headers:");
+  // console.log("[DEBUG]   X-Forwarded-Proto:", request.headers.get("X-Forwarded-Proto"));
+  // console.log("[DEBUG]   X-Forwarded-Host:", request.headers.get("X-Forwarded-Host"));
+  // console.log("[DEBUG]   Referer:", request.headers.get("Referer"));
+  // console.log("[DEBUG]   Host:", request.headers.get("Host"));
+  
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }

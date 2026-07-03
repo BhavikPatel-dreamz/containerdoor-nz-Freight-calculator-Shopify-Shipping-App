@@ -64,8 +64,18 @@ export default function ContainerdoorLoginPage() {
       if (res.ok) {
         try {
           const json = await res.json();
-          const location = (json as { redirectTo?: string }).redirectTo ?? `${basePath}/dashboard`;
-          const target = shopName ? `https://${shopName}${location}` : location;
+          const location = (json as { redirectTo?: string }).redirectTo ?? `${shopName}/dashboard`;
+          
+          // If location is already a full URL (starts with http/https), use it directly
+          // Otherwise, prepend shop domain
+          let target: string;
+          if (location.startsWith("http://") || location.startsWith("https://")) {
+            target = location;
+          } else {
+            target = shopName ? `https://${shopName}${location}` : location;
+          }
+          
+          // console.log("[DEBUG CLIENT] Redirecting to:", target);
           try {
             if (typeof window !== "undefined" && window.top && window.top !== window.self) {
               window.top.location.replace(target);

@@ -33,13 +33,36 @@ function getReportBasePath(pathname: string) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  const user = await getReportUser(request);
+  // Check for token in URL (from redirect after login)
+  const url = new URL(request.url);
+  const tokenFromUrl = url.searchParams.get("token");
+  
+  // console.log("[DEBUG] Dashboard loader - tokenFromUrl:", tokenFromUrl);
+  
+  // First try to get user from session cookie (existing auth)
+  let user = await getReportUser(request);
+  
+  // If no session cookie, check if token is in URL
+  if (!user && tokenFromUrl) {
+    // console.log("[DEBUG] No session cookie, validating token from URL");
+    const extSession = await prisma.externalSession.findUnique({
+      where: { token: tokenFromUrl },
+      include: { user: true },
+    });
+    
+    if (extSession && extSession.expiresAt > new Date()) {
+      user = extSession.user;
+      // console.log("[DEBUG] Token valid, user found:", user.email);
+    } else {
+      // console.log("[DEBUG] Token invalid or expired");
+    }
+  }
+  
   if (!user) {
     const basePath = getReportBasePath(new URL(request.url).pathname);
     throw redirect(`${basePath}/login`);
   }
 
-  const url = new URL(request.url);
   const page = Math.max(Number(url.searchParams.get("page") || "1"), 1);
   const shop = user.shop;
 
