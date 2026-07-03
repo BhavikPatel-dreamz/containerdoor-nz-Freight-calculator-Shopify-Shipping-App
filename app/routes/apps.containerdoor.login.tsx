@@ -21,7 +21,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
-export default function ReportLoginPage() {
+export default function ContainerdoorLoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [shop, setShop] = useState("");
@@ -31,52 +31,62 @@ export default function ReportLoginPage() {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-  if (typeof window !== "undefined") {
-    const params = new URLSearchParams(window.location.search);
-    const shopParam = params.get("shop");
-    if (shopParam) setShop(shopParam);
-
-    try {
-      if (window.top && window.top !== window.self) {
-        window.top.location.href = window.location.href;
-        return;
-      }
-    } catch (e) {
-      // cross-origin — already top-level, do nothing
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const shopParam = params.get("shop");
+      if (shopParam) setShop(shopParam);
     }
-  }
 
-  const t = setTimeout(() => setMounted(true), 50);
-  return () => clearTimeout(t); 
-}, []);
+    const t = setTimeout(() => setMounted(true), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  const getShopFromSearch = () => {
+    if (typeof window === "undefined") return "";
+    return new URLSearchParams(window.location.search).get("shop") ?? "";
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
 
+    const shopName = getShopFromSearch() || shop;
+
     try {
       const basePath = getReportBasePath(window.location.pathname);
       const res = await fetch(`${basePath}/api/report-auth`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password, shop }),
-        redirect: "manual",
+        body: new URLSearchParams({ email, password, shop: shopName }),
         credentials: "include",
       });
 
-      if (res.status === 302) {
-        const location = res.headers.get("Location");
-        if (location) {
-          window.location.href = location;
+      if (res.ok) {
+        try {
+          const json = await res.json();
+          const location = (json as { redirectTo?: string }).redirectTo ?? `${basePath}/dashboard`;
+          const target = shopName ? `https://${shopName}${location}` : location;
+          try {
+            if (typeof window !== "undefined" && window.top && window.top !== window.self) {
+              window.top.location.replace(target);
+            } else {
+              window.location.replace(target);
+            }
+          } catch {
+            window.location.replace(target);
+          }
           return;
+        } catch {
+          // fall through to the dashboard fallback below
         }
+
+        const target = shopName ? `https://${shopName}${basePath}/dashboard` : `${basePath}/dashboard`;
+        window.location.replace(target);
+        return;
       }
 
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        setError((json as { error?: string }).error ?? "Login failed. Please try again.");
-      }
+      const json = await res.json().catch(() => ({}));
+      setError((json as { error?: string }).error ?? "Login failed. Please try again.");
     } catch {
       setError("Network error. Please try again.");
     } finally {
