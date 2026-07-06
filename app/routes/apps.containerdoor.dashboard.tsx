@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
-import { getReportUser } from "../lib/report-auth.server";
+import { getReportUser, storeReportToken } from "../lib/report-auth.server";
 import prisma from "../db.server";
 import { useState, useEffect } from "react";
 import FreightDashboard from "../components/FreightDashboard";
@@ -42,19 +42,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // First try to get user from session cookie (existing auth)
   let user = await getReportUser(request);
   
-  // If no session cookie, check if token is in URL
+  // If no session cookie, check if token is in URL and upgrade it to a secure cookie
   if (!user && tokenFromUrl) {
-    // console.log("[DEBUG] No session cookie, validating token from URL");
     const extSession = await prisma.externalSession.findUnique({
       where: { token: tokenFromUrl },
       include: { user: true },
     });
-    
+
     if (extSession && extSession.expiresAt > new Date()) {
       user = extSession.user;
-      // console.log("[DEBUG] Token valid, user found:", user.email);
-    } else {
-      // console.log("[DEBUG] Token invalid or expired");
+      const { cookieHeader } = await storeReportToken(request, tokenFromUrl);
+      const requestUrl = new URL(request.url);
+      const cleanUrl = new URL(`${requestUrl.origin}${getReportBasePath(requestUrl.pathname)}/dashboard`);
+      for (const [key, value] of url.searchParams.entries()) {
+        if (key !== "token") {
+          cleanUrl.searchParams.set(key, value);
+        }
+      }
+      return redirect(cleanUrl.toString(), {
+        headers: { "Set-Cookie": cookieHeader },
+      });
     }
   }
   // this is for token based dashboard use
