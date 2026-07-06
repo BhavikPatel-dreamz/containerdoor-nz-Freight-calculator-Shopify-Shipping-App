@@ -137,7 +137,7 @@ const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your
   const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
   const paged = freightOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  return { orders: paged, total, page, pageCount, shop, user: { name: user.name, email: user.email } };
+  return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop, user: { name: user.name, email: user.email } };
 }
 
 function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
@@ -233,13 +233,14 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ContainerdoorDashboard() {
-  const { orders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
+  const { orders, allOrders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
 
   const noteAuthor = user?.name ?? user?.email ?? "User";
 
   return (
     <FreightDashboard
       orders={orders as any}
+      allOrders={allOrders as any}
       total={total}
       page={page}
       pageCount={pageCount}

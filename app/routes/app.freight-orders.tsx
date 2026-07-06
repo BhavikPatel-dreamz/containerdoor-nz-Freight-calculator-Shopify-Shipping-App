@@ -60,7 +60,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
   const paged = freightOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  return { orders: paged, total, page, pageCount, shop };
+  return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop };
 }
 
 function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
@@ -98,11 +98,12 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FreightOrdersPage() {
-  const { orders, total, page, pageCount, shop } = useLoaderData<typeof loader>();
+  const { orders, allOrders, total, page, pageCount, shop } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
       orders={orders as any}
+      allOrders={allOrders as any}
       total={total}
       page={page}
       pageCount={pageCount}
