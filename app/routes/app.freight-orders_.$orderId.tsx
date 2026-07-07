@@ -84,6 +84,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
   for (const variantId of variantIds) {
     const get = (field: string) => String(formData.get(`${field}__${variantId}`) ?? "");
     const newEdd = get("eddDate");
+    const newCustomerStatus = get("customerStatus");
     const existingRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
@@ -91,12 +92,14 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const data = {
       productTitle:      get("productTitle"),
       carrier:           get("carrier"),
-      customerStatus:    get("customerStatus"),
+      customerStatus:    newCustomerStatus,
+      customerStatusUpdatedAt: newCustomerStatus ? new Date() : undefined,
       warehouseStatus:   get("warehouseStatus"),
       dispatchStatus:    get("dispatchStatus"),
       deliveryStatus:    get("deliveryStatus"),
       trackingNumber:    get("trackingNumber"),
       eddDate:           newEdd,
+      eddDateUpdatedAt:  newEdd ? new Date() : undefined,
       originalEddDate:   existingRecord?.originalEddDate
         ? existingRecord.originalEddDate
         : existingRecord?.eddDate

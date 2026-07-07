@@ -139,6 +139,34 @@ async function buildColumnValues(row: MondayRow) {
   return values;
 }
 
+export async function findExistingMondayItemId(orderId: string, variantId: string) {
+  if (!orderId || !variantId) return null;
+
+  const colIds = await getOrCreateColumnIds();
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $columnId: ID!, $columnValue: String!) {
+      items_by_column_values(board_id: $boardId, column_id: $columnId, column_value: $columnValue) { id }
+    }`,
+    { boardId: process.env.MONDAY_BOARD_ID, columnId: colIds.orderId, columnValue: orderId }
+  );
+
+  const candidateIds = (data.items_by_column_values ?? []).map((item: any) => item.id).filter(Boolean);
+  if (!candidateIds.length) return null;
+
+  const details = await mondayRequest(
+    `query ($itemIds: [ID!]) {
+      items(ids: $itemIds) { id column_values { id text } }
+    }`,
+    { itemIds: candidateIds }
+  );
+
+  const matched = details.items?.find((item: any) =>
+    item.column_values?.some((column: any) => column.id === colIds.variantId && column.text === String(variantId))
+  );
+
+  return matched?.id ?? null;
+}
+
 export async function createMondayItem(itemName: string, row: MondayRow) {
   console.log("[Monday] createMondayItem called:", itemName, row);
   const columnValues = await buildColumnValues(row);

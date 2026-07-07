@@ -444,6 +444,28 @@ export default function FreightDashboard({
         message: "Failed to sync",
       };
 
+      // Skip API call if no meaningful data to sync
+      const hasChanges = !!(
+        item.trackingNumber?.trim() ||
+        item.eddDate?.trim() ||
+        item.originalEddDate?.trim() ||
+        item.customerStatus?.trim()
+      );
+
+      if (!hasChanges) {
+        updateProgress((prev) => ({
+          ...prev,
+          completed: prev.completed + 1,
+          already: prev.already + 1,
+          entries: [...prev.entries, {
+            ...entry,
+            status: "skipped",
+            message: "No changes to sync",
+          }],
+        }));
+        return;
+      }
+
       try {
         const res = await fetch("/api/monday-sync-create-or-update", {
           method: "POST",
