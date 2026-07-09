@@ -43,7 +43,11 @@ export default function ContainerdoorLoginPage() {
 
   const getShopFromSearch = () => {
     if (typeof window === "undefined") return "";
-    return new URLSearchParams(window.location.search).get("shop") ?? "";
+    const fromQuery = new URLSearchParams(window.location.search).get("shop");
+    if (fromQuery) return fromQuery;
+    const host = window.location.hostname;
+    if (host.endsWith(".myshopify.com")) return host;
+    return "";
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
