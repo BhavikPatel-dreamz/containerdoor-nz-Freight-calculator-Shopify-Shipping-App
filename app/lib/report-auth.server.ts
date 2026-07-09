@@ -180,8 +180,10 @@ export async function storeReportToken(request: Request, token: string) {
   };
 }
 
-export async function createReportSession(request: Request, token: string) {
-  const basePath = getRequestBasePath(request);
+export async function createReportSession(request: Request, token: string, shop?: string) {
+  const basePath = shop
+    ? `https://${shop}/apps/containerdoor`
+    : getRequestBasePath(request);
   const redirectUrl = `${basePath}/dashboard`;
   const payload = { redirectTo: redirectUrl };
 
