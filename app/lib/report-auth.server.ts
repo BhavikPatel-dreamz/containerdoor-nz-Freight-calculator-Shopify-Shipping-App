@@ -205,9 +205,27 @@ export async function createReportSession(request: Request, token: string) {
 }
 
 export async function destroyReportSession(request: Request) {
+  const user = await getReportUser(request);
   const session = await getReportSession(request);
-  const basePath = getRequestBasePath(request);
-  return redirect(`${basePath}/login`, {
-    headers: { "Set-Cookie": await sessionStorage.destroySession(session) },
+  
+  let redirectUrl = "/apps/containerdoor/login";
+  if (user?.shop) {
+    redirectUrl = `https://${user.shop}/apps/containerdoor/login`;
+  }
+  
+  const origin = request.headers.get("Origin");
+  const headers = new Headers({
+    "Content-Type": "application/json",
+    "Access-Control-Allow-Credentials": "true",
+    "Set-Cookie": await sessionStorage.destroySession(session),
+  });
+  if (origin) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Vary", "Origin");
+  }
+  
+  return new Response(JSON.stringify({ redirectTo: redirectUrl }), {
+    status: 200,
+    headers,
   });
 }
