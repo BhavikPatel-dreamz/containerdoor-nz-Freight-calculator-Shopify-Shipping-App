@@ -108,5 +108,5 @@ export async function action({ request }: ActionFunctionArgs) {
     data: { userId: user.id, token, expiresAt },
   });
 
-  return createReportSession(request, token);
+    return createReportSession(request, token, normalizedShop);
 }
