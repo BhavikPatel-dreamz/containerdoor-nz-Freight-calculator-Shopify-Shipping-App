@@ -65,33 +65,33 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
   }
   // this is for token based dashboard use
-  //   if (!user) {
-  //   const basePath = getReportBasePath(new URL(request.url).pathname);
-  //   throw redirect(`${basePath}/login`);
-  // }
+    if (!user) {
+    const basePath = getReportBasePath(new URL(request.url).pathname);
+    throw redirect(`${basePath}/login`);
+  }
 
   // TEMPORARY DEV BYPASS — set to false before going live.
 // When true, anyone can view the dashboard without logging in — including in production.
-const SKIP_REPORT_AUTH = true;
-const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your Session table
+// const SKIP_REPORT_AUTH = true;
+// const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your Session table
 
-  if (!user) {
-    if (SKIP_REPORT_AUTH) {
-      user = {
-        id: "dev-user",
-        shop: DEV_SHOP,
-        name: "Dev User",
-        email: "dev@example.com",
-      } as any;
-    } else {
-      const basePath = getReportBasePath(new URL(request.url).pathname);
-      throw redirect(`${basePath}/login`);
-    }
-  }
+//   if (!user) {
+//     if (SKIP_REPORT_AUTH) {
+//       user = {
+//         id: "dev-user",
+//         shop: DEV_SHOP,
+//         name: "Dev User",
+//         email: "dev@example.com",
+//       } as any;
+//     } else {
+//       const basePath = getReportBasePath(new URL(request.url).pathname);
+//       throw redirect(`${basePath}/login`);
+//     }
+//   }
 
-  if (!user) {
-    throw new Response("Unauthorized", { status: 401 });
-  }
+//   if (!user) {
+//     throw new Response("Unauthorized", { status: 401 });
+//   }
 
   const page = Math.max(Number(url.searchParams.get("page") || "1"), 1);
   const shop = user.shop;
@@ -180,8 +180,20 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
 
  const handleLogout = async () => {
     const basePath = getReportBasePath(window.location.pathname);
-    await fetch(`${basePath}/api/report-auth?intent=logout`, { method: "POST" });
-    window.location.href = `${basePath}/login`;
+    const res = await fetch(`${basePath}/api/report-auth?intent=logout`, { method: "POST", credentials: "include" });
+    if (res.ok) {
+      try {
+        const json = await res.json();
+        const redirectUrl = (json as { redirectTo?: string }).redirectTo;
+        if (redirectUrl) {
+          window.location.href = redirectUrl;
+        } else {
+          window.location.href = `${basePath}/login`;
+        }
+      } catch {
+        window.location.href = `${basePath}/login`;
+      }
+    }
   };
 
   useEffect(() => {

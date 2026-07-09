@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, findExistingMondayItemId } from "../lib/monday.server";
 
 export async function action({ request }: ActionFunctionArgs) {
   const { default: prisma } = await import("../db.server");
@@ -42,25 +42,47 @@ export async function action({ request }: ActionFunctionArgs) {
   let syncStatus: "created" | "already-there" = "already-there";
 
   if (!mondayItemId) {
-    console.log("[Monday][Bulk Sync] No mondayItemId yet, creating new item");
-    mondayItemId = await createMondayItem(itemName, fullRow);
-    await prisma.orderLineItemOperationalData.update({
-      where: { shop_orderId_variantId: { shop, orderId, variantId } },
-      data: { mondayItemId },
-    });
-    console.log("[Monday][Bulk Sync] Created and saved mondayItemId:", mondayItemId);
-    syncStatus = "created";
-  } else {
-    const mondayBefore = await fetchMondayItem(mondayItemId);
+    const resolvedItemId = await findExistingMondayItemId(orderId, variantId);
 
-    if (!mondayBefore) {
-      console.log("[Monday][Bulk Sync] Monday item could not be resolved for existing ID, creating a fresh item instead.");
+    if (resolvedItemId) {
+      mondayItemId = resolvedItemId;
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        data: { mondayItemId },
+      });
+      console.log("[Monday][Bulk Sync] Reused existing Monday item by order/variant:", mondayItemId);
+    } else {
+      console.log("[Monday][Bulk Sync] No mondayItemId yet, creating new item");
       mondayItemId = await createMondayItem(itemName, fullRow);
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
         data: { mondayItemId },
       });
-      console.log("[Monday][Bulk Sync] Recreated Monday item with new mondayItemId:", mondayItemId);
+      console.log("[Monday][Bulk Sync] Created and saved mondayItemId:", mondayItemId);
+      syncStatus = "created";
+    }
+  } else {
+    const mondayBefore = await fetchMondayItem(mondayItemId);
+
+    if (!mondayBefore) {
+      const resolvedItemId = await findExistingMondayItemId(orderId, variantId);
+
+      if (resolvedItemId) {
+        mondayItemId = resolvedItemId;
+        await prisma.orderLineItemOperationalData.update({
+          where: { shop_orderId_variantId: { shop, orderId, variantId } },
+          data: { mondayItemId },
+        });
+        console.log("[Monday][Bulk Sync] Reused existing Monday item after lookup:", mondayItemId);
+      } else {
+        console.log("[Monday][Bulk Sync] Monday item could not be resolved for existing ID, creating a fresh item instead.");
+        mondayItemId = await createMondayItem(itemName, fullRow);
+        await prisma.orderLineItemOperationalData.update({
+          where: { shop_orderId_variantId: { shop, orderId, variantId } },
+          data: { mondayItemId },
+        });
+        console.log("[Monday][Bulk Sync] Recreated Monday item with new mondayItemId:", mondayItemId);
+      }
     } else {
       const mondayStatusAt = mondayBefore.statusChangedAt
         ? new Date(mondayBefore.statusChangedAt).getTime() : 0;
