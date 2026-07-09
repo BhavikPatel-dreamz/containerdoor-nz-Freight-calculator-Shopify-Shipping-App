@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
-import { getReportUser } from "../lib/report-auth.server";
+import { getReportUser, storeReportToken } from "../lib/report-auth.server";
 import prisma from "../db.server";
 import { useState, useEffect } from "react";
 import FreightDashboard from "../components/FreightDashboard";
@@ -42,19 +42,26 @@ export async function loader({ request }: LoaderFunctionArgs) {
   // First try to get user from session cookie (existing auth)
   let user = await getReportUser(request);
   
-  // If no session cookie, check if token is in URL
+  // If no session cookie, check if token is in URL and upgrade it to a secure cookie
   if (!user && tokenFromUrl) {
-    // console.log("[DEBUG] No session cookie, validating token from URL");
     const extSession = await prisma.externalSession.findUnique({
       where: { token: tokenFromUrl },
       include: { user: true },
     });
-    
+
     if (extSession && extSession.expiresAt > new Date()) {
       user = extSession.user;
-      // console.log("[DEBUG] Token valid, user found:", user.email);
-    } else {
-      // console.log("[DEBUG] Token invalid or expired");
+      const { cookieHeader } = await storeReportToken(request, tokenFromUrl);
+      const requestUrl = new URL(request.url);
+      const cleanUrl = new URL(`${requestUrl.origin}${getReportBasePath(requestUrl.pathname)}/dashboard`);
+      for (const [key, value] of url.searchParams.entries()) {
+        if (key !== "token") {
+          cleanUrl.searchParams.set(key, value);
+        }
+      }
+      return redirect(cleanUrl.toString(), {
+        headers: { "Set-Cookie": cookieHeader },
+      });
     }
   }
   // this is for token based dashboard use
@@ -130,7 +137,7 @@ const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your
   const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
   const paged = freightOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  return { orders: paged, total, page, pageCount, shop, user: { name: user.name, email: user.email } };
+  return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop, user: { name: user.name, email: user.email } };
 }
 
 function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
@@ -226,13 +233,14 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function ContainerdoorDashboard() {
-  const { orders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
+  const { orders, allOrders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
 
   const noteAuthor = user?.name ?? user?.email ?? "User";
 
   return (
     <FreightDashboard
       orders={orders as any}
+      allOrders={allOrders as any}
       total={total}
       page={page}
       pageCount={pageCount}

@@ -52,10 +52,29 @@ type NoteItem = {
   isSystem?: boolean;
 };
 
+type SyncProgressEntry = {
+  id: string;
+  label: string;
+  status: "created" | "already-there" | "failed";
+  message: string;
+};
+
+type SyncProgressState = {
+  total: number;
+  completed: number;
+  created: number;
+  already: number;
+  failed: number;
+  entries: SyncProgressEntry[];
+  startedAt: number;
+  estimatedSecondsLeft: number;
+};
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 export type FreightDashboardProps = {
   orders: FreightOrderRow[];
+  allOrders?: FreightOrderRow[];
   total: number;
   page: number;
   pageCount: number;
@@ -82,7 +101,24 @@ function getCustomerStatusStyle(status: string): { bg: string; text: string; lab
   }
 }
 
-// REPLACE WITH:
+function formatSeconds(seconds: number): string {
+  if (seconds <= 0) return "0m";
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+}
+
+function formatRelativeTime(diffMs: number): string {
+  const seconds = Math.max(0, Math.round(diffMs / 1000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 function parseNotesString(raw: string): NoteItem[] {
   const text = String(raw ?? "").trim();
@@ -159,6 +195,7 @@ const IconPlus = () => (
 
 export default function FreightDashboard({
   orders,
+  allOrders,
   total,
   page,
   pageCount,
@@ -167,7 +204,9 @@ export default function FreightDashboard({
   noteAuthor = "SP",
 }: FreightDashboardProps) {
   const [rows, setRows] = useState<FreightOrderRow[]>(orders);
+  const [allRows, setAllRows] = useState<FreightOrderRow[] | null>(allOrders ?? null);
   useEffect(() => setRows(orders), [orders]);
+  useEffect(() => { if (allOrders) setAllRows(allOrders); }, [allOrders]);
 
   const [, setSearchParams] = useSearchParams();
   const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
@@ -182,6 +221,11 @@ export default function FreightDashboard({
   const [notesFetching, setNotesFetching] = useState(false);
   const [isSavingTracking, setIsSavingTracking] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
+  const [syncProgressOpen, setSyncProgressOpen] = useState(false);
+  const [syncNotification, setSyncNotification] = useState<string | null>(null);
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+  const [, setTimeTick] = useState(0);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
@@ -191,6 +235,12 @@ export default function FreightDashboard({
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
   const activeNoteTarget = detailView ?? noteModalTarget;
+
+  useEffect(() => {
+    if (!lastSyncAt) return;
+    const timer = window.setInterval(() => setTimeTick((n) => n + 1), 60000);
+    return () => window.clearInterval(timer);
+  }, [lastSyncAt]);
 
   // ── Fetch notes whenever a modal that shows notes opens ───────────────────
   useEffect(() => {
@@ -350,6 +400,146 @@ export default function FreightDashboard({
     }
   };
 
+  const handleBulkSync = async () => {
+    const syncOrders = allRows ?? rows;
+    const totalItems = syncOrders.reduce((count, order) => count + order.lineItems.length, 0);
+    if (totalItems === 0) return;
+
+    const startAt = Date.now();
+    setSyncProgress({
+      total: totalItems,
+      completed: 0,
+      created: 0,
+      already: 0,
+      failed: 0,
+      entries: [],
+      startedAt: startAt,
+      estimatedSecondsLeft: 0,
+    });
+    setSyncProgressOpen(false);
+    setSyncNotification(null);
+    setIsSyncing(true);
+
+    const updateProgress = (update: (prev: SyncProgressState) => SyncProgressState) => {
+      setSyncProgress((prev) => {
+        if (!prev) return prev;
+        const next = update(prev);
+        const elapsedSeconds = Math.max(1, Math.round((Date.now() - prev.startedAt) / 1000));
+        const remaining = next.completed > 0
+          ? Math.round((elapsedSeconds / next.completed) * (next.total - next.completed))
+          : Math.round((next.total - next.completed) * 2);
+        return { ...next, estimatedSecondsLeft: remaining };
+      });
+    };
+
+    const itemsToSync = syncOrders.flatMap((order) =>
+      order.lineItems.map((item) => ({ order, item }))
+    );
+
+    const processItem = async (order: FreightOrderRow, item: FreightLineItem) => {
+      const entry: SyncProgressEntry = {
+        id: `${order.shopifyOrderId}-${item.variantId}`,
+        label: `${order.shopifyOrderName}${item.letterSuffix}`,
+        status: "failed",
+        message: "Failed to sync",
+      };
+
+      try {
+        const res = await fetch("/api/monday-sync-create-or-update", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop,
+            orderId: order.shopifyOrderId,
+            variantId: item.variantId,
+            itemName: `${order.shopifyOrderName}${item.letterSuffix}`,
+            row: {
+              customerName: order.customerName,
+              email: order.email,
+              carriers: item.company,
+              trackingNumber: item.trackingNumber,
+              eddDate: item.eddDate,
+              originalEddDate: item.originalEddDate,
+              productTitle: item.title ?? "",
+              boxes: item.boxes ?? "",
+              customerStatus: item.customerStatus,
+            },
+          }),
+        });
+
+        if (!res.ok) {
+          updateProgress((prev) => ({
+            ...prev,
+            completed: prev.completed + 1,
+            failed: prev.failed + 1,
+            entries: [...prev.entries, entry],
+          }));
+          return;
+        }
+
+        const json = await res.json();
+        const status = json.syncStatus === "created" ? "created" : "already-there";
+        entry.status = status;
+        entry.message = status === "created" ? "Created in Monday" : "Already in Monday";
+
+        updateProgress((prev) => ({
+          ...prev,
+          completed: prev.completed + 1,
+          created: prev.created + (status === "created" ? 1 : 0),
+          already: prev.already + (status === "already-there" ? 1 : 0),
+          entries: [...prev.entries, entry],
+        }));
+
+        setRows((prevRows = []) => prevRows.map((o: any) => o.id !== order.id ? o : {
+          ...o,
+          lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...json.updated }),
+        }));
+
+        if (allRows) {
+          setAllRows((prev) => prev ? prev.map((o) => o.id !== order.id ? o : {
+            ...o,
+            lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...json.updated }),
+          }) : prev);
+        }
+
+        setDetailView((prev) => prev && prev.order.shopifyOrderId === order.shopifyOrderId && prev.item.variantId === item.variantId
+          ? { ...prev, item: { ...prev.item, ...json.updated } }
+          : prev);
+      } catch (error) {
+        console.error("Monday bulk sync failed", error);
+        updateProgress((prev) => ({
+          ...prev,
+          completed: prev.completed + 1,
+          failed: prev.failed + 1,
+          entries: [...prev.entries, entry],
+        }));
+      }
+    };
+
+    const concurrency = 8;
+    const queue = itemsToSync.slice();
+    const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const job = queue.shift();
+        if (!job) break;
+        await processItem(job.order, job.item);
+      }
+    });
+
+    try {
+      await Promise.all(workers);
+      setLastSyncAt(Date.now());
+      setSyncNotification("Sync completed successfully");
+      setSyncProgressOpen(false);
+      window.setTimeout(() => {
+        setSyncProgress(null);
+        setSyncNotification(null);
+      }, 5500);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleSync = async () => {
     if (!detailView) return;
     setIsSyncing(true);
@@ -454,10 +644,21 @@ export default function FreightDashboard({
                 />
                 {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
               </label>
-              <div className="fo-toolbar-right">
+              <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
                 <select className="fo-status-select">
                   <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
                 </select>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
+                  {lastSyncAt && !isSyncing && (
+                    <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                      Last sync: {formatRelativeTime(Date.now() - lastSyncAt)}
+                    </div>
+                  )}
+                  <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                    {isSyncing ? "Syncing all pages..." : "Sync all pages"}
+                  </button>
+                </div>
                 <button className="fo-tool-btn">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
                   Filter
@@ -468,6 +669,77 @@ export default function FreightDashboard({
                 </button>
               </div>
             </div>
+            {syncNotification ? (
+              <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 700 }}>
+                    {syncNotification}
+                  </span>
+                  <span style={{ fontSize: "12px", color: "#065f46" }}>
+                    {syncProgress ? `${syncProgress.completed} / ${syncProgress.total} line items processed` : ""}
+                  </span>
+                </div>
+              </div>
+            ) : syncProgress && (
+              <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #e5e7eb", borderRadius: "12px", background: "#f8fafc" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
+                  <div>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Monday bulk sync progress</div>
+                    <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
+                      {syncProgress.completed} / {syncProgress.total} line items processed · Created {syncProgress.created} · Already there {syncProgress.already} · Failed {syncProgress.failed}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
+                    <span style={{ fontSize: "12px", color: "#2563eb", fontWeight: 700 }}>Background sync running</span>
+                    <span style={{ fontSize: "11px", color: "#6b7280" }}>
+                      Estimated remaining: {formatSeconds(syncProgress.estimatedSecondsLeft)}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSyncProgressOpen((open) => !open)}
+                    style={{
+                      border: "none",
+                      background: "transparent",
+                      color: "#2563eb",
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      fontSize: "12px",
+                      fontWeight: 700,
+                      padding: "6px 8px",
+                      borderRadius: "8px",
+                    }}
+                  >
+                    {syncProgressOpen ? "Hide details" : "Show details"}
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: syncProgressOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
+                      <polyline points="6 9 12 15 18 9" />
+                    </svg>
+                  </button>
+                </div>
+                <div style={{ marginTop: "12px", minHeight: "8px" }}>
+                  <div style={{ height: "8px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
+                    <div style={{ width: `${Math.round((syncProgress.completed / syncProgress.total) * 100)}%`, height: "100%", background: "#2563eb" }} />
+                  </div>
+                </div>
+                {syncProgressOpen && (
+                  <div style={{ marginTop: "12px", display: "grid", gap: "8px" }}>
+                    {syncProgress.entries.slice(-5).map((entry) => (
+                      <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", fontSize: "12px", color: "#374151" }}>
+                        <span>{entry.label}</span>
+                        <span style={{ color: entry.status === "created" ? "#15803d" : entry.status === "already-there" ? "#1d4ed8" : "#b91c1c", fontWeight: 700 }}>
+                          {entry.message}
+                        </span>
+                      </div>
+                    ))}
+                    {syncProgress.entries.length > 5 && (
+                      <div style={{ fontSize: "11px", color: "#6b7280" }}>Showing last 5 entries</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* ── Detail View ── */}
             {detailView ? (

@@ -170,19 +170,32 @@ export async function requireReportUser(request: Request) {
   return user;
 }
 
+export async function storeReportToken(request: Request, token: string) {
+  const session = await getReportSession(request);
+  session.set(SESSION_TOKEN_KEY, token);
+
+  return {
+    session,
+    cookieHeader: await sessionStorage.commitSession(session),
+  };
+}
+
 export async function createReportSession(request: Request, token: string) {
   const basePath = getRequestBasePath(request);
-  const redirectUrl = `${basePath}/dashboard?token=${encodeURIComponent(token)}`;
+  const redirectUrl = `${basePath}/dashboard`;
   const payload = { redirectTo: redirectUrl };
 
+  const { cookieHeader } = await storeReportToken(request, token);
+
   const origin = request.headers.get("Origin");
-  const headers: HeadersInit = {
+  const headers = new Headers({
     "Content-Type": "application/json",
     "Access-Control-Allow-Credentials": "true",
-  };
+    "Set-Cookie": cookieHeader,
+  });
   if (origin) {
-    headers["Access-Control-Allow-Origin"] = origin;
-    headers["Vary"] = "Origin";
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Vary", "Origin");
   }
 
   return new Response(JSON.stringify(payload), {
