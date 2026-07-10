@@ -1,7 +1,28 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate } from "../lib/monday.server";
 
+function getCorsHeaders(request: Request) {
+  const origin = request.headers.get("origin");
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
+    ...(origin ? { Vary: "Origin" } : {}),
+  };
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
+  return new Response(null, { status: 405, headers: getCorsHeaders(request) });
+}
+
 export async function action({ request }: ActionFunctionArgs) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
   const { default: prisma } = await import("../db.server");
   const { shop, orderId, variantId, itemName, row } = await request.json();
   console.log("[Monday][Sync] Request received:", { shop, orderId, variantId, itemName, row });
@@ -11,7 +32,7 @@ export async function action({ request }: ActionFunctionArgs) {
   });
   if (!existing) {
     console.log("[Monday][Sync] Line item not found in DB, aborting");
-    return Response.json({ error: "Line item not found" }, { status: 404 });
+    return Response.json({ error: "Line item not found" }, { status: 404, headers: getCorsHeaders(request) });
   }
 
   const fullRow = {
@@ -126,5 +147,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Sync] Failed to push notes to Monday updates", e);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated });
+  return Response.json({ ok: true, mondayItemId, updated }, { headers: getCorsHeaders(request) });
 }
