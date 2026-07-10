@@ -1,7 +1,16 @@
 import type { ActionFunctionArgs } from "react-router";
 import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, findExistingMondayItemId } from "../lib/monday.server";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
+};
+
 export async function action({ request }: ActionFunctionArgs) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: CORS_HEADERS });
+  }
   const { default: prisma } = await import("../db.server");
   const { shop, orderId, variantId, itemName, row } = await request.json();
   console.log("[Monday][Bulk Sync] Request received:", { shop, orderId, variantId, itemName, row });
@@ -163,5 +172,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Bulk Sync] Failed to push notes to Monday updates", e);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated, syncStatus });
+  return Response.json({ ok: true, mondayItemId, updated, syncStatus }, { headers: CORS_HEADERS });
 }
