@@ -206,7 +206,6 @@ export async function createReportSession(request: Request, token: string, shop?
   });
 }
 
-
 export async function destroyReportSession(request: Request) {
   const user = await getReportUser(request);
   const session = await getReportSession(request);
