@@ -233,12 +233,6 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
   const parts = (shippingLine.code ?? "").split("::");
   const carriers = parts[1];
   const packageCount = parts[2];
-  // FIX: this must match the admin (freight-orders.tsx) parsing exactly —
-  // the line-items payload is parts[4], NOT everything from parts[3] onward.
-  // Previously this was `parts.slice(3).join("::")`, which glued parts[3]
-  // (a separate field) onto the front of the line-items string and corrupted
-  // it, causing orders/line items to be dropped or mis-parsed here while
-  // showing correctly in the Freight Orders admin tab.
   const lineItemsRaw = parts[4];
   if (!carriers || !lineItemsRaw) return null;
   const numericOrderId = order.id.replace("gid://shopify/Order/", "");
@@ -290,7 +284,6 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
 
 function UserMenu({ user }: { user: { name: string; email: string; shop?: string } }) {
   const [open, setOpen] = useState(false);
-  // Get display name - prefer non-empty name, fall back to email
   const displayName = (user.name ?? "").trim() || (user.email ?? "").trim() || "User";
   const initials = displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
   
@@ -298,8 +291,6 @@ function UserMenu({ user }: { user: { name: string; email: string; shop?: string
 
   const handleLogout = async () => {
     const basePath = getReportBasePath(window.location.pathname);
-    // <base href> in root.tsx rewrites relative fetch URLs to the app
-    // backend. Force the actual page origin explicitly.
     const res = await fetch(`${window.location.origin}${basePath}/api/report-auth?intent=logout`, { method: "POST", credentials: "include" });
     if (res.ok) {
       try {
