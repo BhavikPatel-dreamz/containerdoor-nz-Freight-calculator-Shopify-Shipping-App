@@ -18,6 +18,8 @@ function getCorsHeaders(request: Request) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // CORS preflight — intentionally NOT signature-checked, some browsers'
+  // preflight requests can behave oddly with proxies. The real POST below is checked.
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }
@@ -26,18 +28,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  // console.log("[DEBUG] === API action called ===");
-  // console.log("[DEBUG] request.method:", request.method);
-  // console.log("[DEBUG] request.url:", request.url);
-  // console.log("[DEBUG] Headers:");
-  // console.log("[DEBUG]   X-Forwarded-Proto:", request.headers.get("X-Forwarded-Proto"));
-  // console.log("[DEBUG]   X-Forwarded-Host:", request.headers.get("X-Forwarded-Host"));
-  // console.log("[DEBUG]   Referer:", request.headers.get("Referer"));
-  // console.log("[DEBUG]   Host:", request.headers.get("Host"));
-  
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }
+
+  // Allow auth requests from the login page, including embedded admin access.
+  // A separate App Proxy endpoint is not required for login/logout.
+
   const url = new URL(request.url);
   const intent = url.searchParams.get("intent");
 
@@ -67,12 +64,16 @@ export async function action({ request }: ActionFunctionArgs) {
     return data({ error: "Email and password are required." }, { status: 400, headers: getCorsHeaders(request) });
   }
 
-  // Find user — prefer the current shop if provided, otherwise fall back to any active account.
-  let user = normalizedShop
-    ? await prisma.externalUser.findFirst({
-        where: { shop: normalizedShop, email: normalizedEmail, isActive: true },
-      })
-    : null;
+  // Find user for the requested shop. Avoid falling back to another store's
+  // account when a shop is provided, otherwise the dashboard can show the
+  // wrong user identity and data.
+  let user = null;
+
+  if (normalizedShop) {
+    user = await prisma.externalUser.findFirst({
+      where: { shop: normalizedShop, email: normalizedEmail, isActive: true },
+    });
+  }
 
   if (!user) {
     user = await prisma.externalUser.findFirst({
@@ -81,7 +82,7 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   if (!user || !user.passwordHash) {
-    return data({ error: "Invalid email or password." }, { status: 401, headers: getCorsHeaders(request) });
+    return data({ error: normalizedShop ? "No active account found for this store and email." : "Invalid email or password." }, { status: 401, headers: getCorsHeaders(request) });
   }
 
   const isBcryptHash = /^\$2[aby]\$\d{2}\$/.test(user.passwordHash);
@@ -108,5 +109,5 @@ export async function action({ request }: ActionFunctionArgs) {
     data: { userId: user.id, token, expiresAt },
   });
 
-    return createReportSession(request, token, normalizedShop);
+  return createReportSession(request, token, normalizedShop);
 }
