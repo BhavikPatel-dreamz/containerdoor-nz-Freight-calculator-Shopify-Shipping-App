@@ -9,7 +9,7 @@ const sessionStorage = createCookieSessionStorage({
     name: "__report_session",
     httpOnly: true,
     path: "/",
-    sameSite: "none",
+    sameSite: "lax",
     secrets: [process.env.SESSION_SECRET ?? "report-secret-fallback-32chars!!"],
     secure: secureCookie,
     maxAge: 60 * 60 * 24 * 7, // 7 days
