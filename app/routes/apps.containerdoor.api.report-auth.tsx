@@ -3,7 +3,7 @@ import { data } from "react-router";
 import bcrypt from "bcryptjs";
 import { v4 as uuidv4 } from "uuid";
 import prisma from "../db.server";
-import { createReportSession, destroyReportSession } from "../lib/report-auth.server";
+import { createReportSessionRedirect, destroyReportSession } from "../lib/report-auth.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -108,5 +108,5 @@ export async function action({ request }: ActionFunctionArgs) {
     data: { userId: user.id, token, expiresAt },
   });
 
-    return createReportSession(request, token, normalizedShop);
+    return createReportSessionRedirect(request, token, normalizedShop);
 }
