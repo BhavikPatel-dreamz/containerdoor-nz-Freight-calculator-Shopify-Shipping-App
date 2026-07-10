@@ -53,7 +53,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       user = extSession.user;
       const { cookieHeader } = await storeReportToken(request, tokenFromUrl);
       const requestUrl = new URL(request.url);
-      const cleanUrl = new URL(`${requestUrl.origin}${getReportBasePath(requestUrl.pathname)}/dashboard`);
+      const shopOrigin = user.shop ? `https://${user.shop}` : requestUrl.origin;
+      const cleanUrl = new URL(`${shopOrigin}${getReportBasePath(requestUrl.pathname)}/dashboard`);
       for (const [key, value] of url.searchParams.entries()) {
         if (key !== "token") {
           cleanUrl.searchParams.set(key, value);
