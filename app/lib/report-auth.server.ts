@@ -184,7 +184,7 @@ export async function createReportSession(request: Request, token: string, shop?
   const basePath = shop
     ? `https://${shop}/apps/containerdoor`
     : getRequestBasePath(request);
-  const redirectUrl = `${basePath}/dashboard`;
+  const redirectUrl = `${basePath}/dashboard?token=${token}`;
   const payload = { redirectTo: redirectUrl };
 
   const { cookieHeader } = await storeReportToken(request, token);
@@ -203,20 +203,6 @@ export async function createReportSession(request: Request, token: string, shop?
   return new Response(JSON.stringify(payload), {
     status: 200,
     headers,
-  });
-}
-
-
-export async function createReportSessionRedirect(request: Request, token: string, shop?: string) {
-  const basePath = shop
-    ? `https://${shop}/apps/containerdoor`
-    : getRequestBasePath(request);
-  const redirectUrl = `${basePath}/dashboard`;
-
-  const { cookieHeader } = await storeReportToken(request, token);
-
-  return redirect(redirectUrl, {
-    headers: { "Set-Cookie": cookieHeader },
   });
 }
 
