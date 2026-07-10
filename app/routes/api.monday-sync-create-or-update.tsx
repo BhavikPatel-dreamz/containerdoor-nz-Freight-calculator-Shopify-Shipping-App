@@ -1,15 +1,27 @@
 import type { ActionFunctionArgs } from "react-router";
 import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, findExistingMondayItemId } from "../lib/monday.server";
 
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
-};
+function getCorsHeaders(request: Request) {
+  const origin = request.headers.get("origin");
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
+    ...(origin ? { Vary: "Origin" } : {}),
+  };
+}
+
+export async function loader({ request }: { request: Request }) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
+  return new Response(null, { status: 405, headers: getCorsHeaders(request) });
+}
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: CORS_HEADERS });
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }
   const { default: prisma } = await import("../db.server");
   const { shop, orderId, variantId, itemName, row } = await request.json();
@@ -172,5 +184,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Bulk Sync] Failed to push notes to Monday updates", e);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated, syncStatus }, { headers: CORS_HEADERS });
+  return Response.json({ ok: true, mondayItemId, updated, syncStatus }, { headers: getCorsHeaders(request) });
 }
