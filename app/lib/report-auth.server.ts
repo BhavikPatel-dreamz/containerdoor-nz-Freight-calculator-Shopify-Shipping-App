@@ -206,6 +206,21 @@ export async function createReportSession(request: Request, token: string, shop?
   });
 }
 
+
+export async function createReportSessionRedirect(request: Request, token: string, shop?: string) {
+  const basePath = shop
+    ? `https://${shop}/apps/containerdoor`
+    : getRequestBasePath(request);
+  const redirectUrl = `${basePath}/dashboard`;
+
+  const { cookieHeader } = await storeReportToken(request, token);
+
+  return redirect(redirectUrl, {
+    headers: { "Set-Cookie": cookieHeader },
+  });
+}
+
+
 export async function destroyReportSession(request: Request) {
   const user = await getReportUser(request);
   const session = await getReportSession(request);
