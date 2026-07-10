@@ -207,8 +207,13 @@ export default function FreightDashboard({
   const [allRows, setAllRows] = useState<FreightOrderRow[] | null>(allOrders ?? null);
   useEffect(() => setRows(orders), [orders]);
   useEffect(() => { if (allOrders) setAllRows(allOrders); }, [allOrders]);
-
   const [searchParams, setSearchParams] = useSearchParams();
+  const [currentPage, setCurrentPage] = useState<number>(page ?? 1);
+
+  useEffect(() => {
+    // keep currentPage in sync when the route changes server-side
+    setCurrentPage(page ?? 1);
+  }, [page]);
   const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [trackingModal, setTrackingModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [eddModal, setEddModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
@@ -1060,36 +1065,32 @@ export default function FreightDashboard({
               <div className="fo-pagination">
                 <button
                   className="fo-page-btn"
-                  disabled={page <= 1}
+                  disabled={currentPage <= 1}
                   onClick={() => {
-                    const np = new URLSearchParams(Array.from(searchParams.entries()));
-                    np.set("page", String(page - 1));
-                    // Update history using a same-origin pathname to avoid the
-                    // document <base> causing the URL to be resolved to the
-                    // deployment origin (Vercel). This keeps the browser on the
-                    // Shopify admin origin where the app is embedded.
-                    const newPath = `${window.location.origin}${window.location.pathname}?${np.toString()}`;
-                    try {
-                      window.history.pushState({}, "", newPath);
-                    } catch (err) {
-                      console.warn("pushState failed, falling back to setSearchParams", err);
+                    const newPage = Math.max(1, currentPage - 1);
+                    if (allRows) {
+                      setCurrentPage(newPage);
+                      setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
+                      return;
                     }
+                    const np = new URLSearchParams(Array.from(searchParams.entries()));
+                    np.set("page", String(newPage));
                     setSearchParams(np);
                   }}
                 >← Previous</button>
-                <span className="fo-page-info">Page {page} of {pageCount}</span>
+                <span className="fo-page-info">Page {currentPage} of {pageCount}</span>
                 <button
                   className="fo-page-btn"
-                  disabled={page >= pageCount}
+                  disabled={currentPage >= pageCount}
                   onClick={() => {
-                    const np = new URLSearchParams(Array.from(searchParams.entries()));
-                    np.set("page", String(page + 1));
-                    const newPath = `${window.location.origin}${window.location.pathname}?${np.toString()}`;
-                    try {
-                      window.history.pushState({}, "", newPath);
-                    } catch (err) {
-                      console.warn("pushState failed, falling back to setSearchParams", err);
+                    const newPage = Math.min(pageCount, currentPage + 1);
+                    if (allRows) {
+                      setCurrentPage(newPage);
+                      setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
+                      return;
                     }
+                    const np = new URLSearchParams(Array.from(searchParams.entries()));
+                    np.set("page", String(newPage));
                     setSearchParams(np);
                   }}
                 >Next →</button>
