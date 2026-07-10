@@ -1,8 +1,7 @@
 import { useState, useEffect } from "react";
 import { useLoaderData } from "react-router";
 import type { LoaderFunctionArgs } from "react-router";
-import { getReportUser } from "../lib/report-auth.server";
-
+import { getReportUser, requireAppProxyRequest } from "../lib/report-auth.server";
 
 // Local copy — client code (handleSubmit below) can't import from a .server.ts file.
 function getReportBasePath(pathname: string) {
@@ -14,6 +13,8 @@ function getReportBasePath(pathname: string) {
 
 // ── Loader: redirect to dashboard if already logged in ────────────────────────
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Allow the login page to be loaded directly when in an embedded app.
+
   const user = await getReportUser(request);
   const basePath = getReportBasePath(new URL(request.url).pathname);
   if (user) {
@@ -69,7 +70,12 @@ export default function ContainerdoorLoginPage() {
 
     try {
       const basePath = getReportBasePath(window.location.pathname);
-      const res = await fetch(`${basePath}/api/report-auth`, {
+      // root.tsx sets <base href> to SHOPIFY_APP_URL for the embedded admin
+      // app. That silently rewrites relative fetch() URLs on this page too,
+      // sending requests to the app backend instead of through the shop's
+      // app proxy. Build a fully absolute URL from window.location.origin
+      // to bypass <base> entirely.
+      const res = await fetch(`${window.location.origin}${basePath}/api/report-auth`, {
         method: "POST",
         body: new URLSearchParams({ email, password, shop: shopName }),
         credentials: "include",
@@ -79,7 +85,7 @@ export default function ContainerdoorLoginPage() {
         try {
           const json = await res.json();
           const location = (json as { redirectTo?: string }).redirectTo ?? `${shopName}/dashboard`;
-          
+
           // If location is already a full URL (starts with http/https), use it directly
           // Otherwise, prepend shop domain
           let target: string;
@@ -88,8 +94,7 @@ export default function ContainerdoorLoginPage() {
           } else {
             target = shopName ? `https://${shopName}${location}` : location;
           }
-          
-          // console.log("[DEBUG CLIENT] Redirecting to:", target);
+
           try {
             if (typeof window !== "undefined" && window.top && window.top !== window.self) {
               window.top.location.replace(target);
@@ -140,7 +145,6 @@ export default function ContainerdoorLoginPage() {
           overflow: hidden;
         }
 
-        /* ── Ambient background ── */
         .rl-bg-orb {
           position: absolute;
           border-radius: 50%;
@@ -164,7 +168,6 @@ export default function ContainerdoorLoginPage() {
           background: radial-gradient(circle, rgba(16,185,129,0.07) 0%, transparent 70%);
         }
 
-        /* ── Left panel — brand ── */
         .rl-left {
           display: none;
           flex: 1;
@@ -261,7 +264,6 @@ export default function ContainerdoorLoginPage() {
           font-size: 12px; color: #475569;
         }
 
-        /* ── Right panel — form ── */
         .rl-right {
           display: flex;
           flex-direction: column;
@@ -294,7 +296,6 @@ export default function ContainerdoorLoginPage() {
           transform: translateY(0);
         }
 
-        /* Mobile-only brand */
         .rl-mobile-brand {
           display: flex;
           align-items: center;
@@ -401,7 +402,6 @@ export default function ContainerdoorLoginPage() {
         }
         .rl-footer-note a:hover { text-decoration: underline; }
 
-        /* spinner */
         @keyframes spin { to { transform: rotate(360deg); } }
         .rl-spinner {
           width: 14px; height: 14px;
@@ -411,7 +411,6 @@ export default function ContainerdoorLoginPage() {
           animation: spin 0.7s linear infinite;
         }
 
-        /* grid lines decoration */
         .rl-grid-deco {
           position: absolute;
           top: 0; left: 0; right: 0; bottom: 0;
@@ -426,13 +425,11 @@ export default function ContainerdoorLoginPage() {
       `}</style>
 
       <div className="rl-root">
-        {/* Ambient orbs */}
         <div className="rl-bg-orb rl-bg-orb-1" />
         <div className="rl-bg-orb rl-bg-orb-2" />
         <div className="rl-bg-orb rl-bg-orb-3" />
         <div className="rl-grid-deco" />
 
-        {/* ── Left Brand Panel ── */}
         <div className="rl-left">
           <div className="rl-brand">
             <div className="rl-brand-box">F</div>
@@ -471,11 +468,9 @@ export default function ContainerdoorLoginPage() {
           </div>
         </div>
 
-        {/* ── Right Form Panel ── */}
         <div className="rl-right">
           <div className={`rl-card${mounted ? " mounted" : ""}`}>
 
-            {/* Mobile brand */}
             <div className="rl-mobile-brand">
               <div className="rl-brand-box">F</div>
               <div>

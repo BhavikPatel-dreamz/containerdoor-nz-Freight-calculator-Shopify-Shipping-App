@@ -23,7 +23,6 @@ const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
-
 // Local copy — client code (UserMenu below) can't import from a .server.ts file.
 function getReportBasePath(pathname: string) {
   const cleanPath = pathname.replace(/\/+$/, "");
@@ -33,140 +32,254 @@ function getReportBasePath(pathname: string) {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // For embedded app and direct access, do not require an App Proxy signature
+  // on the dashboard page. This route must work from the logged-in dashboard
+  // experience as well as through the proxy.
+
+  console.log("[DASHBOARD LOADER] ========== START ==========");
+  console.log("[DASHBOARD LOADER] Request URL:", new URL(request.url).toString());
+  console.log("[DASHBOARD LOADER] Request headers - Cookie:", request.headers.get("Cookie"));
+  
   // Check for token in URL (from redirect after login)
   const url = new URL(request.url);
   const tokenFromUrl = url.searchParams.get("token");
-  
-  // console.log("[DEBUG] Dashboard loader - tokenFromUrl:", tokenFromUrl);
+
+  console.log("[DASHBOARD LOADER] tokenFromUrl:", tokenFromUrl);
   
   // First try to get user from session cookie (existing auth)
   let user = await getReportUser(request);
+
+  console.log("[DASHBOARD LOADER] user from session:", user ? { id: user.id, email: user.email, name: user.name } : "NULL");
   
-  // If no session cookie, check if token is in URL and upgrade it to a secure cookie
-  if (!user && tokenFromUrl) {
+  // If a token is in the URL, prefer it over any existing cookie session.
+  // This avoids stale session data when the user logs in with a different
+  // account or store on the same browser.
+  if (tokenFromUrl) {
+    console.log("[DASHBOARD LOADER] Looking up token from URL...");
     const extSession = await prisma.externalSession.findUnique({
       where: { token: tokenFromUrl },
       include: { user: true },
     });
 
+    console.log("[DASHBOARD LOADER] extSession found:", extSession ? "YES" : "NO");
+    if (extSession) console.log("[DASHBOARD LOADER] extSession.user:", { id: extSession.user?.id, email: extSession.user?.email, name: extSession.user?.name });
+    if (extSession) console.log("[DASHBOARD LOADER] extSession.expiresAt:", extSession.expiresAt, "now:", new Date());
+
     if (extSession && extSession.expiresAt > new Date()) {
+      console.log("[DASHBOARD LOADER] Session valid, using token-based auth...");
       user = extSession.user;
-      const { cookieHeader } = await storeReportToken(request, tokenFromUrl);
-      const requestUrl = new URL(request.url);
-      const shopOrigin = user.shop ? `https://${user.shop}` : requestUrl.origin;
-      const cleanUrl = new URL(`${shopOrigin}${getReportBasePath(requestUrl.pathname)}/dashboard`);
-      for (const [key, value] of url.searchParams.entries()) {
-        if (key !== "token") {
-          cleanUrl.searchParams.set(key, value);
-        }
-      }
-      return redirect(cleanUrl.toString(), {
-        headers: { "Set-Cookie": cookieHeader },
+      // Don't redirect - just continue loading. We have the user from the token.
+      // This avoids cross-domain cookie issues with Shopify's app proxy.
+      console.log("[DASHBOARD LOADER] User authenticated via token:", {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        shop: user.shop,
       });
     }
   }
-  // this is for token based dashboard use
-    if (!user) {
+
+  if (!user) {
     const basePath = getReportBasePath(new URL(request.url).pathname);
     throw redirect(`${basePath}/login`);
   }
 
-  // TEMPORARY DEV BYPASS — set to false before going live.
-// When true, anyone can view the dashboard without logging in — including in production.
-// const SKIP_REPORT_AUTH = true;
-// const DEV_SHOP = "findash-shipping-2.myshopify.com"; // must match a row in your Session table
-
-//   if (!user) {
-//     if (SKIP_REPORT_AUTH) {
-//       user = {
-//         id: "dev-user",
-//         shop: DEV_SHOP,
-//         name: "Test User",
-//         email: "test@example.com",
-//       } as any;
-//     } else {
-//       const basePath = getReportBasePath(new URL(request.url).pathname);
-//       throw redirect(`${basePath}/login`);
-//     }
-//   }
-
-//   if (!user) {
-//     throw new Response("Unauthorized", { status: 401 });
-//   }
+  console.log("[DASHBOARD LOADER] User authenticated:", {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    shop: user.shop,
+  });
 
   const page = Math.max(Number(url.searchParams.get("page") || "1"), 1);
-  const shop = user.shop;
+  const shop = (url.searchParams.get("shop") || user.shop || "").trim().toLowerCase();
+  
+  console.log("[DASHBOARD LOADER] Page:", page, "Shop:", shop);
+  
+  if (!shop) {
+    console.warn("[dashboard loader] No shop provided in URL or user object");
+    return {
+      orders: [],
+      allOrders: [],
+      total: 0,
+      page: 1,
+      pageCount: 1,
+      shop: "",
+      user: { name: user.name || user.email, email: user.email, shop: user.shop },
+    };
+  }
 
+  console.log("[DASHBOARD LOADER] Searching for Shopify session for shop:", shop);
   const session =
     (await prisma.session.findFirst({ where: { shop, isOnline: false }, orderBy: { id: "asc" } })) ??
     (await prisma.session.findFirst({ where: { shop }, orderBy: { id: "asc" } }));
 
+  console.log("[DASHBOARD LOADER] Shopify session found:", session ? { shop: session.shop, userId: session.userId } : "NULL");
+
+  // No Shopify session for this shop yet — return safe empty defaults.
+  // IMPORTANT: every key FreightDashboard destructures must be present here,
+  // with array fields defaulting to [] (never undefined), or the component
+  // will throw when it calls .length/.map/.flatMap on them.
   if (!session) {
-    return { orders: [], total: 0, page: 1, pageCount: 1, shop, user: { name: user.name, email: user.email } };
+    console.warn(`[DASHBOARD LOADER] No session found for shop: "${shop}", returning empty orders`);
+    return {
+      orders: [],
+      allOrders: [],
+      total: 0,
+      page: 1,
+      pageCount: 1,
+      shop,
+      user: { name: user.name || user.email, email: user.email, shop: user.shop },
+    };
   }
 
-  const gqlRes = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
-    body: JSON.stringify({
-      query: `query FreightOrders($first: Int!) {
-        orders(first: $first, sortKey: CREATED_AT, reverse: true) {
-          nodes {
-            id name createdAt currencyCode
-            shippingAddress { city zip address1 province country firstName lastName }
-            email phone displayFinancialStatus displayFulfillmentStatus
-            shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
-            lineItems(first: 50) { nodes { id title quantity variant { id } } }
+  let allOrders: ShopifyOrderNode[] = [];
+  try {
+    console.log(`[DASHBOARD LOADER] Fetching orders for shop: ${shop}`);
+    const gqlRes = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
+      body: JSON.stringify({
+        query: `query FreightOrders($first: Int!) {
+          orders(first: $first, sortKey: CREATED_AT, reverse: true) {
+            nodes {
+              id name createdAt currencyCode
+              shippingAddress { city zip address1 province country firstName lastName }
+              email phone displayFinancialStatus displayFulfillmentStatus
+              shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
+              lineItems(first: 50) { nodes { id title quantity variant { id } } }
+            }
           }
-        }
-      }`,
-      variables: { first: 250 },
-    }),
-  });
+        }`,
+        variables: { first: 250 },
+      }),
+    });
 
-  const gqlJson = await gqlRes.json();
-  const allOrders: ShopifyOrderNode[] = gqlJson.data?.orders?.nodes ?? [];
+    const gqlJson = await gqlRes.json();
+    console.log("[DASHBOARD LOADER] GraphQL response status:", gqlRes.status);
+    if (gqlJson.errors) {
+      console.error("[DASHBOARD LOADER] GraphQL errors:", gqlJson.errors);
+    }
+    allOrders = gqlJson.data?.orders?.nodes ?? [];
+    console.log(`[DASHBOARD LOADER] Fetched ${allOrders.length} orders from Shopify`);
+  } catch (err) {
+    // Shopify API unreachable/errored — degrade gracefully instead of 500ing.
+    console.error("[DASHBOARD LOADER] GraphQL fetch failed:", err);
+    allOrders = [];
+  }
+  try {
+    console.log(`[dashboard loader] Fetching orders for shop: ${shop}, session shop: ${session.shop}`);
+    const gqlRes = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
+      body: JSON.stringify({
+        query: `query FreightOrders($first: Int!) {
+          orders(first: $first, sortKey: CREATED_AT, reverse: true) {
+            nodes {
+              id name createdAt currencyCode
+              shippingAddress { city zip address1 province country firstName lastName }
+              email phone displayFinancialStatus displayFulfillmentStatus
+              shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
+              lineItems(first: 50) { nodes { id title quantity variant { id } } }
+            }
+          }
+        }`,
+        variables: { first: 250 },
+      }),
+    });
+
+    const gqlJson = await gqlRes.json();
+    if (gqlJson.errors) {
+      console.error("[dashboard loader] GraphQL errors:", gqlJson.errors);
+    }
+    allOrders = gqlJson.data?.orders?.nodes ?? [];
+    console.log(`[dashboard loader] Fetched ${allOrders.length} orders from Shopify`);
+  } catch (err) {
+    // Shopify API unreachable/errored — degrade gracefully instead of 500ing.
+    console.error("[dashboard loader] GraphQL fetch failed:", err);
+    allOrders = [];
+  }
 
   const allOpsData = await prisma.orderLineItemOperationalData.findMany({ where: { shop } });
   const opsMap = new Map(allOpsData.map((r) => [`${r.orderId}::${r.variantId}`, r]));
 
   const freightOrders = allOrders
     .map((order) => buildRow(order, opsMap))
-    .filter(Boolean) as ReturnType<typeof buildRow>[];
+    .filter((row): row is NonNullable<ReturnType<typeof buildRow>> => row !== null);
 
   const total = freightOrders.length;
   const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
   const paged = freightOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-  return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop, user: { name: user.name, email: user.email } };
+  console.log("[DASHBOARD LOADER] Final data before return:", { total, pageCount, page, ordersCount: paged.length, userName: user.name, userEmail: user.email });
+
+  return {
+    orders: paged,
+    allOrders: freightOrders,
+    total,
+    page,
+    pageCount,
+    shop,
+    user: { name: user.name || user.email, email: user.email, shop: user.shop },
+  };
 }
 
 function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
-  const shippingLine = order.shippingLines.nodes.find((s) =>
+  const shippingLines = order.shippingLines?.nodes ?? [];
+  const shippingLine = shippingLines.find((s) =>
     FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
   );
   if (!shippingLine) return null;
-  const parts = shippingLine.code.split("::");
-  const carriers = parts[1]; const packageCount = parts[2]; const lineItemsRaw = parts[4];
+  const parts = (shippingLine.code ?? "").split("::");
+  const carriers = parts[1];
+  const packageCount = parts[2];
+  // FIX: this must match the admin (freight-orders.tsx) parsing exactly —
+  // the line-items payload is parts[4], NOT everything from parts[3] onward.
+  // Previously this was `parts.slice(3).join("::")`, which glued parts[3]
+  // (a separate field) onto the front of the line-items string and corrupted
+  // it, causing orders/line items to be dropped or mis-parsed here while
+  // showing correctly in the Freight Orders admin tab.
+  const lineItemsRaw = parts[4];
   if (!carriers || !lineItemsRaw) return null;
   const numericOrderId = order.id.replace("gid://shopify/Order/", "");
   const variantTitleMap = new Map<string, string>();
-  for (const li of order.lineItems.nodes) {
+  for (const li of order.lineItems?.nodes ?? []) {
     if (li.variant?.id) variantTitleMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.title);
   }
   const lineItems = lineItemsRaw.split("|").map((part, idx) => {
     const [variantId, rest] = part.split(":");
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     const ops = opsMap.get(`${numericOrderId}::${variantId}`);
-    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "" };
+    return {
+      id: `${order.id}-${idx}`,
+      variantId: variantId ?? "",
+      title: variantTitleMap.get(variantId ?? ""),
+      company: company ?? "",
+      boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
+      letterSuffix: LETTERS[idx % 26],
+      customerStatus: ops?.customerStatus ?? "",
+      trackingNumber: ops?.trackingNumber ?? "",
+      eddDate: ops?.eddDate ?? "",
+      originalEddDate: ops?.originalEddDate ?? "",
+    };
   });
   return {
-    id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,
-    totalFreight: Number(shippingLine.originalPriceSet.shopMoney.amount ?? 0),
-    city: order.shippingAddress?.city ?? null, postalCode: order.shippingAddress?.zip ?? null,
-    createdAt: order.createdAt, carriers, packageCount, shippingTitle: shippingLine.title, lineItems,
+    id: order.id,
+    shopifyOrderId: numericOrderId,
+    shopifyOrderName: order.name,
+    currency: order.currencyCode,
+    totalFreight: Number(shippingLine.originalPriceSet?.shopMoney?.amount ?? 0),
+    city: order.shippingAddress?.city ?? null,
+    postalCode: order.shippingAddress?.zip ?? null,
+    createdAt: order.createdAt,
+    carriers: carriers ?? "",
+    packageCount: packageCount ?? "",
+    shippingTitle: shippingLine.title ?? "",
+    lineItems,
     customerName: `${order.shippingAddress?.firstName ?? ""} ${order.shippingAddress?.lastName ?? ""}`.trim() || "—",
-    email: order.email ?? "—", phone: order.phone ?? "—",
+    email: order.email ?? "—",
+    phone: order.phone ?? "—",
     financialStatus: order.displayFinancialStatus ?? "—",
     fulfillmentStatus: order.displayFulfillmentStatus ?? "UNFULFILLED",
     fullAddress: [order.shippingAddress?.address1, order.shippingAddress?.city, order.shippingAddress?.province, order.shippingAddress?.zip, order.shippingAddress?.country].filter(Boolean).join(", "),
@@ -175,13 +288,19 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
 
 // ─── User Avatar / Logout (containerdoor dashboard UI) ────────────────────────
 
-function UserMenu({ user }: { user: { name: string; email: string } }) {
+function UserMenu({ user }: { user: { name: string; email: string; shop?: string } }) {
   const [open, setOpen] = useState(false);
-  const initials = (user.name ?? user.email ?? "U").split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
+  // Get display name - prefer non-empty name, fall back to email
+  const displayName = (user.name ?? "").trim() || (user.email ?? "").trim() || "User";
+  const initials = displayName.split(" ").map((w: string) => w[0]).join("").toUpperCase().slice(0, 2);
+  
+  console.log("[USER MENU] Rendering with user:", { name: user.name, email: user.email, displayName, initials });
 
- const handleLogout = async () => {
+  const handleLogout = async () => {
     const basePath = getReportBasePath(window.location.pathname);
-    const res = await fetch(`${basePath}/api/report-auth?intent=logout`, { method: "POST", credentials: "include" });
+    // <base href> in root.tsx rewrites relative fetch URLs to the app
+    // backend. Force the actual page origin explicitly.
+    const res = await fetch(`${window.location.origin}${basePath}/api/report-auth?intent=logout`, { method: "POST", credentials: "include" });
     if (res.ok) {
       try {
         const json = await res.json();
@@ -221,13 +340,25 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
         .rd-menu-item.danger:hover { background:#fef2f2; }
         .rd-menu-divider { height:1px;background:#f3f4f6; }
       `}</style>
-      <div className="rd-user-wrap" onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}>
-        <div className="rd-user-avatar" title={user.name ?? user.email}>{initials}</div>
+      <div
+        className="rd-user-wrap"
+        role="button"
+        tabIndex={0}
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            e.stopPropagation();
+            setOpen((o) => !o);
+          }
+        }}
+      >
+        <div className="rd-user-avatar" title={displayName}>{initials}</div>
         {open && (
           <div className="rd-user-menu">
             <div className="rd-menu-user">
-              <div className="rd-menu-user-name">{user.name ?? "User"}</div>
-              <div className="rd-menu-user-email">{user.email}</div>
+              <div className="rd-menu-user-name">{displayName}</div>
+              {user.email && user.email !== displayName && <div className="rd-menu-user-email">{user.email}</div>}
             </div>
             <div className="rd-menu-divider"/>
             <button className="rd-menu-item danger" onClick={handleLogout}>
@@ -248,18 +379,25 @@ function UserMenu({ user }: { user: { name: string; email: string } }) {
 export default function ContainerdoorDashboard() {
   const { orders, allOrders, total, page, pageCount, shop, user } = useLoaderData<typeof loader>();
 
-  const noteAuthor = user?.name ?? user?.email ?? "User";
+  console.log("[COMPONENT] Loaded data:", { total, shop, orders: orders?.length, user });
+  
+  // Ensure name has a proper fallback and is trimmed
+  const userName = (user?.name ?? "").trim() || (user?.email ?? "").trim() || "User";
+  const noteAuthor = userName;
+  const safeUser = user ?? { name: userName, email: "", shop: "" };
+
+  console.log("[COMPONENT] userName:", userName, "safeUser:", safeUser);
 
   return (
     <FreightDashboard
-      orders={orders as any}
-      allOrders={allOrders as any}
-      total={total}
-      page={page}
-      pageCount={pageCount}
+      orders={(orders ?? []) as any}
+      allOrders={(allOrders ?? []) as any}
+      total={total ?? 0}
+      page={page ?? 1}
+      pageCount={pageCount ?? 1}
       shop={shop}
       noteAuthor={noteAuthor}
-      navbarRight={user ? <UserMenu user={user} /> : null}
+      navbarRight={<UserMenu user={safeUser} />}
     />
   );
 }
