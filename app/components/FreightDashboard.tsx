@@ -208,7 +208,7 @@ export default function FreightDashboard({
   useEffect(() => setRows(orders), [orders]);
   useEffect(() => { if (allOrders) setAllRows(allOrders); }, [allOrders]);
 
-  const [, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [trackingModal, setTrackingModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [eddModal, setEddModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
@@ -1058,9 +1058,25 @@ export default function FreightDashboard({
             {/* Pagination */}
             {pageCount > 1 && (
               <div className="fo-pagination">
-                <button className="fo-page-btn" disabled={page <= 1} onClick={() => setSearchParams({ page: String(page - 1) })}>← Previous</button>
+                <button
+                  className="fo-page-btn"
+                  disabled={page <= 1}
+                  onClick={() => {
+                    const np = new URLSearchParams(Array.from(searchParams.entries()));
+                    np.set("page", String(page - 1));
+                    setSearchParams(np);
+                  }}
+                >← Previous</button>
                 <span className="fo-page-info">Page {page} of {pageCount}</span>
-                <button className="fo-page-btn" disabled={page >= pageCount} onClick={() => setSearchParams({ page: String(page + 1) })}>Next →</button>
+                <button
+                  className="fo-page-btn"
+                  disabled={page >= pageCount}
+                  onClick={() => {
+                    const np = new URLSearchParams(Array.from(searchParams.entries()));
+                    np.set("page", String(page + 1));
+                    setSearchParams(np);
+                  }}
+                >Next →</button>
               </div>
             )}
           </div>
