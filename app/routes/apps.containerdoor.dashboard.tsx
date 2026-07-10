@@ -80,8 +80,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
 //       user = {
 //         id: "dev-user",
 //         shop: DEV_SHOP,
-//         name: "Dev User",
-//         email: "dev@example.com",
+//         name: "Test User",
+//         email: "test@example.com",
 //       } as any;
 //     } else {
 //       const basePath = getReportBasePath(new URL(request.url).pathname);
