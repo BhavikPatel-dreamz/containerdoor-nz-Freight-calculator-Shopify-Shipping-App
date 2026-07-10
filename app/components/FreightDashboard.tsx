@@ -1064,6 +1064,12 @@ export default function FreightDashboard({
                   onClick={() => {
                     const np = new URLSearchParams(Array.from(searchParams.entries()));
                     np.set("page", String(page - 1));
+                    // Update history using a same-origin pathname to avoid the
+                    // document <base> causing the URL to be resolved to the
+                    // deployment origin (Vercel). This keeps the browser on the
+                    // Shopify admin origin where the app is embedded.
+                    const newPath = `${window.location.pathname}?${np.toString()}`;
+                    window.history.pushState({}, "", newPath);
                     setSearchParams(np);
                   }}
                 >← Previous</button>
@@ -1074,6 +1080,8 @@ export default function FreightDashboard({
                   onClick={() => {
                     const np = new URLSearchParams(Array.from(searchParams.entries()));
                     np.set("page", String(page + 1));
+                    const newPath = `${window.location.pathname}?${np.toString()}`;
+                    window.history.pushState({}, "", newPath);
                     setSearchParams(np);
                   }}
                 >Next →</button>
