@@ -49,6 +49,15 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const fullRow = {
     ...row,
+    customerName: row.customerName ?? "",
+    email: row.email ?? "",
+    carriers: row.carriers ?? existing.carrier ?? "",
+    trackingNumber: row.trackingNumber ?? existing.trackingNumber ?? "",
+    eddDate: row.eddDate ?? existing.eddDate ?? "",
+    originalEddDate: row.originalEddDate ?? existing.originalEddDate ?? "",
+    productTitle: row.productTitle ?? existing.productTitle ?? "",
+    boxes: row.boxes ?? "",
+    customerStatus: row.customerStatus ?? existing.customerStatus ?? "",
     shop,
     orderId,
     variantId,
@@ -61,6 +70,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   let mondayItemId = existing.mondayItemId;
   let syncStatus: "created" | "already-there" = "already-there";
+  let didUpdate = false;
 
   if (!mondayItemId) {
     const resolvedItemId = await findExistingMondayItemId(orderId, variantId);
@@ -135,8 +145,35 @@ export async function action({ request }: ActionFunctionArgs) {
       }
 
       syncStatus = "already-there";
-      console.log("[Monday][Bulk Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
-      await updateMondayItem(mondayItemId, fullRow);
+
+      const noChanges =
+        String(fullRow.customerStatus ?? "").toLowerCase() === String(mondayBefore.customerStatus ?? "").toLowerCase() &&
+        String(fullRow.eddDate ?? "") === String(mondayBefore.eddDate ?? "") &&
+        String(fullRow.originalEddDate ?? "") === String(mondayBefore.originalEddDate ?? "") &&
+        String(fullRow.trackingNumber ?? "") === String(mondayBefore.trackingNumber ?? "");
+
+      if (noChanges) {
+        console.log("[Monday][Bulk Sync] No changes vs Monday, skipping update API call for item:", mondayItemId);
+      } else {
+        console.log("[Monday][Bulk Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
+        try {
+          await updateMondayItem(mondayItemId, fullRow);
+          didUpdate = true;
+        } catch (updateError) {
+          const msg = updateError instanceof Error ? updateError.message : String(updateError);
+          if (msg.includes("Item not found in board")) {
+            console.log(`[Monday][Bulk Sync] Stale mondayItemId ${mondayItemId} no longer exists on board, creating a fresh item`);
+            mondayItemId = await createMondayItem(itemName, fullRow);
+            await prisma.orderLineItemOperationalData.update({
+              where: { shop_orderId_variantId: { shop, orderId, variantId } },
+              data: { mondayItemId },
+            });
+            syncStatus = "created";
+          } else {
+            throw updateError;
+          }
+        }
+      }
     }
   }
 
@@ -157,6 +194,15 @@ export async function action({ request }: ActionFunctionArgs) {
     },
   });
   console.log("[Monday][Bulk Sync] DB updated with Monday data:", updated);
+
+  const updatedRow = {
+    trackingNumber: updated.trackingNumber ?? fullRow.trackingNumber ?? "",
+    eddDate: updated.eddDate ?? fullRow.eddDate ?? "",
+    originalEddDate: updated.originalEddDate ?? fullRow.originalEddDate ?? "",
+    customerStatus: updated.customerStatus ?? fullRow.customerStatus ?? "",
+    productTitle: updated.productTitle ?? fullRow.productTitle ?? "",
+    carrier: updated.carrier ?? fullRow.carriers ?? "",
+  };
 
   try {
     const noteBlocks = String(existing.notes ?? "")
@@ -184,5 +230,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Bulk Sync] Failed to push notes to Monday updates", e);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated, syncStatus }, { headers: getCorsHeaders(request) });
+  return Response.json({ ok: true, mondayItemId, updated: updatedRow, syncStatus, didUpdate }, { headers: getCorsHeaders(request) });
 }
