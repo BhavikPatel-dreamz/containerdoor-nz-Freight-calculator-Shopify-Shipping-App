@@ -63,6 +63,7 @@ type SyncProgressState = {
   total: number;
   completed: number;
   created: number;
+  updated: number;
   already: number;
   failed: number;
   entries: SyncProgressEntry[];
@@ -415,6 +416,7 @@ export default function FreightDashboard({
       total: totalItems,
       completed: 0,
       created: 0,
+      updated: 0,
       already: 0,
       failed: 0,
       entries: [],
@@ -448,28 +450,6 @@ export default function FreightDashboard({
         status: "failed",
         message: "Failed to sync",
       };
-
-      // Skip API call if no meaningful data to sync
-      const hasChanges = !!(
-        item.trackingNumber?.trim() ||
-        item.eddDate?.trim() ||
-        item.originalEddDate?.trim() ||
-        item.customerStatus?.trim()
-      );
-
-      if (!hasChanges) {
-        updateProgress((prev) => ({
-          ...prev,
-          completed: prev.completed + 1,
-          already: prev.already + 1,
-          entries: [...prev.entries, {
-            ...entry,
-            status: "skipped",
-            message: "No changes to sync",
-          }],
-        }));
-        return;
-      }
 
       try {
         const res = await fetch("/api/monday-sync-create-or-update", {
@@ -513,6 +493,7 @@ export default function FreightDashboard({
           ...prev,
           completed: prev.completed + 1,
           created: prev.created + (status === "created" ? 1 : 0),
+          updated: prev.updated + (json.didUpdate ? 1 : 0),
           already: prev.already + (status === "already-there" ? 1 : 0),
           entries: [...prev.entries, entry],
         }));
@@ -543,7 +524,7 @@ export default function FreightDashboard({
       }
     };
 
-    const concurrency = 8;
+    const concurrency = 3;
     const queue = itemsToSync.slice();
     const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
       while (queue.length > 0) {
@@ -713,7 +694,7 @@ export default function FreightDashboard({
                   <div>
                     <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Monday bulk sync progress</div>
                     <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
-                      {syncProgress.completed} / {syncProgress.total} line items processed · Created {syncProgress.created} · Already there {syncProgress.already} · Failed {syncProgress.failed}
+                      {syncProgress.completed} / {syncProgress.total} line items processed · Created {syncProgress.created} · Updated {syncProgress.updated} · Already there {syncProgress.already} · Failed {syncProgress.failed}
                     </div>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
-async function mondayRequest(query: string, variables?: Record<string, any>) {
+async function mondayRequest(query: string, variables?: Record<string, any>, retries = 3): Promise<any> {
   const res = await fetch(MONDAY_API_URL, {
     method: "POST",
     headers: {
@@ -14,6 +14,15 @@ async function mondayRequest(query: string, variables?: Record<string, any>) {
   const json = await res.json();
   console.log("[Monday API] request:", JSON.stringify(variables));
   console.log("[Monday API] response:", JSON.stringify(json));
+
+  const complexityError = json.errors?.find((e: any) => e?.extensions?.code === "COMPLEXITY_BUDGET_EXHAUSTED");
+  if (complexityError && retries > 0) {
+    const waitSeconds = Math.min(complexityError.extensions?.retry_in_seconds ?? 10, 40);
+    console.log(`[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`);
+    await new Promise((r) => setTimeout(r, waitSeconds * 1000));
+    return mondayRequest(query, variables, retries - 1);
+  }
+
   if (json.errors) throw new Error(JSON.stringify(json.errors));
   return json.data;
 }
@@ -65,6 +74,7 @@ const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; default
 };
 
 let columnIdCache: Record<string, string> | null = null;
+let columnIdCachePromise: Promise<Record<string, string>> | null = null;
 
 async function getOrCreateColumnIds(): Promise<Record<string, string>> {
   if (columnIdCache) {
@@ -72,36 +82,49 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
     return columnIdCache;
   }
 
-  console.log("[Monday] Fetching board columns for board:", process.env.MONDAY_BOARD_ID);
-  const data = await mondayRequest(
-    `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
-    { boardId: process.env.MONDAY_BOARD_ID }
-  );
-  const existing: { id: string; title: string; type: string }[] = data.boards?.[0]?.columns ?? [];
-  console.log("[Monday] Existing columns:", existing.map((c) => c.title));
-  const map: Record<string, string> = {};
-
-  for (const [key, def] of Object.entries(FIELD_DEFS)) {
-    const found = existing.find((c) => c.title.toLowerCase() === def.title.toLowerCase());
-    if (found) {
-      console.log(`[Monday] Column "${def.title}" already exists (id: ${found.id})`);
-      map[key] = found.id;
-      continue;
-    }
-    console.log(`[Monday] Creating column "${def.title}" (type: ${def.type})`);
-    const created = await mondayRequest(
-      `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
-        create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
-      }`,
-      { boardId: process.env.MONDAY_BOARD_ID, title: def.title, columnType: def.type, defaults: def.defaults }
-    );
-    console.log(`[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`);
-    map[key] = created.create_column.id;
+  if (columnIdCachePromise) {
+    console.log("[Monday] Column ID fetch already in flight, awaiting it");
+    return columnIdCachePromise;
   }
 
-  columnIdCache = map;
-  console.log("[Monday] Final column ID map:", map);
-  return map;
+  columnIdCachePromise = (async () => {
+    console.log("[Monday] Fetching board columns for board:", process.env.MONDAY_BOARD_ID);
+    const data = await mondayRequest(
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
+      { boardId: process.env.MONDAY_BOARD_ID }
+    );
+    const existing: { id: string; title: string; type: string }[] = data.boards?.[0]?.columns ?? [];
+    console.log("[Monday] Existing columns:", existing.map((c) => c.title));
+    const map: Record<string, string> = {};
+
+    for (const [key, def] of Object.entries(FIELD_DEFS)) {
+      const found = existing.find((c) => c.title.toLowerCase() === def.title.toLowerCase());
+      if (found) {
+        console.log(`[Monday] Column "${def.title}" already exists (id: ${found.id})`);
+        map[key] = found.id;
+        continue;
+      }
+      console.log(`[Monday] Creating column "${def.title}" (type: ${def.type})`);
+      const created = await mondayRequest(
+        `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
+          create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
+        }`,
+        { boardId: process.env.MONDAY_BOARD_ID, title: def.title, columnType: def.type, defaults: def.defaults }
+      );
+      console.log(`[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`);
+      map[key] = created.create_column.id;
+    }
+
+    columnIdCache = map;
+    console.log("[Monday] Final column ID map:", map);
+    return map;
+  })();
+
+  try {
+    return await columnIdCachePromise;
+  } finally {
+    columnIdCachePromise = null;
+  }
 }
 
 const statusLabelMap: Record<string, string> = {
@@ -144,13 +167,15 @@ export async function findExistingMondayItemId(orderId: string, variantId: strin
 
   const colIds = await getOrCreateColumnIds();
   const data = await mondayRequest(
-    `query ($boardId: ID!, $columnId: ID!, $columnValue: String!) {
-      items_by_column_values(board_id: $boardId, column_id: $columnId, column_value: $columnValue) { id }
+    `query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
+      items_page_by_column_values(board_id: $boardId, columns: [{column_id: $columnId, column_values: [$columnValue]}]) {
+        items { id }
+      }
     }`,
     { boardId: process.env.MONDAY_BOARD_ID, columnId: colIds.orderId, columnValue: orderId }
   );
 
-  const candidateIds = (data.items_by_column_values ?? []).map((item: any) => item.id).filter(Boolean);
+  const candidateIds = (data.items_page_by_column_values?.items ?? []).map((item: any) => item.id).filter(Boolean);
   if (!candidateIds.length) return null;
 
   const details = await mondayRequest(
