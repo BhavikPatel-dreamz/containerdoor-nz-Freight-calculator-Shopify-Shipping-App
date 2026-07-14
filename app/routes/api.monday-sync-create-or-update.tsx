@@ -224,7 +224,7 @@ export async function action({ request }: ActionFunctionArgs) {
       });
       console.log(`[Monday][Bulk Sync] Pushed ${newBlocks.length} new note(s) to Monday Updates tab.`);
     } else {
-      console.log("[Monday][Bulk Sync] No new notes to push to Monday Updates tab.");
+      console.log("[Monday][Bulk Sync] No new notes to push to Monday Updates .");
     }
   } catch (e) {
     console.error("[Monday][Bulk Sync] Failed to push notes to Monday updates", e);
