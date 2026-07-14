@@ -195,6 +195,15 @@ export async function action({ request }: ActionFunctionArgs) {
   });
   console.log("[Monday][Bulk Sync] DB updated with Monday data:", updated);
 
+  const updatedRow = {
+    trackingNumber: updated.trackingNumber ?? fullRow.trackingNumber ?? "",
+    eddDate: updated.eddDate ?? fullRow.eddDate ?? "",
+    originalEddDate: updated.originalEddDate ?? fullRow.originalEddDate ?? "",
+    customerStatus: updated.customerStatus ?? fullRow.customerStatus ?? "",
+    productTitle: updated.productTitle ?? fullRow.productTitle ?? "",
+    carrier: updated.carrier ?? fullRow.carriers ?? "",
+  };
+
   try {
     const noteBlocks = String(existing.notes ?? "")
       .split(/\r?\n\r?\n/)
@@ -221,5 +230,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Bulk Sync] Failed to push notes to Monday updates", e);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated, syncStatus, didUpdate }, { headers: getCorsHeaders(request) });
+  return Response.json({ ok: true, mondayItemId, updated: updatedRow, syncStatus, didUpdate }, { headers: getCorsHeaders(request) });
 }

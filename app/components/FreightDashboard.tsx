@@ -489,6 +489,17 @@ export default function FreightDashboard({
         entry.status = status;
         entry.message = status === "created" ? "Created in Monday" : "Already in Monday";
 
+        const updatedLineItem = {
+          ...item,
+          ...json.updated,
+          trackingNumber: json.updated?.trackingNumber ?? item.trackingNumber ?? "",
+          eddDate: json.updated?.eddDate ?? item.eddDate ?? "",
+          originalEddDate: json.updated?.originalEddDate ?? item.originalEddDate ?? "",
+          customerStatus: json.updated?.customerStatus ?? item.customerStatus ?? "",
+          company: json.updated?.carrier ?? item.company ?? "",
+          title: json.updated?.productTitle ?? item.title ?? "",
+        };
+
         updateProgress((prev) => ({
           ...prev,
           completed: prev.completed + 1,
@@ -500,18 +511,18 @@ export default function FreightDashboard({
 
         setRows((prevRows = []) => prevRows.map((o: any) => o.id !== order.id ? o : {
           ...o,
-          lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...json.updated }),
+          lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...updatedLineItem }),
         }));
 
         if (allRows) {
           setAllRows((prev) => prev ? prev.map((o) => o.id !== order.id ? o : {
             ...o,
-            lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...json.updated }),
+            lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...updatedLineItem }),
           }) : prev);
         }
 
         setDetailView((prev) => prev && prev.order.shopifyOrderId === order.shopifyOrderId && prev.item.variantId === item.variantId
-          ? { ...prev, item: { ...prev.item, ...json.updated } }
+          ? { ...prev, item: { ...prev.item, ...updatedLineItem } }
           : prev);
       } catch (error) {
         console.error("Monday bulk sync failed", error);
