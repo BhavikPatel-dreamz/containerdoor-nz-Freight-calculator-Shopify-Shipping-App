@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
+import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -261,6 +262,96 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
+    // ── NEW: push updated fields to Monday dashboard ──
+    const mondayDebug: Record<string, unknown> = {
+      attempted: true,
+      shopUsed: shopValue || updated.shop || "",
+      hadExistingMondayId: !!updated.mondayItemId,
+    };
+    try {
+      const mondayRow = {
+        customerName: "",
+        email: "",
+        carriers: updated.carrier ?? "",
+        trackingNumber: updated.trackingNumber ?? "",
+        eddDate: updated.eddDate ?? "",
+        originalEddDate: updated.originalEddDate ?? "",
+        productTitle: updated.productTitle ?? "",
+        sku: "",
+        boxes: "",
+        customerStatus: updated.customerStatus ?? "",
+        shop: shopValue || updated.shop || "",
+        orderId,
+        variantId,
+        warehouseStatus: updated.warehouseStatus ?? "",
+        dispatchStatus: updated.dispatchStatus ?? "",
+        deliveryStatus: updated.deliveryStatus ?? "",
+        depositPaid: updated.depositPaid ?? "",
+        balanceDue: updated.balanceDue ?? "",
+      };
+      const itemName = mondayRow.productTitle || `Order ${orderId} - ${variantId}`;
+
+      if (!updated.mondayItemId) {
+        const newMondayId = await createMondayItem(itemName, mondayRow);
+        updated = await prisma.orderLineItemOperationalData.update({
+          where: { id: updated.id },
+          data: { mondayItemId: newMondayId },
+        });
+        mondayDebug.action = "created";
+        mondayDebug.mondayItemId = newMondayId;
+      } else {
+        try {
+          await updateMondayItem(updated.mondayItemId, mondayRow);
+          mondayDebug.action = "updated";
+          mondayDebug.mondayItemId = updated.mondayItemId;
+        } catch (mErr) {
+          if (isStaleMondayItemError(mErr)) {
+            const newMondayId = await createMondayItem(itemName, mondayRow);
+            updated = await prisma.orderLineItemOperationalData.update({
+              where: { id: updated.id },
+              data: { mondayItemId: newMondayId },
+            });
+            mondayDebug.action = "recreated-stale";
+            mondayDebug.mondayItemId = newMondayId;
+          } else {
+            throw mErr;
+          }
+        }
+      }
+    } catch (mondayErr) {
+      console.error("[api.order-status] Failed to push update to Monday", mondayErr);
+      mondayDebug.action = "failed";
+      mondayDebug.error = mondayErr instanceof Error ? mondayErr.message : String(mondayErr);
+    }
+    // ── end new block ──
+
+    // ── NEW: push new notes to Monday Updates tab ──
+    try {
+      const noteBlocks = String(updated.notes ?? "")
+        .split(/\r?\n\r?\n/)
+        .map((b) => b.trim())
+        .filter(Boolean);
+
+      const alreadyPushed = updated.notesPushedMondayItemId === updated.mondayItemId
+        ? (updated.notesPushedCount ?? 0)
+        : 0;
+      const newBlocks = noteBlocks.slice(alreadyPushed);
+
+      if (newBlocks.length > 0 && updated.mondayItemId) {
+        for (const block of newBlocks) {
+          const cleaned = block.replace(/^\[[^\]]*\]\s*/, "");
+          await createMondayUpdate(updated.mondayItemId, cleaned);
+        }
+        updated = await prisma.orderLineItemOperationalData.update({
+          where: { id: updated.id },
+          data: { notesPushedCount: noteBlocks.length, notesPushedMondayItemId: updated.mondayItemId },
+        });
+      }
+    } catch (noteErr) {
+      console.error("[api.order-status] Failed to push notes to Monday updates", noteErr);
+    }
+    // ── end new block ──
+
     // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
     const resolvedShop = shopValue || updated.shop || "";
 
@@ -277,7 +368,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }),
     }).catch((e) => console.error("[webhook] failed to send", e));
 
-    return Response.json({ ok: true, record: updated }, { headers: CORS_HEADERS });
+    return Response.json({ ok: true, record: updated, mondayDebug }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("[api.order-status] action error", err);
     return Response.json(

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
 import { redirect, useLoaderData } from "react-router";
-import { getReportUser, storeReportToken } from "../lib/report-auth.server";
+import { getReportUser} from "../lib/report-auth.server";
 import prisma from "../db.server";
 import { useState, useEffect } from "react";
 import FreightDashboard from "../components/FreightDashboard";
@@ -14,7 +14,7 @@ type ShopifyOrderNode = {
   displayFinancialStatus?: string; displayFulfillmentStatus?: string;
   shippingAddress?: { city?: string; zip?: string; address1?: string; province?: string; country?: string; firstName?: string; lastName?: string };
   shippingLines: { nodes: Array<{ title: string; code: string; originalPriceSet: { shopMoney: { amount: string; currencyCode: string } } }> };
-  lineItems: { nodes: Array<{ id: string; title: string; quantity: number; variant?: { id: string } }> };
+  lineItems: { nodes: Array<{ id: string; title: string; quantity: number; sku?: string; variant?: { id: string; sku?: string } }> };
 };
 
 const PAGE_SIZE = 25;
@@ -147,7 +147,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
               shippingAddress { city zip address1 province country firstName lastName }
               email phone displayFinancialStatus displayFulfillmentStatus
               shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
-              lineItems(first: 50) { nodes { id title quantity variant { id } } }
+              lineItems(first: 50) { nodes { id title quantity sku variant { id sku } } }
             }
           }
         }`,
@@ -180,7 +180,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
               shippingAddress { city zip address1 province country firstName lastName }
               email phone displayFinancialStatus displayFulfillmentStatus
               shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
-              lineItems(first: 50) { nodes { id title quantity variant { id } } }
+              lineItems(first: 50) { nodes { id title quantity variant { id sku } } }
             }
           }
         }`,
@@ -237,8 +237,12 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
   if (!carriers || !lineItemsRaw) return null;
   const numericOrderId = order.id.replace("gid://shopify/Order/", "");
   const variantTitleMap = new Map<string, string>();
+  const variantSkuMap = new Map<string, string>();
   for (const li of order.lineItems?.nodes ?? []) {
-    if (li.variant?.id) variantTitleMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.title);
+    if (li.variant?.id) {
+      variantTitleMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.title);
+      variantSkuMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.variant.sku || li.sku || "");
+    }
   }
   const lineItems = lineItemsRaw.split("|").map((part, idx) => {
     const [variantId, rest] = part.split(":");
@@ -248,6 +252,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
       id: `${order.id}-${idx}`,
       variantId: variantId ?? "",
       title: variantTitleMap.get(variantId ?? ""),
+      sku: variantSkuMap.get(variantId ?? "") ?? "",
       company: company ?? "",
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),

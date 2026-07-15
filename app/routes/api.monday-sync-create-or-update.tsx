@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, findExistingMondayItemId } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, findExistingMondayItemId, isStaleMondayItemError } from "../lib/monday.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -69,7 +69,7 @@ export async function action({ request }: ActionFunctionArgs) {
   };
 
   let mondayItemId = existing.mondayItemId;
-  let syncStatus: "created" | "already-there" = "already-there";
+  let syncStatus: "created" | "updated" | "already-there" = "already-there";
   let didUpdate = false;
 
   if (!mondayItemId) {
@@ -79,7 +79,7 @@ export async function action({ request }: ActionFunctionArgs) {
       mondayItemId = resolvedItemId;
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        data: { mondayItemId },
+        data: { mondayItemId, notesPushedCount: 0 },
       });
       console.log("[Monday][Bulk Sync] Reused existing Monday item by order/variant:", mondayItemId);
     } else {
@@ -102,7 +102,7 @@ export async function action({ request }: ActionFunctionArgs) {
         mondayItemId = resolvedItemId;
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId } },
-          data: { mondayItemId },
+          data: { mondayItemId, notesPushedCount: 0 },
         });
         console.log("[Monday][Bulk Sync] Reused existing Monday item after lookup:", mondayItemId);
       } else {
@@ -110,9 +110,10 @@ export async function action({ request }: ActionFunctionArgs) {
         mondayItemId = await createMondayItem(itemName, fullRow);
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId } },
-          data: { mondayItemId },
+          data: { mondayItemId, notesPushedCount: 0 },
         });
         console.log("[Monday][Bulk Sync] Recreated Monday item with new mondayItemId:", mondayItemId);
+        syncStatus = "created";
       }
     } else {
       const mondayStatusAt = mondayBefore.statusChangedAt
@@ -150,7 +151,8 @@ export async function action({ request }: ActionFunctionArgs) {
         String(fullRow.customerStatus ?? "").toLowerCase() === String(mondayBefore.customerStatus ?? "").toLowerCase() &&
         String(fullRow.eddDate ?? "") === String(mondayBefore.eddDate ?? "") &&
         String(fullRow.originalEddDate ?? "") === String(mondayBefore.originalEddDate ?? "") &&
-        String(fullRow.trackingNumber ?? "") === String(mondayBefore.trackingNumber ?? "");
+        String(fullRow.trackingNumber ?? "") === String(mondayBefore.trackingNumber ?? "") &&
+        String(fullRow.sku ?? "") === String((mondayBefore as any).sku ?? "");
 
       if (noChanges) {
         console.log("[Monday][Bulk Sync] No changes vs Monday, skipping update API call for item:", mondayItemId);
@@ -160,13 +162,12 @@ export async function action({ request }: ActionFunctionArgs) {
           await updateMondayItem(mondayItemId, fullRow);
           didUpdate = true;
         } catch (updateError) {
-          const msg = updateError instanceof Error ? updateError.message : String(updateError);
-          if (msg.includes("Item not found in board")) {
-            console.log(`[Monday][Bulk Sync] Stale mondayItemId ${mondayItemId} no longer exists on board, creating a fresh item`);
+          if (isStaleMondayItemError(updateError)) {
+            console.log(`[Monday][Bulk Sync] Stale/inactive mondayItemId ${mondayItemId}, creating a fresh item`);
             mondayItemId = await createMondayItem(itemName, fullRow);
             await prisma.orderLineItemOperationalData.update({
               where: { shop_orderId_variantId: { shop, orderId, variantId } },
-              data: { mondayItemId },
+              data: { mondayItemId, notesPushedCount: 0 },
             });
             syncStatus = "created";
           } else {
@@ -210,7 +211,12 @@ export async function action({ request }: ActionFunctionArgs) {
       .map((b) => b.trim())
       .filter(Boolean);
 
-    const alreadyPushed = existing.notesPushedCount ?? 0;
+    const freshRecord = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    });
+    const alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
+      ? (freshRecord?.notesPushedCount ?? 0)
+      : 0;
     const newBlocks = noteBlocks.slice(alreadyPushed);
 
     if (newBlocks.length > 0 && mondayItemId) {
@@ -220,7 +226,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        data: { notesPushedCount: noteBlocks.length },
+        data: { notesPushedCount: noteBlocks.length, notesPushedMondayItemId: mondayItemId },
       });
       console.log(`[Monday][Bulk Sync] Pushed ${newBlocks.length} new note(s) to Monday Updates tab.`);
     } else {

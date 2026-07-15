@@ -12,6 +12,7 @@ export type FreightLineItem = {
   id: string;
   variantId: string;
   title?: string;
+  sku?: string;
   company: string;
   boxes: number;
   amount: number;
@@ -55,7 +56,7 @@ type NoteItem = {
 type SyncProgressEntry = {
   id: string;
   label: string;
-  status: "created" | "already-there" | "failed";
+  status: "created" | "updated" | "already-there" | "failed";
   message: string;
 };
 
@@ -350,6 +351,13 @@ export default function FreightDashboard({
           ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd,
         }),
       }));
+      if (allRows) {
+        setAllRows((prev) => prev ? prev.map((o) => o.id !== eddModal.order.id ? o : {
+          ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== eddModal.item.variantId ? li : {
+            ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd,
+          }),
+        }) : prev);
+      }
       setEddModal(null);
       setEddForm({ newEdd: "", reason: "", notifyCustomer: false });
       if (detailView) {
@@ -393,6 +401,13 @@ export default function FreightDashboard({
           ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company,
         }),
       }));
+      if (allRows) {
+        setAllRows((prev) => prev ? prev.map((o) => o.id !== trackingModal.order.id ? o : {
+          ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== trackingModal.item.variantId ? li : {
+            ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company,
+          }),
+        }) : prev);
+      }
       setTrackingModal(null);
       setTrackingForm({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
       if (detailView) {
@@ -468,6 +483,7 @@ export default function FreightDashboard({
               eddDate: item.eddDate,
               originalEddDate: item.originalEddDate,
               productTitle: item.title ?? "",
+              sku: item.sku ?? "",
               boxes: item.boxes ?? "",
               customerStatus: item.customerStatus,
             },
@@ -485,9 +501,15 @@ export default function FreightDashboard({
         }
 
         const json = await res.json();
-        const status = json.syncStatus === "created" ? "created" : "already-there";
+        const status: SyncProgressEntry["status"] =
+          json.syncStatus === "created" ? "created" :
+          json.syncStatus === "updated" ? "updated" :
+          "already-there";
         entry.status = status;
-        entry.message = status === "created" ? "Created in Monday" : "Already in Monday";
+        entry.message =
+          status === "created" ? "Created in Monday" :
+          status === "updated" ? "Updated in Monday" :
+          "Already in Monday";
 
         const updatedLineItem = {
           ...item,
@@ -504,7 +526,7 @@ export default function FreightDashboard({
           ...prev,
           completed: prev.completed + 1,
           created: prev.created + (status === "created" ? 1 : 0),
-          updated: prev.updated + (json.didUpdate ? 1 : 0),
+          updated: prev.updated + (status === "updated" ? 1 : 0),
           already: prev.already + (status === "already-there" ? 1 : 0),
           entries: [...prev.entries, entry],
         }));
@@ -579,6 +601,7 @@ export default function FreightDashboard({
             eddDate: detailView.item.eddDate,
             originalEddDate: detailView.item.originalEddDate,
             productTitle: detailView.item.title ?? "",
+            sku: detailView.item.sku ?? "",
             boxes: detailView.item.boxes ?? "",
             customerStatus: detailView.item.customerStatus,
           },
@@ -590,6 +613,11 @@ export default function FreightDashboard({
       setRows((prevRows = []) => prevRows.map((o: any) => o.id !== detailView.order.id ? o : {
         ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }),
       }));
+      if (allRows) {
+        setAllRows((prev) => prev ? prev.map((o) => o.id !== detailView.order.id ? o : {
+          ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }),
+        }) : prev);
+      }
     } catch (e) {
       console.error("Monday sync failed", e);
     } finally {
@@ -747,7 +775,14 @@ export default function FreightDashboard({
                     {syncProgress.entries.slice(-5).map((entry) => (
                       <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", fontSize: "12px", color: "#374151" }}>
                         <span>{entry.label}</span>
-                        <span style={{ color: entry.status === "created" ? "#15803d" : entry.status === "already-there" ? "#1d4ed8" : "#b91c1c", fontWeight: 700 }}>
+                        <span style={{
+                         color:
+                           entry.status === "created" ? "#15803d" :
+                           entry.status === "updated" ? "#7c3aed" :
+                           entry.status === "already-there" ? "#1d4ed8" :
+                           "#b91c1c",
+                         fontWeight: 700,
+                       }}>
                           {entry.message}
                         </span>
                       </div>
