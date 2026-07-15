@@ -107,6 +107,7 @@ model OrderOperationalData {
   supplierContainer   String   @default("")
   portArrivalDate     String   @default("")
   inTransitDate       String   @default("")
+  cin7SalesOrderId    String   @default("")
   createdAt           DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -138,6 +139,7 @@ model OrderLineItemOperationalData {
   supplierContainer String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
+  cin7SalesOrderId  String   @default("")
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
