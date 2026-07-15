@@ -152,12 +152,14 @@ function parseFreightCode(code: string | undefined, order: OrderPayload) {
   const lineItemsRaw = segments[4];
   if (!carriers || !lineItemsRaw) return null;
 
-  // Map numeric variant id -> product title from the order line items.
+  // Map numeric variant id -> product title and SKU from the order line items.
   const titleByVariant = new Map<string, string>();
+  const skuByVariant = new Map<string, string>();
   for (const li of order.line_items ?? []) {
-    const anyLi = li as OrderLineItem & { variant_id?: number; title?: string };
-    if (anyLi.variant_id != null && anyLi.title) {
-      titleByVariant.set(String(anyLi.variant_id), anyLi.title);
+    const anyLi = li as OrderLineItem & { variant_id?: number; title?: string; sku?: string };
+    if (anyLi.variant_id != null) {
+      if (anyLi.title) titleByVariant.set(String(anyLi.variant_id), anyLi.title);
+      if (anyLi.sku) skuByVariant.set(String(anyLi.variant_id), anyLi.sku);
     }
   }
 
@@ -167,6 +169,7 @@ function parseFreightCode(code: string | undefined, order: OrderPayload) {
     return {
       variantId,
       title: titleByVariant.get(variantId),
+      sku: skuByVariant.get(variantId) ?? "",
       company: company ?? "",
       companyLabel: COMPANY_LABELS[company ?? ""] ?? company ?? "",
       boxes: Number(boxesStr ?? 0),
@@ -299,6 +302,7 @@ async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
           eddDate: "",
           originalEddDate: "",
           productTitle: li.title ?? "",
+          sku: li.sku ?? "",
           boxes: li.boxes ?? "",
           customerStatus: "",
           shop,

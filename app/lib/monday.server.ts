@@ -27,6 +27,20 @@ async function mondayRequest(query: string, variables?: Record<string, any>, ret
   return json.data;
 }
 
+export function isStaleMondayItemError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("Item not found in board") ||
+    msg.includes("inactiveItems") ||
+    msg.includes("Cannot change column value for inactive items")
+  );
+}
+
+export function isInvalidColumnError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("InvalidColumnIdException") || msg.includes("doesn't exist for the board");
+}
+
 type MondayRow = {
   customerName: string;
   email: string;
@@ -35,6 +49,7 @@ type MondayRow = {
   eddDate: string;
   originalEddDate: string;
   productTitle: string;
+  sku: string;
   boxes: number | string;
   customerStatus: string;
   shop: string;
@@ -50,11 +65,27 @@ type MondayRow = {
 const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; defaults?: string }> = {
   customerName: { title: "Customer", type: "text" },
   email: { title: "Email", type: "email" },
-  carriers: { title: "Carrier", type: "text" },
+  carriers: {
+    title: "Carrier",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Fliway - Linehaul",
+        "1": "Fliway - Midsize",
+        "2": "NZP",
+        "3": "NZP - Age Restricted",
+        "4": "Castle",
+        "5": "Team Global Express",
+        "6": "M2H",
+        "7": "Mainfreight",
+      },
+    }),
+  },
   trackingNumber: { title: "Tracking Number", type: "text" },
   eddDate: { title: "EDD", type: "date" },
   originalEddDate: { title: "Original EDD", type: "date" },
   productTitle: { title: "Product", type: "text" },
+  sku: { title: "SKU", type: "text" },
   boxes: { title: "Quantity", type: "numbers" },
   customerStatus: {
     title: "Status",
@@ -66,15 +97,35 @@ const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; default
   shop: { title: "Shop", type: "text" },
   orderId: { title: "Order ID", type: "text" },
   variantId: { title: "Variant ID", type: "text" },
-  warehouseStatus: { title: "Warehouse Status", type: "text" },
-  dispatchStatus: { title: "Dispatch Status", type: "text" },
-  deliveryStatus: { title: "Delivery Status", type: "text" },
+  warehouseStatus: {
+    title: "Warehouse Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: { "0": "Not received", "1": "Received", "2": "Processing", "3": "Ready to dispatch", "4": "Dispatched" },
+    }),
+  },
+  dispatchStatus: {
+    title: "Dispatch Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: { "0": "Not dispatched", "1": "Booked", "2": "Dispatched", "3": "Failed" },
+    }),
+  },
+  deliveryStatus: {
+    title: "Delivery Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: { "0": "Pending", "1": "In transit", "2": "Out for delivery", "3": "Delivered", "4": "Failed" },
+    }),
+  },
   depositPaid: { title: "Deposit Paid", type: "text" },
   balanceDue: { title: "Balance Due", type: "text" },
 };
 
 let columnIdCache: Record<string, string> | null = null;
 let columnIdCachePromise: Promise<Record<string, string>> | null = null;
+let validGroupIdCache: string | null = null;
+let validGroupIdPromise: Promise<string | undefined> | null = null;
 
 async function getOrCreateColumnIds(): Promise<Record<string, string>> {
   if (columnIdCache) {
@@ -127,6 +178,48 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
   }
 }
 
+async function getValidGroupId(): Promise<string | undefined> {
+  if (validGroupIdCache) return validGroupIdCache;
+  if (validGroupIdPromise) return validGroupIdPromise;
+
+  validGroupIdPromise = (async () => {
+    const configuredGroupId = process.env.MONDAY_GROUP_ID;
+    if (!configuredGroupId) return undefined;
+
+    const data = await mondayRequest(
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { groups { id title archived deleted } } }`,
+      { boardId: process.env.MONDAY_BOARD_ID }
+    );
+    const groups: { id: string; title: string; archived?: boolean; deleted?: boolean }[] = data.boards?.[0]?.groups ?? [];
+
+    const configured = groups.find((g) => g.id === configuredGroupId);
+    if (configured && !configured.archived && !configured.deleted) {
+      console.log(`[Monday] Configured group "${configuredGroupId}" is active, using it`);
+      validGroupIdCache = configuredGroupId;
+      return configuredGroupId;
+    }
+
+    console.warn(
+      `[Monday] Configured MONDAY_GROUP_ID "${configuredGroupId}" is missing/archived/deleted. Falling back to first active group.`
+    );
+    const fallback = groups.find((g) => !g.archived && !g.deleted);
+    if (fallback) {
+      console.log(`[Monday] Using fallback group "${fallback.title}" (${fallback.id})`);
+      validGroupIdCache = fallback.id;
+      return fallback.id;
+    }
+
+    console.warn("[Monday] No active groups found, creating item without a group_id (board default).");
+    return undefined;
+  })();
+
+  try {
+    return await validGroupIdPromise;
+  } finally {
+    validGroupIdPromise = null;
+  }
+}
+
 const statusLabelMap: Record<string, string> = {
   pending: "Pending",
   confirmed: "Confirmed",
@@ -135,6 +228,17 @@ const statusLabelMap: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+const carrierLabelMap: Record<string, string> = {
+  fliway: "Fliway - Linehaul",
+  fliwaylinehaul: "Fliway - Linehaul",
+  fliwaymidsize: "Fliway - Midsize",
+  nzp: "NZP",
+  nzp_age_restricted: "NZP - Age Restricted",
+  castle: "Castle",
+  tge: "Team Global Express",
+  m2h: "M2H",
+  mainfreight: "Mainfreight",
+};
 
 async function buildColumnValues(row: MondayRow) {
   const colIds = await getOrCreateColumnIds();
@@ -150,6 +254,13 @@ async function buildColumnValues(row: MondayRow) {
       if (statusVal)
         values[colId] = { label: statusLabelMap[statusVal.toLowerCase()] ?? statusVal };
       // omit the column entirely when empty, to avoid invalid-label errors
+    } else if (key === "carriers") {
+      const carrierVal = val as string;
+      if (carrierVal)
+        values[colId] = { label: carrierLabelMap[carrierVal.toLowerCase()] ?? carrierVal };
+    } else if (key === "warehouseStatus" || key === "dispatchStatus" || key === "deliveryStatus") {
+      const statusVal = val as string;
+      if (statusVal) values[colId] = { label: statusVal };
     } else if (key === "email") {
       if (val) values[colId] = { email: val, text: val };
     } else if (key === "productTitle" || key === "boxes") {
@@ -194,43 +305,81 @@ export async function findExistingMondayItemId(orderId: string, variantId: strin
 
 export async function createMondayItem(itemName: string, row: MondayRow) {
   console.log("[Monday] createMondayItem called:", itemName, row);
-  const columnValues = await buildColumnValues(row);
-   console.log("[Monday] Built column values:", columnValues);
+  const groupId = await getValidGroupId();
   const query = `mutation ($boardId: ID!, $groupId: String, $itemName: String!, $columnValues: JSON!) {
     create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues) { id }
   }`;
-  const data = await mondayRequest(query, {
-    boardId: process.env.MONDAY_BOARD_ID,
-    groupId: process.env.MONDAY_GROUP_ID || undefined,
-    itemName,
-    columnValues: JSON.stringify(columnValues),
-  });
+
+  let columnValues = await buildColumnValues(row);
+  let data;
+  try {
+    data = await mondayRequest(query, {
+      boardId: process.env.MONDAY_BOARD_ID,
+      groupId,
+      itemName,
+      columnValues: JSON.stringify(columnValues),
+    });
+  } catch (err) {
+    if (isInvalidColumnError(err)) {
+      console.log("[Monday] Stale column ID cache detected on create, clearing cache and retrying once");
+      columnIdCache = null;
+      columnValues = await buildColumnValues(row);
+      data = await mondayRequest(query, {
+        boardId: process.env.MONDAY_BOARD_ID,
+        groupId,
+        itemName,
+        columnValues: JSON.stringify(columnValues),
+      });
+    } else {
+      throw err;
+    }
+  }
   console.log("[Monday] Item created with id:", data.create_item.id);
   return data.create_item.id as string;
 }
 
 export async function updateMondayItem(itemId: string, row: MondayRow) {
   console.log("[Monday] updateMondayItem called:", itemId, row);
-  const columnValues = await buildColumnValues(row);
   const query = `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
     change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id }
   }`;
-  await mondayRequest(query, {
-    boardId: process.env.MONDAY_BOARD_ID,
-    itemId,
-    columnValues: JSON.stringify(columnValues),
-  });
+
+  let columnValues = await buildColumnValues(row);
+  try {
+    await mondayRequest(query, {
+      boardId: process.env.MONDAY_BOARD_ID,
+      itemId,
+      columnValues: JSON.stringify(columnValues),
+    });
+  } catch (err) {
+    if (isInvalidColumnError(err)) {
+      console.log("[Monday] Stale column ID cache detected on update, clearing cache and retrying once");
+      columnIdCache = null;
+      columnValues = await buildColumnValues(row);
+      await mondayRequest(query, {
+        boardId: process.env.MONDAY_BOARD_ID,
+        itemId,
+        columnValues: JSON.stringify(columnValues),
+      });
+    } else {
+      throw err;
+    }
+  }
   console.log("[Monday] Item updated:", itemId);
 }
 
 export async function fetchMondayItem(itemId: string) {
   const colIds = await getOrCreateColumnIds();
   const query = `query ($itemId: [ID!]) {
-    items(ids: $itemId) { id column_values { id text value } }
+    items(ids: $itemId) { id state column_values { id text value } }
   }`;
   const data = await mondayRequest(query, { itemId: [itemId] });
   const item = data.items?.[0];
   if (!item) return null;
+  if (item.state && item.state !== "active") {
+    console.log(`[Monday] Item ${itemId} is not active (state: ${item.state}), treating as not found`);
+    return null;
+  }
 
   const getCol = (key: keyof MondayRow) => item.column_values.find((c: any) => c.id === colIds[key]);
   const getText = (key: keyof MondayRow) => getCol(key)?.text ?? "";
@@ -248,6 +397,7 @@ export async function fetchMondayItem(itemId: string) {
     eddDateChangedAt: getChangedAt("eddDate"), // NEW
     originalEddDate: getText("originalEddDate"),
     trackingNumber: getText("trackingNumber"),
+    sku: getText("sku"), // NEW
   };
 }
 

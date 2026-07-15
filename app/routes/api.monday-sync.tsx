@@ -1,5 +1,5 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError } from "../lib/monday.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -97,7 +97,20 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     console.log("[Monday][Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
-    await updateMondayItem(mondayItemId, fullRow);
+    try {
+      await updateMondayItem(mondayItemId, fullRow);
+    } catch (updateError) {
+      if (isStaleMondayItemError(updateError)) {
+        console.log(`[Monday][Sync] Stale/inactive mondayItemId ${mondayItemId}, creating a fresh item`);
+        mondayItemId = await createMondayItem(itemName, fullRow);
+        await prisma.orderLineItemOperationalData.update({
+          where: { shop_orderId_variantId: { shop, orderId, variantId } },
+          data: { mondayItemId, notesPushedCount: 0 },
+        });
+      } else {
+        throw updateError;
+      }
+    }
   }
 
   const mondayData = await fetchMondayItem(mondayItemId);
@@ -126,18 +139,22 @@ export async function action({ request }: ActionFunctionArgs) {
       .map((b) => b.trim())
       .filter(Boolean);
 
-    const alreadyPushed = existing.notesPushedCount ?? 0;
+    const freshRecord = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    });
+    const alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
+      ? (freshRecord?.notesPushedCount ?? 0)
+      : 0;
     const newBlocks = noteBlocks.slice(alreadyPushed);
 
     if (newBlocks.length > 0 && mondayItemId) {
       for (const block of newBlocks) {
-        // Strip the "[scheme|author|time]" prefix for a cleaner Monday update body
         const cleaned = block.replace(/^\[[^\]]*\]\s*/, "");
         await createMondayUpdate(mondayItemId, cleaned);
       }
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        data: { notesPushedCount: noteBlocks.length },
+        data: { notesPushedCount: noteBlocks.length, notesPushedMondayItemId: mondayItemId },
       });
       console.log(`[Monday][Sync] Pushed ${newBlocks.length} new note(s) to Monday Updates tab.`);
     } else {
