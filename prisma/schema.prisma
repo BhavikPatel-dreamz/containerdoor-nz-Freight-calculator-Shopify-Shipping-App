@@ -136,6 +136,7 @@ model OrderLineItemOperationalData {
   notes             String   @default("")
   notesPushedCount  Int      @default(0)  
   notesPushedMondayItemId String? // NEW
+  notesPulledUpdateIds    String   @default("")
   supplierContainer String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")

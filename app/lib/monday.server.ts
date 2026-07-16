@@ -1,7 +1,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MONDAY_API_URL = "https://api.monday.com/v2";
 
-async function mondayRequest(query: string, variables?: Record<string, any>, retries = 3): Promise<any> {
+async function mondayRequest(
+  query: string,
+  variables?: Record<string, any>,
+  retries = 3,
+): Promise<any> {
   const res = await fetch(MONDAY_API_URL, {
     method: "POST",
     headers: {
@@ -15,10 +19,17 @@ async function mondayRequest(query: string, variables?: Record<string, any>, ret
   console.log("[Monday API] request:", JSON.stringify(variables));
   console.log("[Monday API] response:", JSON.stringify(json));
 
-  const complexityError = json.errors?.find((e: any) => e?.extensions?.code === "COMPLEXITY_BUDGET_EXHAUSTED");
+  const complexityError = json.errors?.find(
+    (e: any) => e?.extensions?.code === "COMPLEXITY_BUDGET_EXHAUSTED",
+  );
   if (complexityError && retries > 0) {
-    const waitSeconds = Math.min(complexityError.extensions?.retry_in_seconds ?? 10, 40);
-    console.log(`[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`);
+    const waitSeconds = Math.min(
+      complexityError.extensions?.retry_in_seconds ?? 10,
+      40,
+    );
+    console.log(
+      `[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`,
+    );
     await new Promise((r) => setTimeout(r, waitSeconds * 1000));
     return mondayRequest(query, variables, retries - 1);
   }
@@ -38,7 +49,10 @@ export function isStaleMondayItemError(err: unknown): boolean {
 
 export function isInvalidColumnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return msg.includes("InvalidColumnIdException") || msg.includes("doesn't exist for the board");
+  return (
+    msg.includes("InvalidColumnIdException") ||
+    msg.includes("doesn't exist for the board")
+  );
 }
 
 type MondayRow = {
@@ -62,7 +76,10 @@ type MondayRow = {
   balanceDue: string;
 };
 
-const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; defaults?: string }> = {
+const FIELD_DEFS: Record<
+  keyof MondayRow,
+  { title: string; type: string; defaults?: string }
+> = {
   customerName: { title: "Customer", type: "text" },
   email: { title: "Email", type: "email" },
   carriers: {
@@ -91,7 +108,13 @@ const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; default
     title: "Status",
     type: "status",
     defaults: JSON.stringify({
-      labels: { "0": "Pending", "1": "Confirmed", "2": "Dispatched", "3": "Delivered", "4": "Cancelled" },
+      labels: {
+        "0": "Pending",
+        "1": "Confirmed",
+        "2": "Dispatched",
+        "3": "Delivered",
+        "4": "Cancelled",
+      },
     }),
   },
   shop: { title: "Shop", type: "text" },
@@ -101,21 +124,38 @@ const FIELD_DEFS: Record<keyof MondayRow, { title: string; type: string; default
     title: "Warehouse Status",
     type: "status",
     defaults: JSON.stringify({
-      labels: { "0": "Not received", "1": "Received", "2": "Processing", "3": "Ready to dispatch", "4": "Dispatched" },
+      labels: {
+        "0": "Not received",
+        "1": "Received",
+        "2": "Processing",
+        "3": "Ready to dispatch",
+        "4": "Dispatched",
+      },
     }),
   },
   dispatchStatus: {
     title: "Dispatch Status",
     type: "status",
     defaults: JSON.stringify({
-      labels: { "0": "Not dispatched", "1": "Booked", "2": "Dispatched", "3": "Failed" },
+      labels: {
+        "0": "Not dispatched",
+        "1": "Booked",
+        "2": "Dispatched",
+        "3": "Failed",
+      },
     }),
   },
   deliveryStatus: {
     title: "Delivery Status",
     type: "status",
     defaults: JSON.stringify({
-      labels: { "0": "Pending", "1": "In transit", "2": "Out for delivery", "3": "Delivered", "4": "Failed" },
+      labels: {
+        "0": "Pending",
+        "1": "In transit",
+        "2": "Out for delivery",
+        "3": "Delivered",
+        "4": "Failed",
+      },
     }),
   },
   depositPaid: { title: "Deposit Paid", type: "text" },
@@ -139,30 +179,50 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
   }
 
   columnIdCachePromise = (async () => {
-    console.log("[Monday] Fetching board columns for board:", process.env.MONDAY_BOARD_ID);
+    console.log(
+      "[Monday] Fetching board columns for board:",
+      process.env.MONDAY_BOARD_ID,
+    );
     const data = await mondayRequest(
       `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
-      { boardId: process.env.MONDAY_BOARD_ID }
+      { boardId: process.env.MONDAY_BOARD_ID },
     );
-    const existing: { id: string; title: string; type: string }[] = data.boards?.[0]?.columns ?? [];
-    console.log("[Monday] Existing columns:", existing.map((c) => c.title));
+    const existing: { id: string; title: string; type: string }[] =
+      data.boards?.[0]?.columns ?? [];
+    console.log(
+      "[Monday] Existing columns:",
+      existing.map((c) => c.title),
+    );
     const map: Record<string, string> = {};
 
     for (const [key, def] of Object.entries(FIELD_DEFS)) {
-      const found = existing.find((c) => c.title.toLowerCase() === def.title.toLowerCase());
+      const found = existing.find(
+        (c) => c.title.toLowerCase() === def.title.toLowerCase(),
+      );
       if (found) {
-        console.log(`[Monday] Column "${def.title}" already exists (id: ${found.id})`);
+        console.log(
+          `[Monday] Column "${def.title}" already exists (id: ${found.id})`,
+        );
         map[key] = found.id;
         continue;
       }
-      console.log(`[Monday] Creating column "${def.title}" (type: ${def.type})`);
+      console.log(
+        `[Monday] Creating column "${def.title}" (type: ${def.type})`,
+      );
       const created = await mondayRequest(
         `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
           create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
         }`,
-        { boardId: process.env.MONDAY_BOARD_ID, title: def.title, columnType: def.type, defaults: def.defaults }
+        {
+          boardId: process.env.MONDAY_BOARD_ID,
+          title: def.title,
+          columnType: def.type,
+          defaults: def.defaults,
+        },
       );
-      console.log(`[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`);
+      console.log(
+        `[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`,
+      );
       map[key] = created.create_column.id;
     }
 
@@ -188,28 +248,39 @@ async function getValidGroupId(): Promise<string | undefined> {
 
     const data = await mondayRequest(
       `query ($boardId: ID!) { boards(ids: [$boardId]) { groups { id title archived deleted } } }`,
-      { boardId: process.env.MONDAY_BOARD_ID }
+      { boardId: process.env.MONDAY_BOARD_ID },
     );
-    const groups: { id: string; title: string; archived?: boolean; deleted?: boolean }[] = data.boards?.[0]?.groups ?? [];
+    const groups: {
+      id: string;
+      title: string;
+      archived?: boolean;
+      deleted?: boolean;
+    }[] = data.boards?.[0]?.groups ?? [];
 
     const configured = groups.find((g) => g.id === configuredGroupId);
     if (configured && !configured.archived && !configured.deleted) {
-      console.log(`[Monday] Configured group "${configuredGroupId}" is active, using it`);
+      console.log(
+        `[Monday] Configured group "${configuredGroupId}" is active, using it`,
+      );
       validGroupIdCache = configuredGroupId;
       return configuredGroupId;
     }
 
     console.warn(
-      `[Monday] Configured MONDAY_GROUP_ID "${configuredGroupId}" is missing/archived/deleted. Falling back to first active group.`
+      `[Monday] Configured MONDAY_GROUP_ID "${configuredGroupId}" is missing/archived/deleted. Falling back to first active group.`,
     );
     const fallback = groups.find((g) => !g.archived && !g.deleted);
     if (fallback) {
-      console.log(`[Monday] Using fallback group "${fallback.title}" (${fallback.id})`);
+      console.log(
+        `[Monday] Using fallback group "${fallback.title}" (${fallback.id})`,
+      );
       validGroupIdCache = fallback.id;
       return fallback.id;
     }
 
-    console.warn("[Monday] No active groups found, creating item without a group_id (board default).");
+    console.warn(
+      "[Monday] No active groups found, creating item without a group_id (board default).",
+    );
     return undefined;
   })();
 
@@ -252,13 +323,21 @@ async function buildColumnValues(row: MondayRow) {
     } else if (key === "customerStatus") {
       const statusVal = val as string;
       if (statusVal)
-        values[colId] = { label: statusLabelMap[statusVal.toLowerCase()] ?? statusVal };
+        values[colId] = {
+          label: statusLabelMap[statusVal.toLowerCase()] ?? statusVal,
+        };
       // omit the column entirely when empty, to avoid invalid-label errors
     } else if (key === "carriers") {
       const carrierVal = val as string;
       if (carrierVal)
-        values[colId] = { label: carrierLabelMap[carrierVal.toLowerCase()] ?? carrierVal };
-    } else if (key === "warehouseStatus" || key === "dispatchStatus" || key === "deliveryStatus") {
+        values[colId] = {
+          label: carrierLabelMap[carrierVal.toLowerCase()] ?? carrierVal,
+        };
+    } else if (
+      key === "warehouseStatus" ||
+      key === "dispatchStatus" ||
+      key === "deliveryStatus"
+    ) {
       const statusVal = val as string;
       if (statusVal) values[colId] = { label: statusVal };
     } else if (key === "email") {
@@ -273,7 +352,10 @@ async function buildColumnValues(row: MondayRow) {
   return values;
 }
 
-export async function findExistingMondayItemId(orderId: string, variantId: string) {
+export async function findExistingMondayItemId(
+  orderId: string,
+  variantId: string,
+) {
   if (!orderId || !variantId) return null;
 
   const colIds = await getOrCreateColumnIds();
@@ -283,21 +365,30 @@ export async function findExistingMondayItemId(orderId: string, variantId: strin
         items { id }
       }
     }`,
-    { boardId: process.env.MONDAY_BOARD_ID, columnId: colIds.orderId, columnValue: orderId }
+    {
+      boardId: process.env.MONDAY_BOARD_ID,
+      columnId: colIds.orderId,
+      columnValue: orderId,
+    },
   );
 
-  const candidateIds = (data.items_page_by_column_values?.items ?? []).map((item: any) => item.id).filter(Boolean);
+  const candidateIds = (data.items_page_by_column_values?.items ?? [])
+    .map((item: any) => item.id)
+    .filter(Boolean);
   if (!candidateIds.length) return null;
 
   const details = await mondayRequest(
     `query ($itemIds: [ID!]) {
       items(ids: $itemIds) { id column_values { id text } }
     }`,
-    { itemIds: candidateIds }
+    { itemIds: candidateIds },
   );
 
   const matched = details.items?.find((item: any) =>
-    item.column_values?.some((column: any) => column.id === colIds.variantId && column.text === String(variantId))
+    item.column_values?.some(
+      (column: any) =>
+        column.id === colIds.variantId && column.text === String(variantId),
+    ),
   );
 
   return matched?.id ?? null;
@@ -321,7 +412,9 @@ export async function createMondayItem(itemName: string, row: MondayRow) {
     });
   } catch (err) {
     if (isInvalidColumnError(err)) {
-      console.log("[Monday] Stale column ID cache detected on create, clearing cache and retrying once");
+      console.log(
+        "[Monday] Stale column ID cache detected on create, clearing cache and retrying once",
+      );
       columnIdCache = null;
       columnValues = await buildColumnValues(row);
       data = await mondayRequest(query, {
@@ -353,7 +446,9 @@ export async function updateMondayItem(itemId: string, row: MondayRow) {
     });
   } catch (err) {
     if (isInvalidColumnError(err)) {
-      console.log("[Monday] Stale column ID cache detected on update, clearing cache and retrying once");
+      console.log(
+        "[Monday] Stale column ID cache detected on update, clearing cache and retrying once",
+      );
       columnIdCache = null;
       columnValues = await buildColumnValues(row);
       await mondayRequest(query, {
@@ -377,17 +472,24 @@ export async function fetchMondayItem(itemId: string) {
   const item = data.items?.[0];
   if (!item) return null;
   if (item.state && item.state !== "active") {
-    console.log(`[Monday] Item ${itemId} is not active (state: ${item.state}), treating as not found`);
+    console.log(
+      `[Monday] Item ${itemId} is not active (state: ${item.state}), treating as not found`,
+    );
     return null;
   }
 
-  const getCol = (key: keyof MondayRow) => item.column_values.find((c: any) => c.id === colIds[key]);
+  const getCol = (key: keyof MondayRow) =>
+    item.column_values.find((c: any) => c.id === colIds[key]);
   const getText = (key: keyof MondayRow) => getCol(key)?.text ?? "";
 
   const getChangedAt = (key: keyof MondayRow): string | null => {
     const raw = getCol(key)?.value;
     if (!raw) return null;
-    try { return JSON.parse(raw)?.changed_at ?? null; } catch { return null; }
+    try {
+      return JSON.parse(raw)?.changed_at ?? null;
+    } catch {
+      return null;
+    }
   };
 
   return {
@@ -409,4 +511,30 @@ export async function createMondayUpdate(itemId: string, body: string) {
   const data = await mondayRequest(query, { itemId, body });
   console.log("[Monday] Update created:", data.create_update?.id);
   return data.create_update?.id as string;
+}
+
+let mondayApiUserId: string | null = null;
+
+export async function getMondayApiUserId(): Promise<string | null> {
+  if (mondayApiUserId) return mondayApiUserId;
+  const data = await mondayRequest(`query { me { id } }`).catch(() => null);
+  mondayApiUserId = data?.me?.id ? String(data.me.id) : null;
+  return mondayApiUserId;
+}
+
+export async function fetchMondayUpdates(itemId: string) {
+  const data = await mondayRequest(
+    `query ($itemId: [ID!]) { items(ids: $itemId) { updates(limit: 50) { id text_body created_at creator { id name } } } }`,
+    { itemId: [itemId] },
+  );
+  const updates = data.items?.[0]?.updates ?? [];
+  return updates
+    .map((u: any) => ({
+      id: String(u.id),
+      creatorId: u.creator?.id != null ? String(u.creator.id) : null,
+      creatorName: u.creator?.name ?? "Monday",
+      body: String(u.text_body ?? "").trim(),
+      createdAt: u.created_at,
+    }))
+    .filter((u: any) => u.body);
 }

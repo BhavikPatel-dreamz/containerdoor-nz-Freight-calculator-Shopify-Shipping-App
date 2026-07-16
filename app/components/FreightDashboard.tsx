@@ -416,6 +416,12 @@ export default function FreightDashboard({
         const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
         if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
       }
+       const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+      if (notesRes.ok) {
+        const notesJson = await notesRes.json();
+        const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
+      }
     } catch (e) {
       setEddError(e instanceof Error ? e.message : "Failed to save EDD");
     } finally {
@@ -746,6 +752,13 @@ export default function FreightDashboard({
         setAllRows((prev) => prev ? prev.map((o) => o.id !== detailView.order.id ? o : {
           ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }),
         }) : prev);
+      }
+      // ── NEW: refresh notes — sync may have pulled in new Monday comments
+      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+      if (notesRes.ok) {
+        const notesJson = await notesRes.json();
+        const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
       }
     } catch (e) {
       console.error("Monday sync failed", e);
