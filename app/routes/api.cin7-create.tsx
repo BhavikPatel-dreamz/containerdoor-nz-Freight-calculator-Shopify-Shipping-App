@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { createCin7SalesOrder } from "../lib/cin7.server";
+import { createCin7SalesOrder, fetchCin7SalesOrder } from "../lib/cin7.server";
 
 type RequestPayload = {
   shop?: string;
@@ -41,13 +41,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (existing?.cin7SalesOrderId && existing.cin7SalesOrderId !== "pending") {
+      const snapshot = await fetchCin7SalesOrder(existing.cin7SalesOrderId);
+
+      if (snapshot) {
+        console.log(
+          `[Cin7][API][${orderIdStr}] Verified — order still exists in Cin7 with ID: ${existing.cin7SalesOrderId}`,
+        );
+        return Response.json({
+          ok: true,
+          cin7SalesOrderId: existing.cin7SalesOrderId,
+        });
+      }
+
       console.log(
-        `[Cin7][API][${orderIdStr}] Order already has Cin7 ID: ${existing.cin7SalesOrderId}`,
+        `[Cin7][API][${orderIdStr}] Cached Cin7 ID ${existing.cin7SalesOrderId} no longer exists in Cin7 — will recreate`,
       );
-      return Response.json({
-        ok: true,
-        cin7SalesOrderId: existing.cin7SalesOrderId,
+      await prisma.orderOperationalData.update({
+        where: { shop_orderId: { shop, orderId: orderIdStr } },
+        data: { cin7SalesOrderId: "pending" },
       });
+      existing = { cin7SalesOrderId: "pending" };
     }
 
     // Fetch the order from Shopify

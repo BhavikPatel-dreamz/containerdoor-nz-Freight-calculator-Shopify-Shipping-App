@@ -22,6 +22,8 @@ export type FreightLineItem = {
   eddDate: string;
   originalEddDate: string;
   cin7Exists?: boolean;
+  cin7Status?: "match" | "mismatch" | "missing";
+  cin7Mismatches?: string[];
 };
 
 export type FreightOrderRow = {
@@ -167,6 +169,11 @@ function formatNoteDateTime(d = new Date()): string {
   return `${d.toLocaleDateString("en-NZ", { day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
+function getCin7CellStatus(item: FreightLineItem): "match" | "mismatch" | "missing" {
+  if (item.cin7Status) return item.cin7Status;
+  return item.cin7Exists ? "match" : "missing";
+}
+
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
 
@@ -234,6 +241,7 @@ export default function FreightDashboard({
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
+  const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
   const [, setTimeTick] = useState(0);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
@@ -273,6 +281,49 @@ export default function FreightDashboard({
     };
     fetchNotes();
   }, [detailView, noteModalTarget, eddModal, trackingModal]);
+
+  useEffect(() => {
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
+
+    (async () => {
+      const updates: Record<string, { variantId: string; status: "match" | "mismatch" | "missing"; mismatches: string[] }[]> = {};
+
+      await Promise.all(rows.map(async (order) => {
+        try {
+          const res = await fetch("/api/cin7-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop,
+              orderId: order.shopifyOrderId,
+              lineItems: order.lineItems.map((li) => ({
+                variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
+              })),
+            }),
+          });
+          if (!res.ok) return;
+          const json = await res.json();
+          updates[order.id] = json.results ?? [];
+        } catch (e) { console.error("Failed to fetch Cin7 status", e); }
+      }));
+
+      if (cancelled) return;
+      setRows((prev) => prev.map((o) => {
+        const result = updates[o.id];
+        if (!result) return o;
+        return {
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            const m = result.find((r) => r.variantId === li.variantId);
+            return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li;
+          }),
+        };
+      }));
+    })();
+
+    return () => { cancelled = true; };
+  }, [rows.map((o) => o.id).join(","), shop]);
 
   const filteredOrders = (rows || []).filter((o) => {
     // Tab filter — keep orders that have at least one matching line item
@@ -427,6 +478,40 @@ export default function FreightDashboard({
     }
   };
 
+  const handleFixCin7Mismatch = async (order: FreightOrderRow, item: FreightLineItem) => {
+    const key = `${order.id}-${item.variantId}`;
+    if (cin7FixingId) return;
+    setCin7FixingId(key);
+    try {
+      const res = await fetch("/api/cin7-update", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop, orderId: order.shopifyOrderId,
+          trackingNumber: item.trackingNumber, eddDate: item.eddDate, carrier: item.company,
+          fields: item.cin7Mismatches,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to sync mismatched fields to Cin7");
+
+      const applyMatch = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : {
+        ...o,
+        lineItems: o.lineItems.map((li) =>
+          li.variantId !== item.variantId ? li : { ...li, cin7Status: "match" as const, cin7Mismatches: [] }
+        ),
+      };
+      setRows((prev) => prev.map(applyMatch));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyMatch) : prev);
+      setSyncNotification("Cin7 fields updated");
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Failed to update Cin7");
+    } finally {
+      setCin7FixingId(null);
+      window.setTimeout(() => setSyncNotification(null), 4500);
+    }
+  };
+
   const handleCreateCin7Order = async (order: FreightOrderRow) => {
     if (creatingCin7OrderId) return;
     setCreatingCin7OrderId(order.id);
@@ -448,12 +533,12 @@ export default function FreightDashboard({
       const cin7Exists = Boolean(payload.cin7SalesOrderId && payload.cin7SalesOrderId !== "pending");
       setRows((prevRows = []) => prevRows.map((o: any) => o.id !== order.id ? o : {
         ...o,
-        lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists })),
+        lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })),
       }));
       if (allRows) {
         setAllRows((prev) => prev ? prev.map((o) => o.id !== order.id ? o : {
           ...o,
-          lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists })),
+          lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })),
         }) : prev);
       }
       if (detailView?.order.id === order.id) {
@@ -550,13 +635,13 @@ export default function FreightDashboard({
         const json = await res.json();
         const status: SyncProgressEntry["status"] =
           json.syncStatus === "created" ? "created" :
-          json.syncStatus === "updated" ? "updated" :
-          "already-there";
+            json.syncStatus === "updated" ? "updated" :
+              "already-there";
         entry.status = status;
         entry.message =
           status === "created" ? "Created in Monday" :
-          status === "updated" ? "Updated in Monday" :
-          "Already in Monday";
+            status === "updated" ? "Updated in Monday" :
+              "Already in Monday";
 
         const updatedLineItem = {
           ...item,
@@ -823,13 +908,13 @@ export default function FreightDashboard({
                       <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", fontSize: "12px", color: "#374151" }}>
                         <span>{entry.label}</span>
                         <span style={{
-                         color:
-                           entry.status === "created" ? "#15803d" :
-                           entry.status === "updated" ? "#7c3aed" :
-                           entry.status === "already-there" ? "#1d4ed8" :
-                           "#b91c1c",
-                         fontWeight: 700,
-                       }}>
+                          color:
+                            entry.status === "created" ? "#15803d" :
+                              entry.status === "updated" ? "#7c3aed" :
+                                entry.status === "already-there" ? "#1d4ed8" :
+                                  "#b91c1c",
+                          fontWeight: 700,
+                        }}>
                           {entry.message}
                         </span>
                       </div>
@@ -1123,28 +1208,48 @@ export default function FreightDashboard({
                               {isFirstItem ? `${order.carriers.split(",")[0]?.trim() ?? "FRT"}-REF-${order.shopifyOrderId.slice(-3)}` : "—"}
                             </td>
                             <td className="fo-td">
-                              {item.cin7Exists ? (
-                                <span className="fo-circle green">✓</span>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="fo-circle"
-                                  title="Create order in Cin7"
-                                  onClick={() => handleCreateCin7Order(order)}
-                                  disabled={creatingCin7OrderId === order.id}
-                                  style={{
-                                    color: "#dc2626",
-                                    background: "#fee2e2",
-                                    border: "none",
-                                    padding: 0,
-                                    minWidth: "24px",
-                                    minHeight: "24px",
-                                    cursor: creatingCin7OrderId === order.id ? "wait" : "pointer",
-                                  }}
-                                >
-                                  ✕
-                                </button>
-                              )}
+                              {(() => {
+                                const status = getCin7CellStatus(item);
+                                const cellKey = `${order.id}-${item.variantId}`;
+
+                                if (status === "match") {
+                                  return <span className="fo-circle green">✓</span>;
+                                }
+                                if (status === "mismatch") {
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="fo-circle"
+                                      title={`Out of sync: ${(item.cin7Mismatches ?? []).join(", ")}. Click to update Cin7.`}
+                                      onClick={() => handleFixCin7Mismatch(order, item)}
+                                      disabled={cin7FixingId === cellKey}
+                                      style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", cursor: cin7FixingId === cellKey ? "wait" : "pointer" }}
+                                    >
+                                      !
+                                    </button>
+                                  );
+                                }
+                                return (
+                                  <button
+                                    type="button"
+                                    className="fo-circle"
+                                    title="Create order in Cin7"
+                                    onClick={() => handleCreateCin7Order(order)}
+                                    disabled={creatingCin7OrderId === order.id}
+                                    style={{
+                                      color: "#dc2626",
+                                      background: "#fee2e2",
+                                      border: "none",
+                                      padding: 0,
+                                      minWidth: "24px",
+                                      minHeight: "24px",
+                                      cursor: creatingCin7OrderId === order.id ? "wait" : "pointer",
+                                    }}
+                                  >
+                                    ✕
+                                  </button>
+                                );
+                              })()}
                             </td>
                             <td className="fo-td"><span className="fo-circle green">✓</span></td>
                             <td className="fo-td">

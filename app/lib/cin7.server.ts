@@ -227,6 +227,109 @@ export async function syncCin7TrackingNumber(input: {
   }
 }
 
+export type Cin7OrderSnapshot = {
+  id: string;
+  trackingCode: string;
+  estimatedDeliveryDate: string;
+  logisticsCarrier: string;
+  status: string;
+  lineItems: { code: string; qty: number }[];
+};
+
+export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7OrderSnapshot | null> {
+  const id = salesOrderId?.trim();
+  if (!id || id === "pending" || !CIN7_API_URL) return null;
+
+  try {
+    const url = `${CIN7_API_URL}/${encodeURIComponent(id)}`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrder failed (${res.status}) for id=${id}`);
+      return null;
+    }
+    const json: any = await res.json();
+
+    debug("Cin7", `GET SalesOrder raw response for id=${id}:`, json);
+
+    const status = String(json.status ?? json.Status ?? json.orderStatus ?? "").toUpperCase();
+    if (status.includes("VOID") || status.includes("CANCEL")) {
+      debug("Cin7", `Order id=${id} is ${status} in Cin7 — treating as not existing`);
+      return null;
+    }
+
+    return {
+      id: String(json.id ?? id),
+      trackingCode: json.trackingCode ?? "",
+      estimatedDeliveryDate: json.estimatedDeliveryDate ?? "",
+      logisticsCarrier: json.logisticsCarrier ?? "",
+      status,
+      lineItems: (json.lineItems ?? []).map((li: any) => ({ code: li.code ?? "", qty: li.qty ?? 0 })),
+    };
+  } catch (error) {
+    debug("Cin7", "GET SalesOrder failed:", error);
+    return null;
+  }
+}
+
+export function diffCin7Fields(
+  item: { trackingNumber?: string; eddDate?: string; company?: string },
+  cin7: Cin7OrderSnapshot,
+): string[] {
+  const mismatches: string[] = [];
+
+  const wantTracking = (item.trackingNumber ?? "").trim();
+  if (wantTracking && wantTracking !== (cin7.trackingCode ?? "").trim()) {
+    mismatches.push("trackingNumber");
+  }
+
+  const wantEdd = item.eddDate ? item.eddDate.slice(0, 10) : "";
+  const haveEdd = cin7.estimatedDeliveryDate ? cin7.estimatedDeliveryDate.slice(0, 10) : "";
+  if (wantEdd && wantEdd !== haveEdd) {
+    mismatches.push("eddDate");
+  }
+
+  const wantCarrier = (item.company ?? "").trim().toUpperCase();
+  const haveCarrier = (cin7.logisticsCarrier ?? "").trim().toUpperCase();
+  if (wantCarrier && wantCarrier !== haveCarrier) {
+    mismatches.push("carrier");
+  }
+
+  return mismatches;
+}
+
+export async function syncCin7Carrier(input: {
+  salesOrderId?: string;
+  carrier?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) return { exists: false, updated: false };
+  if (!CIN7_API_URL) return { exists: true, updated: false, salesOrderId };
+
+  try {
+    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, logisticsCarrier: input.carrier ?? "" }];
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    const responseText = await res.text();
+    let json: any;
+    try { json = responseText ? JSON.parse(responseText) : null; } catch { json = null; }
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    if (res.ok) return { exists: true, updated: true, salesOrderId };
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    return { exists: true, updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function createCin7SalesOrder(
   input: Cin7SalesOrderInput,
 ): Promise<{ id: number; code: string }> {
