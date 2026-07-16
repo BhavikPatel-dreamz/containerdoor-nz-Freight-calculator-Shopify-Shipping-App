@@ -20,6 +20,15 @@ type OrderLineItem = {
 type OrderShippingLine = {
   title?: string;
   code?: string;
+  price?: string | number;
+};
+
+type OrderDiscountCode = {
+  code?: string;
+};
+
+type OrderTaxLine = {
+  rate?: string | number;
 };
 
 type OrderPayload = {
@@ -53,6 +62,10 @@ type OrderPayload = {
     last_name?: string;
     email?: string;
   };
+  total_discounts?: string | number;
+  discount_codes?: OrderDiscountCode[];
+  tax_lines?: OrderTaxLine[];
+  taxes_included?: boolean;
   shipping_lines?: OrderShippingLine[];
   line_items?: OrderLineItem[];
 };
@@ -341,6 +354,12 @@ async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
       currencyCode: order.currency,
       customerOrderNo: order.name ?? orderId,
       internalComments: `Auto-created from Shopify order ${order.name ?? orderId}`,
+      freightTotal: Number((order as any).shipping_lines?.[0]?.price ?? 0),
+      freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
+      discountTotal: Number(order.total_discounts ?? 0),
+      discountDescription: order.discount_codes?.[0]?.code ?? "",
+      taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
+      taxStatus: order.taxes_included ? "Incl" : "Excl",
       lineItems,
     });
 

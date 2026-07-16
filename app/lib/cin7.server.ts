@@ -52,6 +52,12 @@ export type Cin7SalesOrderInput = {
   currencyCode?: string;
   customerOrderNo?: string;
   internalComments?: string;
+  freightTotal?: number;
+  freightDescription?: string;
+  discountTotal?: number;
+  discountDescription?: string;
+  taxRate?: number;
+  taxStatus?: "Incl" | "Excl" | "Exempt";
   lineItems: Cin7LineItem[];
 };
 
@@ -145,6 +151,82 @@ export async function syncCin7EstimatedDispatchDate(input: {
   }
 }
 
+export async function syncCin7TrackingNumber(input: {
+  salesOrderId?: string;
+  trackingNumber?: string;
+  reference?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7TrackingNumber: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7TrackingNumber: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const body = [{
+      id: parseInt(salesOrderId, 10) || 0,
+      trackingCode: input.trackingNumber ?? "",
+    }];
+
+    debug("Cin7", `PUT tracking request to ${url}`);
+    debug("Cin7", "PUT tracking body:", body);
+
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT tracking response status: ${res.status}`);
+    debug("Cin7", `PUT tracking response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT tracking failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT tracking success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT tracking success (200): tracking updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    }
+
+    debug("Cin7", `PUT tracking error (${res.status}): ${responseText}`);
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    debug("Cin7", "PUT tracking request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function createCin7SalesOrder(
   input: Cin7SalesOrderInput,
 ): Promise<{ id: number; code: string }> {
@@ -176,6 +258,12 @@ export async function createCin7SalesOrder(
       ...(input.currencyCode ? { currencyCode: input.currencyCode } : {}),
       customerOrderNo: input.customerOrderNo ?? "",
       internalComments: input.internalComments ?? "",
+      ...(input.freightTotal !== undefined ? { freightTotal: input.freightTotal } : {}),
+      ...(input.freightDescription ? { freightDescription: input.freightDescription } : {}),
+      ...(input.discountTotal !== undefined ? { discountTotal: input.discountTotal } : {}),
+      ...(input.discountDescription ? { discountDescription: input.discountDescription } : {}),
+      ...(input.taxRate !== undefined ? { taxRate: input.taxRate } : {}),
+      ...(input.taxStatus ? { taxStatus: input.taxStatus } : {}),
       lineItems: input.lineItems.map((li, idx) => ({
         code: li.code,
         name: li.name ?? "",

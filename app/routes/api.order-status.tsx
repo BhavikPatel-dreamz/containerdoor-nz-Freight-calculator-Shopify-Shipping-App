@@ -2,7 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
-import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
+import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber } from "../lib/cin7.server";
 
 // Debug logging helper
 const debug = (namespace: string, message: string, data?: any) => {
@@ -282,7 +282,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
     const cin7SalesOrderId = orderOperationalData?.cin7SalesOrderId?.trim() || "";
     let cin7Exists = Boolean(cin7SalesOrderId && cin7SalesOrderId !== "pending");
-    debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, newEdd=${updateData.eddDate}`);
+    debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}, newEdd=${updateData.eddDate}`);
+
     if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
       debug("Cin7", `Syncing EDD to Cin7: salesOrderId=${cin7SalesOrderId}, eddDate=${updateData.eddDate}`);
       const cin7Update = await syncCin7EstimatedDispatchDate({
@@ -290,10 +291,19 @@ export async function action({ request }: ActionFunctionArgs) {
         eddDate: updateData.eddDate || "",
         reference: orderId,
       });
-      debug("Cin7", `Sync result:`, cin7Update);
+      debug("Cin7", `EDD sync result:`, cin7Update);
+      cin7Exists = cin7Update.exists;
+    } else if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+      debug("Cin7", `Syncing tracking to Cin7: salesOrderId=${cin7SalesOrderId}, trackingNumber=${updateData.trackingNumber}`);
+      const cin7Update = await syncCin7TrackingNumber({
+        salesOrderId: cin7SalesOrderId,
+        trackingNumber: updateData.trackingNumber || "",
+        reference: orderId,
+      });
+      debug("Cin7", `Tracking sync result:`, cin7Update);
       cin7Exists = cin7Update.exists;
     } else {
-      debug("Cin7", `SKIP - eddDate not changed or no Cin7 ID`);
+      debug("Cin7", `SKIP - no relevant Cin7 update needed`);
     }
 
     // ── NEW: push updated fields to Monday dashboard ──

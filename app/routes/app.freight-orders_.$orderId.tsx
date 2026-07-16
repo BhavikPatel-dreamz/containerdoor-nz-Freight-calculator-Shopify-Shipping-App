@@ -63,6 +63,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const existingMap = new Map(existingRecords.map((r) => [r.variantId, r]));
   const orderOperationalData = await prisma.orderOperationalData.findUnique({
     where: { shop_orderId: { shop, orderId } },
+    select: { cin7SalesOrderId: true },
   });
   const cin7Exists = Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending");
 
@@ -74,7 +75,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     return { ...item, numericVariantId, carrier, existing };
   });
 
-  return { order, lineItemsWithData, shippingLine, codeParts };
+  return { order, lineItemsWithData, shippingLine, codeParts, cin7Exists };
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -151,7 +152,12 @@ export async function action({ request, params }: ActionFunctionArgs) {
     }).catch((e) => console.error("[webhook] failed to send", e));
   }
 
-  return { ok: true, message: "Saved successfully", cin7Exists: Boolean(await prisma.orderOperationalData.findUnique({ where: { shop_orderId: { shop, orderId } } })?.cin7SalesOrderId && (await prisma.orderOperationalData.findUnique({ where: { shop_orderId: { shop, orderId } } }))?.cin7SalesOrderId !== "pending") };
+  const orderOperationalData = await prisma.orderOperationalData.findUnique({
+    where: { shop_orderId: { shop, orderId } },
+    select: { cin7SalesOrderId: true },
+  });
+
+  return { ok: true, message: "Saved successfully", cin7Exists: Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending") };
 }
 
 
