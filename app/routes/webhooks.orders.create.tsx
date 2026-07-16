@@ -20,6 +20,15 @@ type OrderLineItem = {
 type OrderShippingLine = {
   title?: string;
   code?: string;
+  price?: string | number;
+};
+
+type OrderDiscountCode = {
+  code?: string;
+};
+
+type OrderTaxLine = {
+  rate?: string | number;
 };
 
 type OrderPayload = {
@@ -32,16 +41,51 @@ type OrderPayload = {
     city?: string;
     zip?: string;
     country_code?: string;
+    phone?: string;
   };
+  billing_address?: {
+    first_name?: string;
+    last_name?: string;
+    company?: string;
+    address1?: string;
+    city?: string;
+    province?: string;
+    zip?: string;
+    country?: string;
+    country_code?: string;
+    phone?: string;
+  };
+  phone?: string;
+  email?: string;
+  customer?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+  };
+  total_discounts?: string | number;
+  discount_codes?: OrderDiscountCode[];
+  tax_lines?: OrderTaxLine[];
+  taxes_included?: boolean;
   shipping_lines?: OrderShippingLine[];
   line_items?: OrderLineItem[];
 };
+
+function extractCarrierFromShippingCode(code?: string): string {
+  if (!code) return "";
+  // Format: "standard_delivery::TGE,MAINFREIGHT::4boxes::..."
+  const parts = code.split("::");
+  if (parts.length < 2) return "";
+  // Get carriers part and extract first one
+  const carriers = parts[1]?.split(",") ?? [];
+  return carriers[0]?.trim() ?? "";
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, payload, topic, shop } = await authenticate.webhook(request);
   console.log(`Received ${topic} webhook for ${shop}`);
 
   const orderPayload = payload as OrderPayload;
+  console.log("[ORDER WEBHOOK PAYLOAD]", JSON.stringify(orderPayload, null, 2));
   const syncPayload = buildOrderSyncPayload(shop, orderPayload);
 
   // Mirror the freight breakdown (encoded in the shipping-line `code`) onto an
@@ -220,6 +264,31 @@ async function writeFreightMetafield(
 }
 
 
+function extractPhoneFromOrder(order: OrderPayload): string {
+  const shippingAddress = (order as any).shipping_address ?? {};
+  const billingAddress = (order as any).billing_address ?? {};
+  const customer = (order as any).customer ?? {};
+
+  const phone = [
+    (order as any).phone,
+    shippingAddress.phone,
+    billingAddress.phone,
+    customer.phone,
+  ].find((value) => typeof value === "string" && value.trim() !== "");
+
+  return typeof phone === "string" ? phone.trim() : "";
+}
+
+function extractCarrierFromOrder(order: OrderPayload): string {
+  const shippingLines = (order as any).shipping_lines ?? [];
+  const shippingLineCode = shippingLines.find((line: any) => line?.code)?.code ?? "";
+  const carrier = extractCarrierFromShippingCode(shippingLineCode);
+
+  if (carrier) return carrier;
+
+  return shippingLines.find((line: any) => line?.title)?.title ?? "";
+}
+
 async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   console.log(`[Cin7][Webhook][${orderId}] START createCin7EntryForOrder for order ${order.name}`);
@@ -255,7 +324,11 @@ async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
     }
 
     const shippingAddress = (order as any).shipping_address ?? {};
+    const billingAddress = (order as any).billing_address ?? {};
     const customer = (order as any).customer ?? {};
+
+    const carrier = extractCarrierFromOrder(order);
+    const phone = extractPhoneFromOrder(order);
 
     const result = await createCin7SalesOrder({
       reference: `Shopify-${order.name ?? orderId}`,
@@ -263,15 +336,30 @@ async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
       lastName: shippingAddress.last_name ?? customer.last_name ?? "",
       company: shippingAddress.company ?? "",
       email: (order as any).email ?? customer.email ?? "",
-      phone: shippingAddress.phone ?? (order as any).phone ?? "",
+      phone,
       deliveryAddress1: shippingAddress.address1 ?? "",
       deliveryCity: shippingAddress.city ?? "",
       deliveryState: shippingAddress.province ?? "",
       deliveryPostalCode: shippingAddress.zip ?? "",
       deliveryCountry: shippingAddress.country ?? shippingAddress.country_code ?? "",
+      billingFirstName: billingAddress.first_name ?? shippingAddress.first_name ?? customer.first_name ?? "",
+      billingLastName: billingAddress.last_name ?? shippingAddress.last_name ?? customer.last_name ?? "",
+      billingCompany: billingAddress.company ?? shippingAddress.company ?? "",
+      billingAddress1: billingAddress.address1 ?? shippingAddress.address1 ?? "",
+      billingCity: billingAddress.city ?? shippingAddress.city ?? "",
+      billingState: billingAddress.province ?? shippingAddress.province ?? "",
+      billingPostalCode: billingAddress.zip ?? shippingAddress.zip ?? "",
+      billingCountry: billingAddress.country ?? billingAddress.country_code ?? shippingAddress.country ?? shippingAddress.country_code ?? "",
+      logisticsCarrier: carrier,
       currencyCode: order.currency,
       customerOrderNo: order.name ?? orderId,
       internalComments: `Auto-created from Shopify order ${order.name ?? orderId}`,
+      freightTotal: Number((order as any).shipping_lines?.[0]?.price ?? 0),
+      freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
+      discountTotal: Number(order.total_discounts ?? 0),
+      discountDescription: order.discount_codes?.[0]?.code ?? "",
+      taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
+      taxStatus: order.taxes_included ? "Incl" : "Excl",
       lineItems,
     });
 

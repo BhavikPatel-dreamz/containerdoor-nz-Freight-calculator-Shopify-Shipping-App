@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
 
 // ─── Prisma model needed (see schema change below) ────────────────────────────
 
@@ -60,6 +61,11 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     where: { shop, orderId },
   });
   const existingMap = new Map(existingRecords.map((r) => [r.variantId, r]));
+  const orderOperationalData = await prisma.orderOperationalData.findUnique({
+    where: { shop_orderId: { shop, orderId } },
+    select: { cin7SalesOrderId: true },
+  });
+  const cin7Exists = Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending");
 
   // Attach carrier + existing data to each line item
   const lineItemsWithData = order.lineItems.nodes.map((item: any) => {
@@ -69,7 +75,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     return { ...item, numericVariantId, carrier, existing };
   });
 
-  return { order, lineItemsWithData, shippingLine, codeParts };
+  return { order, lineItemsWithData, shippingLine, codeParts, cin7Exists };
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -119,6 +125,17 @@ export async function action({ request, params }: ActionFunctionArgs) {
       create: { shop, orderId, variantId, ...data },
     });
 
+    const orderOperationalData = await prisma.orderOperationalData.findUnique({
+      where: { shop_orderId: { shop, orderId } },
+    });
+    const cin7SalesOrderId = orderOperationalData?.cin7SalesOrderId?.trim() || "";
+    if (newEdd && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+      await syncCin7EstimatedDispatchDate({
+        salesOrderId: cin7SalesOrderId,
+        eddDate: newEdd,
+        reference: orderId,
+      });
+    }
 
     // Fire webhook to Cin7 (non-blocking, don't fail the save if this fails)
     fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
@@ -135,12 +152,17 @@ export async function action({ request, params }: ActionFunctionArgs) {
     }).catch((e) => console.error("[webhook] failed to send", e));
   }
 
-  return { ok: true, message: "Saved successfully" };
+  const orderOperationalData = await prisma.orderOperationalData.findUnique({
+    where: { shop_orderId: { shop, orderId } },
+    select: { cin7SalesOrderId: true },
+  });
+
+  return { ok: true, message: "Saved successfully", cin7Exists: Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending") };
 }
 
 
 export default function FreightOrderDetailPage() {
-  const { order, lineItemsWithData, shippingLine, codeParts } = useLoaderData<typeof loader>();
+  const { order, lineItemsWithData, shippingLine, codeParts, cin7Exists } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const saving = navigation.state === "submitting";
@@ -167,9 +189,14 @@ const cbm = codeParts[6]?.replace("cbm", "") ?? "—";
       <h1 style={{ fontSize: "20px", fontWeight: 600, margin: "12px 0 4px" }}>
         {order.name}
       </h1>
-      <p style={{ color: "#6b7280", fontSize: "13px", margin: "0 0 20px" }}>
+      <p style={{ color: "#6b7280", fontSize: "13px", margin: "0 0 8px" }}>
         {new Date(order.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "long", year: "numeric" })}
       </p>
+      <div style={{ marginBottom: "20px" }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", padding: "4px 10px", borderRadius: "999px", fontSize: "12px", fontWeight: 600, background: cin7Exists ? "#dcfce7" : "#fee2e2", color: cin7Exists ? "#166534" : "#991b1b" }}>
+          {cin7Exists ? "✓ In Cin7" : "✕ Not in Cin7"}
+        </span>
+      </div>
 
       {actionData?.message && (
         <div style={{

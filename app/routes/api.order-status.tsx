@@ -2,6 +2,18 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
+import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber } from "../lib/cin7.server";
+
+// Debug logging helper
+const debug = (namespace: string, message: string, data?: any) => {
+  const timestamp = new Date().toLocaleTimeString();
+  const prefix = `[${timestamp}] ${namespace}`;
+  if (data !== undefined) {
+    console.log(`${prefix}: ${message}`, data);
+  } else {
+    console.log(`${prefix}: ${message}`);
+  }
+};
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -262,6 +274,38 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     }
 
+    const orderOperationalData = shopValue
+      ? await prisma.orderOperationalData.findUnique({
+          where: { shop_orderId: { shop: shopValue, orderId } },
+        })
+      : null;
+
+    const cin7SalesOrderId = orderOperationalData?.cin7SalesOrderId?.trim() || "";
+    let cin7Exists = Boolean(cin7SalesOrderId && cin7SalesOrderId !== "pending");
+    debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}, newEdd=${updateData.eddDate}`);
+
+    if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+      debug("Cin7", `Syncing EDD to Cin7: salesOrderId=${cin7SalesOrderId}, eddDate=${updateData.eddDate}`);
+      const cin7Update = await syncCin7EstimatedDispatchDate({
+        salesOrderId: cin7SalesOrderId,
+        eddDate: updateData.eddDate || "",
+        reference: orderId,
+      });
+      debug("Cin7", `EDD sync result:`, cin7Update);
+      cin7Exists = cin7Update.exists;
+    } else if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+      debug("Cin7", `Syncing tracking to Cin7: salesOrderId=${cin7SalesOrderId}, trackingNumber=${updateData.trackingNumber}`);
+      const cin7Update = await syncCin7TrackingNumber({
+        salesOrderId: cin7SalesOrderId,
+        trackingNumber: updateData.trackingNumber || "",
+        reference: orderId,
+      });
+      debug("Cin7", `Tracking sync result:`, cin7Update);
+      cin7Exists = cin7Update.exists;
+    } else {
+      debug("Cin7", `SKIP - no relevant Cin7 update needed`);
+    }
+
     // ── NEW: push updated fields to Monday dashboard ──
     const mondayDebug: Record<string, unknown> = {
       attempted: true,
@@ -291,7 +335,7 @@ export async function action({ request }: ActionFunctionArgs) {
       };
       const itemName = mondayRow.productTitle || `Order ${orderId} - ${variantId}`;
 
-      if (!updated.mondayItemId) {
+      if (!updated.mondayItemId || updated.mondayItemId === "pending") {
         const newMondayId = await createMondayItem(itemName, mondayRow);
         updated = await prisma.orderLineItemOperationalData.update({
           where: { id: updated.id },
@@ -337,7 +381,7 @@ export async function action({ request }: ActionFunctionArgs) {
         : 0;
       const newBlocks = noteBlocks.slice(alreadyPushed);
 
-      if (newBlocks.length > 0 && updated.mondayItemId) {
+      if (newBlocks.length > 0 && updated.mondayItemId && updated.mondayItemId !== "pending") {
         for (const block of newBlocks) {
           const cleaned = block.replace(/^\[[^\]]*\]\s*/, "");
           await createMondayUpdate(updated.mondayItemId, cleaned);
@@ -368,7 +412,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }),
     }).catch((e) => console.error("[webhook] failed to send", e));
 
-    return Response.json({ ok: true, record: updated, mondayDebug }, { headers: CORS_HEADERS });
+    return Response.json({ ok: true, record: updated, mondayDebug, cin7Exists }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("[api.order-status] action error", err);
     return Response.json(

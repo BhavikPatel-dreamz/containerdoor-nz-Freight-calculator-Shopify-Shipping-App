@@ -39,6 +39,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     console.log(
       `Shipping callback received for ${shop} with ${payload.rate?.items?.length ?? 0} cart items`,
     );
+    console.log("[CHECKOUT PAYLOAD]", JSON.stringify(payload, null, 2));
 
     // console.log(`Environment variable SHOPIFY_SHOP_DOMAIN: ${JSON.stringify(payload)}`);
 
