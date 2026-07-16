@@ -40,6 +40,15 @@ export type Cin7SalesOrderInput = {
   deliveryState?: string;
   deliveryPostalCode?: string;
   deliveryCountry?: string;
+  billingAddress1?: string;
+  billingCity?: string;
+  billingState?: string;
+  billingPostalCode?: string;
+  billingCountry?: string;
+  billingFirstName?: string;
+  billingLastName?: string;
+  billingCompany?: string;
+  logisticsCarrier?: string;
   currencyCode?: string;
   customerOrderNo?: string;
   internalComments?: string;
@@ -155,6 +164,15 @@ export async function createCin7SalesOrder(
       deliveryState: input.deliveryState ?? "",
       deliveryPostalCode: input.deliveryPostalCode ?? "",
       deliveryCountry: input.deliveryCountry ?? "",
+      billingFirstName: input.billingFirstName ?? input.firstName ?? "",
+      billingLastName: input.billingLastName ?? input.lastName ?? "",
+      billingCompany: input.billingCompany ?? input.company ?? "",
+      billingAddress1: input.billingAddress1 ?? input.deliveryAddress1 ?? "",
+      billingCity: input.billingCity ?? input.deliveryCity ?? "",
+      billingState: input.billingState ?? input.deliveryState ?? "",
+      billingPostalCode: input.billingPostalCode ?? input.deliveryPostalCode ?? "",
+      billingCountry: input.billingCountry ?? input.deliveryCountry ?? "",
+      logisticsCarrier: input.logisticsCarrier ?? "",
       ...(input.currencyCode ? { currencyCode: input.currencyCode } : {}),
       customerOrderNo: input.customerOrderNo ?? "",
       internalComments: input.internalComments ?? "",

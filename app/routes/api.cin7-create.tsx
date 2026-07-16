@@ -9,6 +9,16 @@ type RequestPayload = {
   orderId?: string | number;
 };
 
+function extractCarrierFromShippingCode(code?: string): string {
+  if (!code) return "";
+  // Format: "standard_delivery::TGE,MAINFREIGHT::4boxes::..."
+  const parts = code.split("::");
+  if (parts.length < 2) return "";
+  // Get carriers part and extract first one
+  const carriers = parts[1]?.split(",") ?? [];
+  return carriers[0]?.trim() ?? "";
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
@@ -50,10 +60,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             name
             createdAt
             email
+            phone
             billingAddress {
               firstName
               lastName
               company
+              address1
+              city
+              province
+              zip
+              country
+              countryCode
+              phone
             }
             shippingAddress {
               firstName
@@ -65,6 +83,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               zip
               country
               countryCode
+              phone
+            }
+            shippingLines(first: 5) {
+              nodes {
+                title
+                code
+              }
             }
             lineItems(first: 50) {
               nodes {
@@ -134,6 +159,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     
     // Extract currency from first line item or default to NZD
     const currencyCode = (orderData.lineItems?.nodes?.[0]?.originalUnitPriceSet?.shopMoney?.currencyCode ?? "NZD");
+    
+    // Extract carrier from first shipping line code (format: "service::CARRIER1,CARRIER2::boxes::...")
+    const shippingLineCode = orderData.shippingLines?.nodes?.[0]?.code ?? "";
+    const carrier = extractCarrierFromShippingCode(shippingLineCode);
+    
+    // Extract phone from various sources
+    const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
 
     const result = await createCin7SalesOrder({
       reference: `Shopify-${orderData.name ?? orderIdStr}`,
@@ -141,12 +173,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       lastName: shippingAddress.lastName ?? billingAddress.lastName ?? "",
       company: shippingAddress.company ?? billingAddress.company ?? "",
       email: orderData.email ?? "",
-      phone: shippingAddress.phone ?? "",
+      phone: phone,
       deliveryAddress1: shippingAddress.address1 ?? "",
       deliveryCity: shippingAddress.city ?? "",
       deliveryState: shippingAddress.province ?? "",
       deliveryPostalCode: shippingAddress.zip ?? "",
       deliveryCountry: shippingAddress.country ?? shippingAddress.countryCode ?? "",
+      billingFirstName: billingAddress.firstName ?? "",
+      billingLastName: billingAddress.lastName ?? "",
+      billingCompany: billingAddress.company ?? "",
+      billingAddress1: billingAddress.address1 ?? "",
+      billingCity: billingAddress.city ?? "",
+      billingState: billingAddress.province ?? "",
+      billingPostalCode: billingAddress.zip ?? "",
+      billingCountry: billingAddress.country ?? billingAddress.countryCode ?? "",
+      carrier: carrier,
       currencyCode: currencyCode,
       customerOrderNo: orderData.name ?? orderIdStr,
       internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
