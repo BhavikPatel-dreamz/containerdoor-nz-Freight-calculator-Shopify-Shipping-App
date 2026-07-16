@@ -233,6 +233,8 @@ export type Cin7OrderSnapshot = {
   estimatedDeliveryDate: string;
   logisticsCarrier: string;
   status: string;
+  isVoid: boolean;
+  cancellationDate: string | null;
   lineItems: { code: string; qty: number }[];
 };
 
@@ -252,13 +254,10 @@ export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7Ord
     }
     const json: any = await res.json();
 
+    // TEMP: log the raw shape once so we can confirm the real field name/value for void status
     debug("Cin7", `GET SalesOrder raw response for id=${id}:`, json);
 
     const status = String(json.status ?? json.Status ?? json.orderStatus ?? "").toUpperCase();
-    if (status.includes("VOID") || status.includes("CANCEL")) {
-      debug("Cin7", `Order id=${id} is ${status} in Cin7 — treating as not existing`);
-      return null;
-    }
 
     return {
       id: String(json.id ?? id),
@@ -266,6 +265,8 @@ export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7Ord
       estimatedDeliveryDate: json.estimatedDeliveryDate ?? "",
       logisticsCarrier: json.logisticsCarrier ?? "",
       status,
+      isVoid: Boolean(json.isVoid),
+      cancellationDate: json.cancellationDate ?? null,
       lineItems: (json.lineItems ?? []).map((li: any) => ({ code: li.code ?? "", qty: li.qty ?? 0 })),
     };
   } catch (error) {
@@ -397,7 +398,10 @@ export async function createCin7SalesOrder(
 
   const result = Array.isArray(json) ? json[0] : null;
   if (!result || !result.success) {
-    throw new Error(`Cin7 SalesOrder creation failed: ${JSON.stringify(result?.errors ?? json)}`);
+    const errors = result?.errors ?? json;
+    const err = new Error(`Cin7 SalesOrder creation failed: ${JSON.stringify(errors)}`) as Error & { isDuplicate?: boolean };
+    err.isDuplicate = /already exists/i.test(JSON.stringify(errors));
+    throw err;
   }
 
   return { id: result.id, code: result.code };

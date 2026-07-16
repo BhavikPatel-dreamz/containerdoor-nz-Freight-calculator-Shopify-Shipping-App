@@ -180,32 +180,48 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // Extract phone from various sources
     const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
 
-    const result = await createCin7SalesOrder({
-      reference: `Shopify-${orderData.name ?? orderIdStr}`,
-      firstName: shippingAddress.firstName ?? billingAddress.firstName ?? "",
-      lastName: shippingAddress.lastName ?? billingAddress.lastName ?? "",
-      company: shippingAddress.company ?? billingAddress.company ?? "",
-      email: orderData.email ?? "",
-      phone: phone,
-      deliveryAddress1: shippingAddress.address1 ?? "",
-      deliveryCity: shippingAddress.city ?? "",
-      deliveryState: shippingAddress.province ?? "",
-      deliveryPostalCode: shippingAddress.zip ?? "",
-      deliveryCountry: shippingAddress.country ?? shippingAddress.countryCode ?? "",
-      billingFirstName: billingAddress.firstName ?? "",
-      billingLastName: billingAddress.lastName ?? "",
-      billingCompany: billingAddress.company ?? "",
-      billingAddress1: billingAddress.address1 ?? "",
-      billingCity: billingAddress.city ?? "",
-      billingState: billingAddress.province ?? "",
-      billingPostalCode: billingAddress.zip ?? "",
-      billingCountry: billingAddress.country ?? billingAddress.countryCode ?? "",
-      carrier: carrier,
-      currencyCode: currencyCode,
-      customerOrderNo: orderData.name ?? orderIdStr,
-      internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
-      lineItems,
-    });
+    let result;
+    try {
+      result = await createCin7SalesOrder({
+        reference: `Shopify-${orderData.name ?? orderIdStr}`,
+        firstName: shippingAddress.firstName ?? billingAddress.firstName ?? "",
+        lastName: shippingAddress.lastName ?? billingAddress.lastName ?? "",
+        company: shippingAddress.company ?? billingAddress.company ?? "",
+        email: orderData.email ?? "",
+        phone: phone,
+        deliveryAddress1: shippingAddress.address1 ?? "",
+        deliveryCity: shippingAddress.city ?? "",
+        deliveryState: shippingAddress.province ?? "",
+        deliveryPostalCode: shippingAddress.zip ?? "",
+        deliveryCountry: shippingAddress.country ?? shippingAddress.countryCode ?? "",
+        billingFirstName: billingAddress.firstName ?? "",
+        billingLastName: billingAddress.lastName ?? "",
+        billingCompany: billingAddress.company ?? "",
+        billingAddress1: billingAddress.address1 ?? "",
+        billingCity: billingAddress.city ?? "",
+        billingState: billingAddress.province ?? "",
+        billingPostalCode: billingAddress.zip ?? "",
+        billingCountry: billingAddress.country ?? billingAddress.countryCode ?? "",
+        carrier: carrier,
+        currencyCode: currencyCode,
+        customerOrderNo: orderData.name ?? orderIdStr,
+        internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
+        lineItems,
+      });
+    } catch (err) {
+      if ((err as any)?.isDuplicate) {
+        await prisma.orderOperationalData.update({
+          where: { shop_orderId: { shop, orderId: orderIdStr } },
+          data: { cin7SalesOrderId: "duplicate" },
+        });
+        console.log(`[Cin7][API][${orderIdStr}] DUPLICATE - reference already exists in Cin7`);
+        return Response.json(
+          { ok: false, cin7Status: "error", error: err instanceof Error ? err.message : "Duplicate reference" },
+          { status: 409 },
+        );
+      }
+      throw err;
+    }
 
     // Update the record with the Cin7 ID
     await prisma.orderOperationalData.update({

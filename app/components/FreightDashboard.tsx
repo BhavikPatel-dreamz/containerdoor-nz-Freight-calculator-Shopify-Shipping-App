@@ -22,7 +22,7 @@ export type FreightLineItem = {
   eddDate: string;
   originalEddDate: string;
   cin7Exists?: boolean;
-  cin7Status?: "match" | "mismatch" | "missing";
+  cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
 };
 
@@ -169,7 +169,7 @@ function formatNoteDateTime(d = new Date()): string {
   return `${d.toLocaleDateString("en-NZ", { day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`;
 }
 
-function getCin7CellStatus(item: FreightLineItem): "match" | "mismatch" | "missing" {
+function getCin7CellStatus(item: FreightLineItem): "match" | "mismatch" | "missing" | "error" {
   if (item.cin7Status) return item.cin7Status;
   return item.cin7Exists ? "match" : "missing";
 }
@@ -287,39 +287,36 @@ export default function FreightDashboard({
     let cancelled = false;
 
     (async () => {
-      const updates: Record<string, { variantId: string; status: "match" | "mismatch" | "missing"; mismatches: string[] }[]> = {};
-
-      await Promise.all(rows.map(async (order) => {
-        try {
-          const res = await fetch("/api/cin7-status", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              shop,
+      try {
+        const res = await fetch("/api/cin7-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop,
+            orders: rows.map((order) => ({
               orderId: order.shopifyOrderId,
               lineItems: order.lineItems.map((li) => ({
                 variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
               })),
-            }),
-          });
-          if (!res.ok) return;
-          const json = await res.json();
-          updates[order.id] = json.results ?? [];
-        } catch (e) { console.error("Failed to fetch Cin7 status", e); }
-      }));
-
-      if (cancelled) return;
-      setRows((prev) => prev.map((o) => {
-        const result = updates[o.id];
-        if (!result) return o;
-        return {
-          ...o,
-          lineItems: o.lineItems.map((li) => {
-            const m = result.find((r) => r.variantId === li.variantId);
-            return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li;
+            })),
           }),
-        };
-      }));
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+        setRows((prev) => prev.map((o) => {
+          const result = ordersResult[o.shopifyOrderId]?.results;
+          if (!result) return o;
+          return {
+            ...o,
+            lineItems: o.lineItems.map((li) => {
+              const m = result.find((r: any) => r.variantId === li.variantId);
+              return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li;
+            }),
+          };
+        }));
+      } catch (e) { console.error("Failed to fetch Cin7 status", e); }
     })();
 
     return () => { cancelled = true; };
@@ -1214,6 +1211,17 @@ export default function FreightDashboard({
 
                                 if (status === "match") {
                                   return <span className="fo-circle green">✓</span>;
+                                }
+                                if (status === "error") {
+                                  return (
+                                    <span
+                                      className="fo-circle"
+                                      title="Order is voided or duplicated in Cin7 — cannot sync"
+                                      style={{ color: "#f59e0b", background: "#fffbeb", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "13px" }}
+                                    >
+                                      ⚠️
+                                    </span>
+                                  );
                                 }
                                 if (status === "mismatch") {
                                   return (
