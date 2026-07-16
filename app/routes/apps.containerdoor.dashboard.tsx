@@ -203,8 +203,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const allOpsData = await prisma.orderLineItemOperationalData.findMany({ where: { shop } });
   const opsMap = new Map(allOpsData.map((r) => [`${r.orderId}::${r.variantId}`, r]));
 
+  const orderOpData = await prisma.orderOperationalData.findMany({
+    where: { shop },
+    select: { orderId: true, cin7SalesOrderId: true },
+  });
+  const orderCin7Map = new Map(
+    orderOpData
+      .filter((row) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
+      .map((row) => [row.orderId, true])
+  );
+
   const freightOrders = allOrders
-    .map((order) => buildRow(order, opsMap))
+    .map((order) => buildRow(order, opsMap, orderCin7Map))
     .filter((row): row is NonNullable<ReturnType<typeof buildRow>> => row !== null);
 
   const total = freightOrders.length;
@@ -224,7 +234,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   };
 }
 
-function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
+function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Map: Map<string, boolean>) {
   const shippingLines = order.shippingLines?.nodes ?? [];
   const shippingLine = shippingLines.find((s) =>
     FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
@@ -261,6 +271,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
       trackingNumber: ops?.trackingNumber ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
+      cin7Exists: orderCin7Map.get(numericOrderId) ?? false,
     };
   });
   return {

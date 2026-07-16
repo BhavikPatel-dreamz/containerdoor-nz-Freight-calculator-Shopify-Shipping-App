@@ -52,8 +52,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const allOpsData = await prisma.orderLineItemOperationalData.findMany({ where: { shop } });
   const opsMap = new Map(allOpsData.map((r) => [`${r.orderId}::${r.variantId}`, r]));
 
+  const orderOpData = await prisma.orderOperationalData.findMany({
+    where: { shop },
+    select: { orderId: true, cin7SalesOrderId: true },
+  });
+  const orderCin7Map = new Map(
+    orderOpData
+      .filter((row) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
+      .map((row) => [row.orderId, true])
+  );
+
   const freightOrders = allOrders
-    .map((order) => buildRow(order, opsMap))
+    .map((order) => buildRow(order, opsMap, orderCin7Map))
     .filter(Boolean) as ReturnType<typeof buildRow>[];
 
   const total = freightOrders.length;
@@ -63,7 +73,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop };
 }
 
-function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
+function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Map: Map<string, boolean>) {
   const shippingLine = order.shippingLines.nodes.find((s) =>
     FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
   );
@@ -84,7 +94,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>) {
     const [variantId, rest] = part.split(":");
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     const ops = opsMap.get(`${numericOrderId}::${variantId}`);
-    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), sku: variantSkuMap.get(variantId) ?? "", company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "" };
+    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), sku: variantSkuMap.get(variantId) ?? "", company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "", cin7Exists: orderCin7Map.get(numericOrderId) ?? false };
   });
   return {
     id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,

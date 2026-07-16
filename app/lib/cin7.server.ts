@@ -1,6 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const CIN7_API_URL = process.env.CIN7_SYNC_URL || `${process.env.CIN7_BASE_URL}/SalesOrders`;
 
+// Simple debug helper for terminal logging
+const debug = (namespace: string, message: string, data?: any) => {
+  const timestamp = new Date().toLocaleTimeString();
+  const prefix = `[${timestamp}] ${namespace}`;
+  if (data !== undefined) {
+    console.log(`${prefix}: ${message}`, data);
+  } else {
+    console.log(`${prefix}: ${message}`);
+  }
+};
+
 export function getCin7AuthHeader(): string {
   const username = process.env.CIN7_USERNAME;
   const token = process.env.CIN7_SYNC_TOKEN;
@@ -35,6 +46,96 @@ export type Cin7SalesOrderInput = {
   lineItems: Cin7LineItem[];
 };
 
+export async function syncCin7EstimatedDispatchDate(input: {
+  salesOrderId?: string;
+  eddDate?: string;
+  reference?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7EstimatedDispatchDate: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7EstimatedDispatchDate: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    
+    // Cin7 expects EstimatedDeliveryDate in ISO 8601 format with time
+    let eddFormatted = "";
+    if (input.eddDate) {
+      try {
+        // Parse YYYY-MM-DD and convert to ISO 8601 format with midnight UTC
+        eddFormatted = `${input.eddDate}T00:00:00Z`;
+      } catch {
+        eddFormatted = input.eddDate; // fallback to original format
+      }
+    }
+    
+    const body = [
+      {
+        id: parseInt(salesOrderId, 10) || 0,
+        estimatedDeliveryDate: eddFormatted,
+      },
+    ];
+    debug("Cin7", `PUT request to ${url}`);
+    debug("Cin7", "PUT body:", body);
+    
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT response status: ${res.status}`);
+    debug("Cin7", `PUT response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    // Cin7 returns 200 but may have success: false in the response
+    const result = Array.isArray(json) ? json[0] : json;
+    
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT success (200): EDD updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    } else {
+      debug("Cin7", `PUT error (${res.status}): ${responseText}`);
+      return { exists: true, updated: false, salesOrderId, error: responseText };
+    }
+  } catch (error) {
+    debug("Cin7", "PUT request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 export async function createCin7SalesOrder(
   input: Cin7SalesOrderInput,
 ): Promise<{ id: number; code: string }> {
@@ -67,7 +168,7 @@ export async function createCin7SalesOrder(
     },
   ];
 
-  console.log("[Cin7 API] request:", JSON.stringify(body));
+  debug("Cin7", "POST SalesOrder", body);
 
   const res = await fetch(CIN7_API_URL, {
     method: "POST",
@@ -79,7 +180,7 @@ export async function createCin7SalesOrder(
   });
 
   const json: any = await res.json().catch(() => null);
-  console.log("[Cin7 API] response:", JSON.stringify(json));
+  debug("Cin7", "POST SalesOrder response:", json);
 
   if (!res.ok) {
     throw new Error(`Cin7 API error ${res.status}: ${JSON.stringify(json)}`);
