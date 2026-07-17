@@ -248,6 +248,7 @@ export default function FreightDashboard({
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
   const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
+  const [isRefreshingCin7, setIsRefreshingCin7] = useState(false);
   const [, setTimeTick] = useState(0);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
@@ -507,7 +508,7 @@ export default function FreightDashboard({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shop, orderId: order.shopifyOrderId,
+          shop, orderId: order.shopifyOrderId, variantId: item.variantId,
           trackingNumber: item.trackingNumber, eddDate: item.eddDate, carrier: item.company,
           fields: item.cin7Mismatches,
         }),
@@ -515,20 +516,69 @@ export default function FreightDashboard({
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to sync mismatched fields to Cin7");
 
+      const pulled = payload.updated || {};
       const applyMatch = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : {
         ...o,
         lineItems: o.lineItems.map((li) =>
-          li.variantId !== item.variantId ? li : { ...li, cin7Status: "match" as const, cin7Mismatches: [] }
+          li.variantId !== item.variantId ? li : {
+            ...li,
+            trackingNumber: pulled.trackingNumber ?? li.trackingNumber,
+            eddDate: pulled.eddDate ?? li.eddDate,
+            company: pulled.carrier ?? li.company,
+            cin7Status: "match" as const,
+            cin7Mismatches: [],
+          }
         ),
       };
       setRows((prev) => prev.map(applyMatch));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyMatch) : prev);
-      setSyncNotification("Cin7 fields updated");
+      setSyncNotification(payload.direction === "pulled" ? "Pulled latest from Cin7" : "Cin7 fields updated");
     } catch (e) {
       setSyncNotification(e instanceof Error ? e.message : "Failed to update Cin7");
     } finally {
       setCin7FixingId(null);
       window.setTimeout(() => setSyncNotification(null), 4500);
+    }
+  };
+
+  const handleRefreshCin7Status = async () => {
+    if (isRefreshingCin7 || rows.length === 0) return;
+    setIsRefreshingCin7(true);
+    try {
+      const res = await fetch("/api/cin7-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          force: true,
+          orders: rows.map((order) => ({
+            orderId: order.shopifyOrderId,
+            lineItems: order.lineItems.map((li) => ({
+              variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
+            })),
+          })),
+        }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+      const applyResults = (o: FreightOrderRow): FreightOrderRow => {
+        const result = ordersResult[o.shopifyOrderId]?.results;
+        if (!result) return o;
+        return {
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            const m = result.find((r: any) => r.variantId === li.variantId);
+            return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyResults));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyResults) : prev);
+    } catch (e) {
+      console.error("Failed to force-refresh Cin7 status", e);
+    } finally {
+      setIsRefreshingCin7(false);
     }
   };
 
@@ -860,10 +910,16 @@ export default function FreightDashboard({
                       Last sync: {formatRelativeTime(Date.now() - lastSyncAt)}
                     </div>
                   )}
-                  <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                    {isSyncing ? "Syncing all pages..." : "Sync all pages"}
-                  </button>
+                  <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
+                    <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      {isSyncing ? "Syncing all pages..." : "Sync all pages"}
+                    </button>
+                    <button className="fo-tool-btn" onClick={handleRefreshCin7Status} disabled={isRefreshingCin7 || rows.length === 0}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      {isRefreshingCin7 ? "Checking Cin7..." : "Check Cin7 status"}
+                    </button>
+                  </div>
                 </div>
                 <button className="fo-tool-btn">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>

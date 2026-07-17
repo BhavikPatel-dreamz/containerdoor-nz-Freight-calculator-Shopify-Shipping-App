@@ -108,6 +108,7 @@ model OrderOperationalData {
   portArrivalDate     String   @default("")
   inTransitDate       String   @default("")
   cin7SalesOrderId    String   @default("")
+  cin7StatusCheckedAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -142,6 +143,8 @@ model OrderLineItemOperationalData {
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
   cin7SalesOrderId  String   @default("")
+  cin7CachedStatus  String   @default("")
+  cin7CachedMismatches String @default("")
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
