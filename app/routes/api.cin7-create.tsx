@@ -202,7 +202,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         billingState: billingAddress.province ?? "",
         billingPostalCode: billingAddress.zip ?? "",
         billingCountry: billingAddress.country ?? billingAddress.countryCode ?? "",
-        carrier: carrier,
+        logisticsCarrier: carrier,
         currencyCode: currencyCode,
         customerOrderNo: orderData.name ?? orderIdStr,
         internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
