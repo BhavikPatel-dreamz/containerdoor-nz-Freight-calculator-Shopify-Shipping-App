@@ -108,6 +108,8 @@ model OrderOperationalData {
   portArrivalDate     String   @default("")
   inTransitDate       String   @default("")
   cin7SalesOrderId    String   @default("")
+  cin7StatusCheckedAt DateTime?
+  mondayStatusCheckedAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -127,6 +129,8 @@ model OrderLineItemOperationalData {
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
+  trackingNumberUpdatedAt DateTime?   // NEW
+  freightRef        String   @default("")  
   eddDate           String   @default("")
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")
@@ -136,10 +140,15 @@ model OrderLineItemOperationalData {
   notes             String   @default("")
   notesPushedCount  Int      @default(0)  
   notesPushedMondayItemId String? // NEW
+  notesPulledUpdateIds    String   @default("")
   supplierContainer String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
   cin7SalesOrderId  String   @default("")
+  cin7CachedStatus  String   @default("")
+  cin7CachedMismatches String @default("")
+  mondayCachedStatus  String   @default("")
+  mondayCachedMismatches String @default("")
 
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt

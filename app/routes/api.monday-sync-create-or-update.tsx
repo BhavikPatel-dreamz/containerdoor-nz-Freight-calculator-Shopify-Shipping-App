@@ -214,9 +214,11 @@ export async function action({ request }: ActionFunctionArgs) {
     const freshRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
-    const alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
+    let alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
       ? (freshRecord?.notesPushedCount ?? 0)
       : 0;
+    // If notes were reset/shrunk since we last tracked, our count is stale — resync everything
+    if (alreadyPushed > noteBlocks.length) alreadyPushed = 0;
     const newBlocks = noteBlocks.slice(alreadyPushed);
 
     if (newBlocks.length > 0 && mondayItemId) {

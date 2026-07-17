@@ -226,7 +226,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // Update the record with the Cin7 ID
     await prisma.orderOperationalData.update({
       where: { shop_orderId: { shop, orderId: orderIdStr } },
-      data: { cin7SalesOrderId: String(result.id) },
+      data: { cin7SalesOrderId: String(result.id), cin7StatusCheckedAt: null },
     });
 
     console.log(`[Cin7][API][${orderIdStr}] SUCCESS - id=${result.id}, code=${result.code}`);

@@ -1,5 +1,6 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates } from "../lib/monday.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -92,6 +93,20 @@ export async function action({ request }: ActionFunctionArgs) {
       } else {
         console.log("[Monday][Sync] Admin tab EDD is newer (or Monday has none), pushing it.");
       }
+
+      const mondayTrackingAt = mondayBefore.trackingNumberChangedAt
+        ? new Date(mondayBefore.trackingNumberChangedAt).getTime() : 0;
+      const localTrackingAt = existing.trackingNumberUpdatedAt
+        ? new Date(existing.trackingNumberUpdatedAt).getTime() : 0;
+
+      if (mondayBefore.trackingNumber && mondayTrackingAt > localTrackingAt) {
+        console.log(
+          `[Monday][Sync] Monday tracking "${mondayBefore.trackingNumber}" (changed ${mondayBefore.trackingNumberChangedAt}) is newer than admin tab's last tracking change (${existing.trackingNumberUpdatedAt}). Keeping Monday's tracking.`
+        );
+        fullRow.trackingNumber = mondayBefore.trackingNumber;
+      } else {
+        console.log("[Monday][Sync] Admin tab tracking is newer (or Monday has none), pushing it.");
+      }
     } else {
       console.log("[Monday][Sync] Could not fetch existing Monday item, pushing local values as-is.");
     }
@@ -133,6 +148,8 @@ export async function action({ request }: ActionFunctionArgs) {
 
   // ── NEW: push any new admin-tab notes (tracking added, EDD changed, etc.)
   // to Monday's native Updates tab. Doesn't touch any existing column sync logic.
+  // ── Push new admin-tab notes to Monday, tracking which update IDs we created ──
+  const justPushedIds: string[] = [];
   try {
     const noteBlocks = String(existing.notes ?? "")
       .split(/\r?\n\r?\n/)
@@ -142,15 +159,17 @@ export async function action({ request }: ActionFunctionArgs) {
     const freshRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
-    const alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
+    let alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
       ? (freshRecord?.notesPushedCount ?? 0)
       : 0;
+    if (alreadyPushed > noteBlocks.length) alreadyPushed = 0;
     const newBlocks = noteBlocks.slice(alreadyPushed);
 
     if (newBlocks.length > 0 && mondayItemId) {
       for (const block of newBlocks) {
         const cleaned = block.replace(/^\[[^\]]*\]\s*/, "");
-        await createMondayUpdate(mondayItemId, cleaned);
+        const createdId = await createMondayUpdate(mondayItemId, cleaned); // must return the new update's id
+        if (createdId) justPushedIds.push(String(createdId));
       }
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -164,5 +183,52 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Sync] Failed to push notes to Monday updates", e);
   }
 
+  // ── Pull any new comments from Monday (by anyone) that we haven't already recorded ──
+  // ── Pull any new comments from Monday (by anyone) that we haven't already recorded ──
+  try {
+    const mondayUpdates = await fetchMondayUpdates(mondayItemId);
+    const fresh = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    });
+    const pulledIds = new Set(String(fresh?.notesPulledUpdateIds ?? "").split(",").filter(Boolean));
+    justPushedIds.forEach((id) => pulledIds.add(id));
+
+    const newFromMonday = mondayUpdates.filter((u: any) => !pulledIds.has(String(u.id)));
+
+    if (newFromMonday.length > 0) {
+      const formatted = newFromMonday.map((u: any) => {
+        const time = new Date(u.createdAt).toLocaleString("en-NZ", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+        return `[internal|${u.creatorName}|${time}] ${u.body}`;
+      });
+      const nextNotes = [String(fresh?.notes ?? ""), ...formatted].filter(Boolean).join("\n\n");
+      const nextPulledIds = [...pulledIds, ...newFromMonday.map((u: any) => String(u.id))].join(",");
+
+      // These blocks came FROM Monday — they must never be pushed back to Monday.
+      // Bump notesPushedCount by however many blocks we just appended, so the push
+      // step's "alreadyPushed" offset stays aligned with the new total block count.
+      const currentPushedCount = fresh?.notesPushedMondayItemId === mondayItemId
+        ? (fresh?.notesPushedCount ?? 0)
+        : 0;
+      const nextPushedCount = currentPushedCount + newFromMonday.length;
+
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        data: {
+          notes: nextNotes,
+          notesPulledUpdateIds: nextPulledIds,
+          notesPushedCount: nextPushedCount,
+          notesPushedMondayItemId: mondayItemId,
+        },
+      });
+    } else if (justPushedIds.length > 0) {
+      const nextPulledIds = [...pulledIds].join(",");
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        data: { notesPulledUpdateIds: nextPulledIds },
+      });
+    }
+  } catch (e) {
+    console.error("[Monday][Sync] Failed to pull comments", e);
+  }
   return Response.json({ ok: true, mondayItemId, updated }, { headers: getCorsHeaders(request) });
 }

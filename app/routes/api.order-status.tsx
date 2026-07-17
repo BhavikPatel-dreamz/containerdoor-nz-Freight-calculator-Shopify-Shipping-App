@@ -50,6 +50,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         deliveryStatus: true,
         dispatchStatus: true,
         trackingNumber: true,
+        freightRef: true,     
         eddDate: true,
         originalEddDate: true,
         supplierContainer: true,
@@ -177,6 +178,8 @@ const EDITABLE_FIELDS = [
   "dispatchStatus",
   "deliveryStatus",
   "trackingNumber",
+  "carrier", 
+  "freightRef",   
   "eddDate",
   "originalEddDate",
   "supplierContainer",
@@ -254,6 +257,12 @@ export async function action({ request }: ActionFunctionArgs) {
       updateData.eddDate !== (existing?.eddDate ?? "")
     ) {
       payload.eddDateUpdatedAt = new Date();
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") &&
+      updateData.trackingNumber !== (existing?.trackingNumber ?? "")
+    ) {
+      payload.trackingNumberUpdatedAt = new Date();
     }
     // ── end new block ──
 

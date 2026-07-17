@@ -19,11 +19,14 @@ export type FreightLineItem = {
   letterSuffix: string;
   customerStatus: string;
   trackingNumber: string;
+  freightRef?: string;   // NEW
   eddDate: string;
   originalEddDate: string;
   cin7Exists?: boolean;
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
+  mondayStatus?: "match" | "mismatch" | "missing";
+  mondayMismatches?: string[];
 };
 
 export type FreightOrderRow = {
@@ -174,6 +177,11 @@ function getCin7CellStatus(item: FreightLineItem): "match" | "mismatch" | "missi
   return item.cin7Exists ? "match" : "missing";
 }
 
+function getRefPrefix(carrier: string): string {
+  if (!carrier) return "";
+  return `${carrier}-REF-`;
+}
+
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
 
@@ -242,6 +250,11 @@ export default function FreightDashboard({
   const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
   const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
+  const [mondayFixingId, setMondayFixingId] = useState<string | null>(null);
+  const [isRefreshingCin7, setIsRefreshingCin7] = useState(false);
+  const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
+  // By default, disable automatic polling of external APIs. Refresh button triggers checks.
+  const [allowStatusPoll] = useState(false);
   const [, setTimeTick] = useState(0);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
@@ -283,6 +296,8 @@ export default function FreightDashboard({
   }, [detailView, noteModalTarget, eddModal, trackingModal]);
 
   useEffect(() => {
+    // Disabled by default: only refresh when user clicks the refresh button.
+    if (!allowStatusPoll) return;
     if (!rows || rows.length === 0) return;
     let cancelled = false;
 
@@ -320,7 +335,47 @@ export default function FreightDashboard({
     })();
 
     return () => { cancelled = true; };
-  }, [rows.map((o) => o.id).join(","), shop]);
+  }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
+
+  useEffect(() => {
+    // Disabled by default: only refresh when user clicks the refresh button.
+    if (!allowStatusPoll) return;
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await fetch("/api/monday-status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop,
+            orders: rows.map((order) => ({
+              orderId: order.shopifyOrderId,
+              lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })),
+            })),
+          }),
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+        setRows((prev) => prev.map((o) => {
+          const result = ordersResult[o.shopifyOrderId]?.results;
+          if (!result) return o;
+          return {
+            ...o,
+            lineItems: o.lineItems.map((li) => {
+              const m = result.find((r: any) => r.variantId === li.variantId);
+              return m ? { ...li, mondayStatus: m.status, mondayMismatches: m.mismatches } : li;
+            }),
+          };
+        }));
+      } catch (e) { console.error("Failed to fetch Monday status", e); }
+    })();
+
+    return () => { cancelled = true; };
+  }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
 
   const filteredOrders = (rows || []).filter((o) => {
     // Tab filter — keep orders that have at least one matching line item
@@ -429,13 +484,25 @@ export default function FreightDashboard({
     setTrackingError("");
     setIsSavingTracking(true);
     const oldTracking = trackingModal.item.trackingNumber;
-    const systemNote: NoteItem = {
+    const oldFreightRef = trackingModal.item.freightRef ?? "";
+    const newFreightRef = trackingForm.freightRef.trim();
+
+    const trackingNote: NoteItem = {
       author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
       text: oldTracking
         ? `Tracking number updated from ${oldTracking} to ${trackingForm.trackingNumber}.`
         : `Tracking number set to ${trackingForm.trackingNumber}.`,
     };
-    const nextNotes = [...notes, systemNote];
+    const notesToAdd = [trackingNote];
+    if (newFreightRef && newFreightRef !== oldFreightRef) {
+      notesToAdd.push({
+        author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
+        text: oldFreightRef
+          ? `Freight ref updated from ${oldFreightRef} to ${newFreightRef}.`
+          : `Freight ref set to ${newFreightRef}.`,
+      });
+    }
+    const nextNotes = [...notes, ...notesToAdd];
     setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
@@ -443,22 +510,27 @@ export default function FreightDashboard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop, orderId: trackingModal.order.shopifyOrderId, variantId: trackingModal.item.variantId,
-          data: { trackingNumber: trackingForm.trackingNumber, carrier: trackingForm.carrier, notes: serializeNotes(nextNotes) },
+          data: {
+            trackingNumber: trackingForm.trackingNumber,
+            carrier: trackingForm.carrier,
+            freightRef: newFreightRef,
+            notes: serializeNotes(nextNotes),
+          },
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, cin7Exists } } : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, freightRef: newFreightRef, cin7Exists } } : prev);
       setRows((prevRows = []) => prevRows.map((o: any) => o.id !== trackingModal.order.id ? o : {
         ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== trackingModal.item.variantId ? li : {
-          ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, cin7Exists,
+          ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists,
         }),
       }));
       if (allRows) {
         setAllRows((prev) => prev ? prev.map((o) => o.id !== trackingModal.order.id ? o : {
           ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== trackingModal.item.variantId ? li : {
-            ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, cin7Exists,
+            ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists,
           }),
         }) : prev);
       }
@@ -484,7 +556,7 @@ export default function FreightDashboard({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shop, orderId: order.shopifyOrderId,
+          shop, orderId: order.shopifyOrderId, variantId: item.variantId,
           trackingNumber: item.trackingNumber, eddDate: item.eddDate, carrier: item.company,
           fields: item.cin7Mismatches,
         }),
@@ -492,21 +564,172 @@ export default function FreightDashboard({
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to sync mismatched fields to Cin7");
 
+      const pulled = payload.updated || {};
       const applyMatch = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : {
         ...o,
         lineItems: o.lineItems.map((li) =>
-          li.variantId !== item.variantId ? li : { ...li, cin7Status: "match" as const, cin7Mismatches: [] }
+          li.variantId !== item.variantId ? li : {
+            ...li,
+            trackingNumber: pulled.trackingNumber ?? li.trackingNumber,
+            eddDate: pulled.eddDate ?? li.eddDate,
+            company: pulled.carrier ?? li.company,
+            cin7Status: "match" as const,
+            cin7Mismatches: [],
+          }
         ),
       };
       setRows((prev) => prev.map(applyMatch));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyMatch) : prev);
-      setSyncNotification("Cin7 fields updated");
+      setSyncNotification(payload.direction === "pulled" ? "Pulled latest from Cin7" : "Cin7 fields updated");
     } catch (e) {
       setSyncNotification(e instanceof Error ? e.message : "Failed to update Cin7");
     } finally {
       setCin7FixingId(null);
       window.setTimeout(() => setSyncNotification(null), 4500);
     }
+  };
+
+  const handleSyncMondayItem = async (order: FreightOrderRow, item: FreightLineItem) => {
+    const key = `${order.id}-${item.variantId}-monday`;
+    if (mondayFixingId) return;
+    setMondayFixingId(key);
+    try {
+      const res = await fetch("/api/monday-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: order.shopifyOrderId,
+          variantId: item.variantId,
+          itemName: `${order.shopifyOrderName}${item.letterSuffix}`,
+          row: {
+            customerName: order.customerName,
+            email: order.email,
+            carriers: item.company,
+            trackingNumber: item.trackingNumber,
+            eddDate: item.eddDate,
+            originalEddDate: item.originalEddDate,
+            productTitle: item.title ?? "",
+            sku: item.sku ?? "",
+            boxes: item.boxes ?? "",
+            customerStatus: item.customerStatus,
+          },
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to sync Monday");
+      const json = await res.json();
+      const updated = json.updated || {};
+      const applyRow = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : {
+        ...o,
+        lineItems: o.lineItems.map((li) => li.variantId !== item.variantId ? li : {
+          ...li,
+          ...updated,
+          mondayStatus: "match",
+          mondayMismatches: [],
+        }),
+      };
+      setRows((prev) => prev.map(applyRow));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyRow) : prev);
+      if (detailView?.order.id === order.id && detailView.item.variantId === item.variantId) {
+        setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, ...updated, mondayStatus: "match", mondayMismatches: [] } } : prev);
+      }
+      setSyncNotification(json.syncStatus === "created" ? "Created in Monday" : "Monday fields updated");
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Failed to sync Monday");
+    } finally {
+      setMondayFixingId(null);
+      window.setTimeout(() => setSyncNotification(null), 4500);
+    }
+  };
+
+  const handleRefreshCin7Status = async (ordersArg?: FreightOrderRow[]) => {
+    const useOrders = ordersArg ?? rows;
+    if (isRefreshingCin7 || useOrders.length === 0) return;
+    setIsRefreshingCin7(true);
+    try {
+      const res = await fetch("/api/cin7-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          force: true,
+          orders: useOrders.map((order) => ({
+            orderId: order.shopifyOrderId,
+            lineItems: order.lineItems.map((li) => ({
+              variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
+            })),
+          })),
+        }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+      const applyResults = (o: FreightOrderRow): FreightOrderRow => {
+        const result = ordersResult[o.shopifyOrderId]?.results;
+        if (!result) return o;
+        return {
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            const m = result.find((r: any) => r.variantId === li.variantId);
+            return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyResults));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyResults) : prev);
+    } catch (e) {
+      console.error("Failed to force-refresh Cin7 status", e);
+    } finally {
+      setIsRefreshingCin7(false);
+    }
+  };
+
+  const handleRefreshMondayStatus = async (ordersArg?: FreightOrderRow[]) => {
+    const useOrders = ordersArg ?? rows;
+    if (isRefreshingMonday || useOrders.length === 0) return;
+    setIsRefreshingMonday(true);
+    try {
+      const res = await fetch("/api/monday-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          force: true,
+          orders: useOrders.map((order) => ({
+            orderId: order.shopifyOrderId,
+            lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })),
+          })),
+        }),
+      });
+      if (!res.ok) return;
+      const json = await res.json();
+      const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+      const applyResults = (o: FreightOrderRow): FreightOrderRow => {
+        const result = ordersResult[o.shopifyOrderId]?.results;
+        if (!result) return o;
+        return {
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            const m = result.find((r: any) => r.variantId === li.variantId);
+            return m ? { ...li, mondayStatus: m.status, mondayMismatches: m.mismatches } : li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyResults));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyResults) : prev);
+    } catch (e) {
+      console.error("Failed to force-refresh Monday status", e);
+    } finally {
+      setIsRefreshingMonday(false);
+    }
+  };
+
+  const handleRefreshStatuses = async () => {
+    // Run both checks for the latest orders (prefer `allRows` if available).
+    const source = allRows ?? rows;
+    const ordersToCheck = source.slice(0, 100);
+    if (ordersToCheck.length === 0) return;
+    await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
   };
 
   const handleCreateCin7Order = async (order: FreightOrderRow) => {
@@ -747,6 +970,13 @@ export default function FreightDashboard({
           ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }),
         }) : prev);
       }
+      // ── NEW: refresh notes — sync may have pulled in new Monday comments
+      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+      if (notesRes.ok) {
+        const notesJson = await notesRes.json();
+        const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
+      }
     } catch (e) {
       console.error("Monday sync failed", e);
     } finally {
@@ -830,10 +1060,16 @@ export default function FreightDashboard({
                       Last sync: {formatRelativeTime(Date.now() - lastSyncAt)}
                     </div>
                   )}
-                  <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                    {isSyncing ? "Syncing all pages..." : "Sync all pages"}
-                  </button>
+                  <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
+                    <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      {isSyncing ? "Syncing all pages..." : "Sync all pages"}
+                    </button>
+                    <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Check Cin7 status"}
+                    </button>
+                  </div>
                 </div>
                 <button className="fo-tool-btn">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
@@ -1029,7 +1265,7 @@ export default function FreightDashboard({
                       </div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Carrier</span><span className="fo-detail-value" style={{ color: "#2563eb" }}>{companyLabels[detailView.item.company as keyof typeof companyLabels] ?? detailView.item.company ?? "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Tracking #</span><span className="fo-detail-value">{detailView.item.trackingNumber ? <span style={{ color: "#2563eb" }}>{detailView.item.trackingNumber}</span> : "—"}</span></div>
-                      <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value" style={{ color: "#2563eb" }}>{`${detailView.order.carriers.split(",")[0]?.trim() ?? "FRT"}-REF-${detailView.order.shopifyOrderId.slice(-3)}`}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value">{detailView.item.freightRef || "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
                     </div>
 
@@ -1113,7 +1349,7 @@ export default function FreightDashboard({
                       <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
                       <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Qty</th>
                       <th>EDD (current / orig)</th><th>Customer status</th><th>Carrier</th>
-                      <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Shopify</th><th>Actions</th>
+                      <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1193,16 +1429,31 @@ export default function FreightDashboard({
                             </td>
                             <td className="fo-td">
                               {item.trackingNumber ? (
-                                <span className="fo-tracking-num">{item.trackingNumber}</span>
+                                <button
+                                  className="fo-tracking-num"
+                                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+                                  onClick={() => {
+                                    setTrackingModal({ order, item });
+                                    setTrackingForm({
+                                      carrier: item.company || "",
+                                      trackingNumber: item.trackingNumber,
+                                      freightRef: item.freightRef || getRefPrefix(item.company || ""),
+                                      deliveryMethod: "Standard",
+                                      notifyCustomer: true,
+                                    });
+                                  }}
+                                >
+                                  {item.trackingNumber}
+                                </button>
                               ) : (
                                 <button className="fo-tracking-add"
-                                  onClick={() => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
+                                  onClick={() => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}>
                                   <IconPlus /> Add
                                 </button>
                               )}
                             </td>
                             <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                              {isFirstItem ? `${order.carriers.split(",")[0]?.trim() ?? "FRT"}-REF-${order.shopifyOrderId.slice(-3)}` : "—"}
+                              {item.freightRef || "—"}
                             </td>
                             <td className="fo-td">
                               {(() => {
@@ -1259,7 +1510,39 @@ export default function FreightDashboard({
                                 );
                               })()}
                             </td>
-                            <td className="fo-td"><span className="fo-circle green">✓</span></td>
+                            <td className="fo-td">
+  {(() => {
+    const status = item.mondayStatus ?? "missing";
+    const cellKey = `${order.id}-${item.variantId}-monday`;
+    if (status === "match") return <span className="fo-circle green">✓</span>;
+    if (status === "mismatch") {
+      return (
+        <button
+          type="button"
+          className="fo-circle"
+          title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
+          onClick={() => handleSyncMondayItem(order, item)}
+          disabled={mondayFixingId === cellKey}
+          style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+        >
+          !
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className="fo-circle"
+        title="Create order in Monday"
+        onClick={() => handleSyncMondayItem(order, item)}
+        disabled={mondayFixingId === cellKey}
+        style={{ color: "#dc2626", background: "#fee2e2", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+      >
+        ✕
+      </button>
+    );
+  })()}
+</td>
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">
@@ -1343,7 +1626,16 @@ export default function FreightDashboard({
                 <label className="fo-field-label" htmlFor="t-carrier">Carrier</label>
                 <div style={{ position: "relative" }}>
                   <select id="t-carrier" className="fo-input" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: "36px", cursor: "pointer" }}
-                    value={trackingForm.carrier} onChange={(e) => setTrackingForm((p) => ({ ...p, carrier: e.target.value }))}>
+                    value={trackingForm.carrier}
+                    onChange={(e) => {
+                      const carrier = e.target.value;
+                      setTrackingForm((p) => {
+                        const prevPrefix = getRefPrefix(p.carrier);
+                        const newPrefix = getRefPrefix(carrier);
+                        const shouldUpdateRef = !p.freightRef || p.freightRef === prevPrefix;
+                        return { ...p, carrier, freightRef: shouldUpdateRef ? newPrefix : p.freightRef };
+                      });
+                    }}>
                     <option value="">Select carrier...</option>
                     <option value="MAINFREIGHT">Mainfreight</option><option value="NZP">NZ Post</option>
                     <option value="TGE">Team Global Express</option><option value="FLIWAY">Fliway - Linehaul</option>
