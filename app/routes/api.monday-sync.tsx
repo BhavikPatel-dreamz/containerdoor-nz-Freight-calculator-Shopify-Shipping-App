@@ -170,13 +170,13 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   // ── Pull any new comments from Monday (by anyone) that we haven't already recorded ──
+  // ── Pull any new comments from Monday (by anyone) that we haven't already recorded ──
   try {
     const mondayUpdates = await fetchMondayUpdates(mondayItemId);
     const fresh = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
     const pulledIds = new Set(String(fresh?.notesPulledUpdateIds ?? "").split(",").filter(Boolean));
-    // mark what we just pushed as "already accounted for" so we don't pull it back in as a duplicate
     justPushedIds.forEach((id) => pulledIds.add(id));
 
     const newFromMonday = mondayUpdates.filter((u: any) => !pulledIds.has(String(u.id)));
@@ -188,12 +188,25 @@ export async function action({ request }: ActionFunctionArgs) {
       });
       const nextNotes = [String(fresh?.notes ?? ""), ...formatted].filter(Boolean).join("\n\n");
       const nextPulledIds = [...pulledIds, ...newFromMonday.map((u: any) => String(u.id))].join(",");
+
+      // These blocks came FROM Monday — they must never be pushed back to Monday.
+      // Bump notesPushedCount by however many blocks we just appended, so the push
+      // step's "alreadyPushed" offset stays aligned with the new total block count.
+      const currentPushedCount = fresh?.notesPushedMondayItemId === mondayItemId
+        ? (fresh?.notesPushedCount ?? 0)
+        : 0;
+      const nextPushedCount = currentPushedCount + newFromMonday.length;
+
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        data: { notes: nextNotes, notesPulledUpdateIds: nextPulledIds },
+        data: {
+          notes: nextNotes,
+          notesPulledUpdateIds: nextPulledIds,
+          notesPushedCount: nextPushedCount,
+          notesPushedMondayItemId: mondayItemId,
+        },
       });
     } else if (justPushedIds.length > 0) {
-      // still persist that we've now accounted for our own pushes, even if nothing new came in
       const nextPulledIds = [...pulledIds].join(",");
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -203,6 +216,5 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (e) {
     console.error("[Monday][Sync] Failed to pull comments", e);
   }
-
   return Response.json({ ok: true, mondayItemId, updated }, { headers: getCorsHeaders(request) });
 }

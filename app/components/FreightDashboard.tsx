@@ -19,6 +19,7 @@ export type FreightLineItem = {
   letterSuffix: string;
   customerStatus: string;
   trackingNumber: string;
+  freightRef?: string;   // NEW
   eddDate: string;
   originalEddDate: string;
   cin7Exists?: boolean;
@@ -172,6 +173,11 @@ function formatNoteDateTime(d = new Date()): string {
 function getCin7CellStatus(item: FreightLineItem): "match" | "mismatch" | "missing" | "error" {
   if (item.cin7Status) return item.cin7Status;
   return item.cin7Exists ? "match" : "missing";
+}
+
+function getRefPrefix(carrier: string): string {
+  if (!carrier) return "";
+  return `${carrier}-REF-`;
 }
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
@@ -416,12 +422,6 @@ export default function FreightDashboard({
         const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
         if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
       }
-       const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
-      if (notesRes.ok) {
-        const notesJson = await notesRes.json();
-        const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
-        setNotes(parseNotesString(line?.notes ?? ""));
-      }
     } catch (e) {
       setEddError(e instanceof Error ? e.message : "Failed to save EDD");
     } finally {
@@ -435,13 +435,25 @@ export default function FreightDashboard({
     setTrackingError("");
     setIsSavingTracking(true);
     const oldTracking = trackingModal.item.trackingNumber;
-    const systemNote: NoteItem = {
+    const oldFreightRef = trackingModal.item.freightRef ?? "";
+    const newFreightRef = trackingForm.freightRef.trim();
+
+    const trackingNote: NoteItem = {
       author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
       text: oldTracking
         ? `Tracking number updated from ${oldTracking} to ${trackingForm.trackingNumber}.`
         : `Tracking number set to ${trackingForm.trackingNumber}.`,
     };
-    const nextNotes = [...notes, systemNote];
+    const notesToAdd = [trackingNote];
+    if (newFreightRef && newFreightRef !== oldFreightRef) {
+      notesToAdd.push({
+        author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
+        text: oldFreightRef
+          ? `Freight ref updated from ${oldFreightRef} to ${newFreightRef}.`
+          : `Freight ref set to ${newFreightRef}.`,
+      });
+    }
+    const nextNotes = [...notes, ...notesToAdd];
     setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
@@ -449,22 +461,27 @@ export default function FreightDashboard({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop, orderId: trackingModal.order.shopifyOrderId, variantId: trackingModal.item.variantId,
-          data: { trackingNumber: trackingForm.trackingNumber, carrier: trackingForm.carrier, notes: serializeNotes(nextNotes) },
+          data: {
+            trackingNumber: trackingForm.trackingNumber,
+            carrier: trackingForm.carrier,
+            freightRef: newFreightRef,
+            notes: serializeNotes(nextNotes),
+          },
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, cin7Exists } } : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, freightRef: newFreightRef, cin7Exists } } : prev);
       setRows((prevRows = []) => prevRows.map((o: any) => o.id !== trackingModal.order.id ? o : {
         ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== trackingModal.item.variantId ? li : {
-          ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, cin7Exists,
+          ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists,
         }),
       }));
       if (allRows) {
         setAllRows((prev) => prev ? prev.map((o) => o.id !== trackingModal.order.id ? o : {
           ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== trackingModal.item.variantId ? li : {
-            ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, cin7Exists,
+            ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists,
           }),
         }) : prev);
       }
@@ -1042,7 +1059,7 @@ export default function FreightDashboard({
                       </div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Carrier</span><span className="fo-detail-value" style={{ color: "#2563eb" }}>{companyLabels[detailView.item.company as keyof typeof companyLabels] ?? detailView.item.company ?? "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Tracking #</span><span className="fo-detail-value">{detailView.item.trackingNumber ? <span style={{ color: "#2563eb" }}>{detailView.item.trackingNumber}</span> : "—"}</span></div>
-                      <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value" style={{ color: "#2563eb" }}>{`${detailView.order.carriers.split(",")[0]?.trim() ?? "FRT"}-REF-${detailView.order.shopifyOrderId.slice(-3)}`}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value">{detailView.item.freightRef || "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
                     </div>
 
@@ -1206,16 +1223,31 @@ export default function FreightDashboard({
                             </td>
                             <td className="fo-td">
                               {item.trackingNumber ? (
-                                <span className="fo-tracking-num">{item.trackingNumber}</span>
+                                <button
+                                  className="fo-tracking-num"
+                                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+                                  onClick={() => {
+                                    setTrackingModal({ order, item });
+                                    setTrackingForm({
+                                      carrier: item.company || "",
+                                      trackingNumber: item.trackingNumber,
+                                      freightRef: item.freightRef || getRefPrefix(item.company || ""),
+                                      deliveryMethod: "Standard",
+                                      notifyCustomer: true,
+                                    });
+                                  }}
+                                >
+                                  {item.trackingNumber}
+                                </button>
                               ) : (
                                 <button className="fo-tracking-add"
-                                  onClick={() => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
+                                  onClick={() => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}>
                                   <IconPlus /> Add
                                 </button>
                               )}
                             </td>
                             <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                              {isFirstItem ? `${order.carriers.split(",")[0]?.trim() ?? "FRT"}-REF-${order.shopifyOrderId.slice(-3)}` : "—"}
+                              {item.freightRef || "—"}
                             </td>
                             <td className="fo-td">
                               {(() => {
@@ -1356,7 +1388,16 @@ export default function FreightDashboard({
                 <label className="fo-field-label" htmlFor="t-carrier">Carrier</label>
                 <div style={{ position: "relative" }}>
                   <select id="t-carrier" className="fo-input" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: "36px", cursor: "pointer" }}
-                    value={trackingForm.carrier} onChange={(e) => setTrackingForm((p) => ({ ...p, carrier: e.target.value }))}>
+                    value={trackingForm.carrier}
+                    onChange={(e) => {
+                      const carrier = e.target.value;
+                      setTrackingForm((p) => {
+                        const prevPrefix = getRefPrefix(p.carrier);
+                        const newPrefix = getRefPrefix(carrier);
+                        const shouldUpdateRef = !p.freightRef || p.freightRef === prevPrefix;
+                        return { ...p, carrier, freightRef: shouldUpdateRef ? newPrefix : p.freightRef };
+                      });
+                    }}>
                     <option value="">Select carrier...</option>
                     <option value="MAINFREIGHT">Mainfreight</option><option value="NZP">NZ Post</option>
                     <option value="TGE">Team Global Express</option><option value="FLIWAY">Fliway - Linehaul</option>

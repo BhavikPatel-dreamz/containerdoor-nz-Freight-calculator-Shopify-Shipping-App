@@ -94,7 +94,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
     const [variantId, rest] = part.split(":");
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     const ops = opsMap.get(`${numericOrderId}::${variantId}`);
-    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), sku: variantSkuMap.get(variantId) ?? "", company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "", cin7Exists: orderCin7Map.get(numericOrderId) ?? false };
+    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), sku: variantSkuMap.get(variantId) ?? "", company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "",freightRef: ops?.freightRef ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "", cin7Exists: orderCin7Map.get(numericOrderId) ?? false };
   });
   return {
     id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,

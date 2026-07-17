@@ -127,6 +127,7 @@ model OrderLineItemOperationalData {
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
+  freightRef        String   @default("")  
   eddDate           String   @default("")
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")

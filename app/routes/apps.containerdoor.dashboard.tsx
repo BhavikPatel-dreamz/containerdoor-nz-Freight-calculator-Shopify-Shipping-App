@@ -269,6 +269,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
       letterSuffix: LETTERS[idx % 26],
       customerStatus: ops?.customerStatus ?? "",
       trackingNumber: ops?.trackingNumber ?? "",
+      freightRef: ops?.freightRef ?? "", 
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
       cin7Exists: orderCin7Map.get(numericOrderId) ?? false,
