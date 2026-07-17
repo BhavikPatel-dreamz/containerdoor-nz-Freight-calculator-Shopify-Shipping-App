@@ -8,6 +8,37 @@ type OrderInput = { orderId: string; lineItems: LineItemInput[] };
 
 const CIN7_STATUS_CACHE_MS = Number(process.env.CIN7_STATUS_CACHE_MS ?? 5 * 60 * 1000);
 
+type Cin7Result = { variantId: string; status: string; mismatches: string[] };
+
+async function persistCin7StatusCache(shop: string, orderId: string, results: Cin7Result[]) {
+  try {
+    await prisma.orderOperationalData.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      create: { shop, orderId, cin7StatusCheckedAt: new Date() },
+      update: { cin7StatusCheckedAt: new Date() },
+    });
+    // Raw query on purpose: writing cache columns must NOT touch `updatedAt`,
+    // since `updatedAt` is used elsewhere to detect real freight-tab edits
+    // vs. Cin7-side edits. A normal prisma upsert() DOES bump updatedAt on
+    // every poll, which was silently making every refresh look like a
+    // "freight is newer" edit and pushing stale local values back to Cin7.
+    await Promise.all(results.map((r) =>
+      prisma.$executeRaw`
+        INSERT INTO "OrderLineItemOperationalData"
+          ("id","shop","orderId","variantId","cin7CachedStatus","cin7CachedMismatches","createdAt","updatedAt")
+        VALUES
+          (${`c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`}, ${shop}, ${orderId}, ${r.variantId}, ${r.status}, ${r.mismatches.join(",")}, now(), now())
+        ON CONFLICT ("shop","orderId","variantId")
+        DO UPDATE SET "cin7CachedStatus" = EXCLUDED."cin7CachedStatus", "cin7CachedMismatches" = EXCLUDED."cin7CachedMismatches"
+      `
+    ));
+  } catch (cacheErr) {
+    console.error("[Cin7][Status] Failed to persist cache", cacheErr);
+    // fallback stays as-is (rarely hit) — same raw-query treatment could be
+    // applied here too if you want belt-and-suspenders, but not required for this fix.
+  }
+}
+
 export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405 });
 
@@ -51,18 +82,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const cin7SalesOrderId = record?.cin7SalesOrderId;
 
         if (!cin7SalesOrderId || cin7SalesOrderId === "pending") {
-          perOrderResults[order.orderId] = {
-            cin7SalesOrderId: null,
-            results: order.lineItems.map((li) => ({ variantId: li.variantId, status: "missing", mismatches: [] })),
-          };
+          const results = order.lineItems.map((li) => ({ variantId: li.variantId, status: "missing", mismatches: [] }));
+          perOrderResults[order.orderId] = { cin7SalesOrderId: null, results };
+          await persistCin7StatusCache(shop, order.orderId, results);
           continue;
         }
 
         if (cin7SalesOrderId === "duplicate") {
-          perOrderResults[order.orderId] = {
-            cin7SalesOrderId: null,
-            results: order.lineItems.map((li) => ({ variantId: li.variantId, status: "error", mismatches: [] })),
-          };
+          const results = order.lineItems.map((li) => ({ variantId: li.variantId, status: "error", mismatches: [] }));
+          perOrderResults[order.orderId] = { cin7SalesOrderId: null, results };
+          await persistCin7StatusCache(shop, order.orderId, results);
           continue;
         }
 
@@ -93,18 +122,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         const snapshot = await fetchCin7SalesOrder(cin7SalesOrderId);
         if (!snapshot) {
-          perOrderResults[order.orderId] = {
-            cin7SalesOrderId,
-            results: order.lineItems.map((li) => ({ variantId: li.variantId, status: "missing", mismatches: [] })),
-          };
+          const results = order.lineItems.map((li) => ({ variantId: li.variantId, status: "missing", mismatches: [] }));
+          perOrderResults[order.orderId] = { cin7SalesOrderId, results };
+          await persistCin7StatusCache(shop, order.orderId, results);
           continue;
         }
 
         if (snapshot.isVoid || Boolean(snapshot.cancellationDate)) {
-          perOrderResults[order.orderId] = {
-            cin7SalesOrderId,
-            results: order.lineItems.map((li) => ({ variantId: li.variantId, status: "error", mismatches: [] })),
-          };
+          const results = order.lineItems.map((li) => ({ variantId: li.variantId, status: "error", mismatches: [] }));
+          perOrderResults[order.orderId] = { cin7SalesOrderId, results };
+          await persistCin7StatusCache(shop, order.orderId, results);
           continue;
         }
 
@@ -117,25 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           results,
         };
 
-        try {
-          await prisma.orderOperationalData.update({
-            where: { shop_orderId: { shop, orderId: order.orderId } },
-            data: { cin7StatusCheckedAt: new Date() },
-          });
-          // Raw query on purpose: writing cache columns must NOT touch `updatedAt`,
-          // since `updatedAt` is used elsewhere to detect real freight-tab edits
-          // vs. Cin7-side edits. A normal prisma.update()/updateMany() here would
-          // bump updatedAt on every poll and make every mismatch look "freight is newer".
-          await Promise.all(results.map((r) =>
-            prisma.$executeRaw`
-              UPDATE "OrderLineItemOperationalData"
-              SET "cin7CachedStatus" = ${r.status}, "cin7CachedMismatches" = ${r.mismatches.join(",")}
-              WHERE "shop" = ${shop} AND "orderId" = ${order.orderId} AND "variantId" = ${r.variantId}
-            `,
-          ));
-        } catch (cacheErr) {
-          console.error("[Cin7][Status] Failed to persist cache", cacheErr);
-        }
+        await persistCin7StatusCache(shop, order.orderId, results);
       }
     };
     await Promise.all(Array.from({ length: Math.min(concurrency, orders.length) }, worker));

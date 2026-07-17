@@ -27,34 +27,50 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const lineRecord = variantId
       ? await prisma.orderLineItemOperationalData.findUnique({
           where: { shop_orderId_variantId: { shop, orderId, variantId } },
-          select: { updatedAt: true },
+          select: { trackingNumberUpdatedAt: true, eddDateUpdatedAt: true },
         })
       : null;
 
     const lastCheckedAt = (orderRecord.cin7StatusCheckedAt as Date | null | undefined)?.getTime() ?? 0;
-    const freightIsNewer = Boolean(lineRecord?.updatedAt && lineRecord.updatedAt.getTime() > lastCheckedAt);
+    const trackingIsNewer = Boolean(lineRecord?.trackingNumberUpdatedAt && lineRecord.trackingNumberUpdatedAt.getTime() > lastCheckedAt);
+    const eddIsNewer = Boolean(lineRecord?.eddDateUpdatedAt && lineRecord.eddDateUpdatedAt.getTime() > lastCheckedAt);
+    const carrierIsNewer = trackingIsNewer; // carrier is edited alongside tracking in the UI
 
     const toFix = fields && fields.length ? fields : ["trackingNumber", "eddDate", "carrier"];
     const errors: string[] = [];
     const updatedFields: { trackingNumber?: string; eddDate?: string; carrier?: string } = {};
 
-    if (freightIsNewer) {
-      if (toFix.includes("trackingNumber")) {
+    let pushedAny = false;
+
+    if (toFix.includes("trackingNumber")) {
+      if (trackingIsNewer) {
+        pushedAny = true;
         const r = await syncCin7TrackingNumber({ salesOrderId, trackingNumber });
         if (!r.updated) errors.push(r.error || "tracking sync failed");
+      } else {
+        updatedFields.trackingNumber = snapshot.trackingCode ?? "";
       }
-      if (toFix.includes("eddDate")) {
+    }
+    if (toFix.includes("eddDate")) {
+      if (eddIsNewer) {
+        pushedAny = true;
         const r = await syncCin7EstimatedDispatchDate({ salesOrderId, eddDate });
         if (!r.updated) errors.push(r.error || "EDD sync failed");
+      } else {
+        updatedFields.eddDate = snapshot.estimatedDeliveryDate ? snapshot.estimatedDeliveryDate.slice(0, 10) : "";
       }
-      if (toFix.includes("carrier")) {
+    }
+    if (toFix.includes("carrier")) {
+      if (carrierIsNewer) {
+        pushedAny = true;
         const r = await syncCin7Carrier({ salesOrderId, carrier });
         if (!r.updated) errors.push(r.error || "carrier sync failed");
+      } else {
+        updatedFields.carrier = snapshot.logisticsCarrier ?? "";
       }
-    } else {
-      if (toFix.includes("trackingNumber")) updatedFields.trackingNumber = snapshot.trackingCode ?? "";
-      if (toFix.includes("eddDate")) updatedFields.eddDate = snapshot.estimatedDeliveryDate ? snapshot.estimatedDeliveryDate.slice(0, 10) : "";
-      if (toFix.includes("carrier")) updatedFields.carrier = snapshot.logisticsCarrier ?? "";
+    }
+
+    {
 
       // Raw query on purpose: pulling values FROM Cin7 is not a genuine
       // freight-tab edit. A normal prisma.update()/updateMany() here would
@@ -92,7 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `;
     }
 
-    return Response.json({ ok: true, direction: freightIsNewer ? "pushed" : "pulled", updated: updatedFields });
+    return Response.json({ ok: true, direction: pushedAny ? "pushed" : "pulled", updated: updatedFields });
   } catch (error) {
     console.error("[Cin7][Fix] Error:", error);
     return Response.json({ ok: false, error: error instanceof Error ? error.message : "Internal server error" }, { status: 500 });

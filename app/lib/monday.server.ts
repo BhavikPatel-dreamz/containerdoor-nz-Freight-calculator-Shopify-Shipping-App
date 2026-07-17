@@ -463,6 +463,50 @@ export async function updateMondayItem(itemId: string, row: MondayRow) {
   console.log("[Monday] Item updated:", itemId);
 }
 
+// Text columns don't carry `changed_at` in their column value JSON (only
+// date/status columns do), so for text columns we look up the last time
+// that specific column was changed via the board's activity log instead.
+async function fetchColumnChangedAt(
+  itemId: string,
+  columnId: string,
+): Promise<string | null> {
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $columnIds: [String!]) {
+      boards(ids: [$boardId]) {
+        activity_logs(column_ids: $columnIds, limit: 25) {
+          data
+          created_at
+        }
+      }
+    }`,
+    { boardId: process.env.MONDAY_BOARD_ID, columnIds: [columnId] },
+  ).catch((err) => {
+    console.error("[Monday] fetchColumnChangedAt failed", err);
+    return null;
+  });
+
+  const logs: { data: string; created_at: string }[] =
+    data?.boards?.[0]?.activity_logs ?? [];
+
+  let latestMs: number | null = null;
+  for (const log of logs) {
+    try {
+      const parsed = JSON.parse(log.data);
+      const pulseId = String(parsed.pulse_id ?? parsed.item_id ?? "");
+      if (pulseId !== String(itemId)) continue;
+      // Monday activity log created_at is Unix time * 10,000,000
+      // (100-nanosecond intervals) — divide by 10,000 to get milliseconds.
+      const ms = Number(log.created_at) / 10000;
+      if (!Number.isFinite(ms)) continue;
+      if (latestMs === null || ms > latestMs) latestMs = ms;
+    } catch {
+      continue;
+    }
+  }
+
+  return latestMs !== null ? new Date(latestMs).toISOString() : null;
+}
+
 export async function fetchMondayItem(itemId: string) {
   const colIds = await getOrCreateColumnIds();
   const query = `query ($itemId: [ID!]) {
@@ -492,6 +536,13 @@ export async function fetchMondayItem(itemId: string) {
     }
   };
 
+  // trackingNumber is a text column, which has no `changed_at` in its value
+  // JSON, so it needs the activity-log lookup instead of getChangedAt().
+  const trackingNumberChangedAt = await fetchColumnChangedAt(
+    itemId,
+    colIds.trackingNumber,
+  );
+
   return {
     customerStatus: getText("customerStatus"),
     statusChangedAt: getChangedAt("customerStatus"), // unchanged from before
@@ -499,6 +550,7 @@ export async function fetchMondayItem(itemId: string) {
     eddDateChangedAt: getChangedAt("eddDate"), // NEW
     originalEddDate: getText("originalEddDate"),
     trackingNumber: getText("trackingNumber"),
+    trackingNumberChangedAt, // NEW — from activity log, not column value
     sku: getText("sku"), // NEW
   };
 }

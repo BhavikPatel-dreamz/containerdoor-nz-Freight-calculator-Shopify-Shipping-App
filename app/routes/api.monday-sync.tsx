@@ -93,6 +93,20 @@ export async function action({ request }: ActionFunctionArgs) {
       } else {
         console.log("[Monday][Sync] Admin tab EDD is newer (or Monday has none), pushing it.");
       }
+
+      const mondayTrackingAt = mondayBefore.trackingNumberChangedAt
+        ? new Date(mondayBefore.trackingNumberChangedAt).getTime() : 0;
+      const localTrackingAt = existing.trackingNumberUpdatedAt
+        ? new Date(existing.trackingNumberUpdatedAt).getTime() : 0;
+
+      if (mondayBefore.trackingNumber && mondayTrackingAt > localTrackingAt) {
+        console.log(
+          `[Monday][Sync] Monday tracking "${mondayBefore.trackingNumber}" (changed ${mondayBefore.trackingNumberChangedAt}) is newer than admin tab's last tracking change (${existing.trackingNumberUpdatedAt}). Keeping Monday's tracking.`
+        );
+        fullRow.trackingNumber = mondayBefore.trackingNumber;
+      } else {
+        console.log("[Monday][Sync] Admin tab tracking is newer (or Monday has none), pushing it.");
+      }
     } else {
       console.log("[Monday][Sync] Could not fetch existing Monday item, pushing local values as-is.");
     }

@@ -94,7 +94,35 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
     const [variantId, rest] = part.split(":");
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     const ops = opsMap.get(`${numericOrderId}::${variantId}`);
-    return { id: `${order.id}-${idx}`, variantId, title: variantTitleMap.get(variantId), sku: variantSkuMap.get(variantId) ?? "", company: company ?? "", boxes: Number(boxesStr ?? 0), amount: Number(amountStr ?? 0), letterSuffix: LETTERS[idx % 26], customerStatus: ops?.customerStatus ?? "", trackingNumber: ops?.trackingNumber ?? "",freightRef: ops?.freightRef ?? "", eddDate: ops?.eddDate ?? "", originalEddDate: ops?.originalEddDate ?? "", cin7Exists: orderCin7Map.get(numericOrderId) ?? false };
+    return {
+      id: `${order.id}-${idx}`,
+      variantId,
+      title: variantTitleMap.get(variantId),
+      sku: variantSkuMap.get(variantId) ?? "",
+      company: company ?? "",
+      boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
+      letterSuffix: LETTERS[idx % 26],
+      customerStatus: ops?.customerStatus ?? "",
+      trackingNumber: ops?.trackingNumber ?? "",
+      freightRef: ops?.freightRef ?? "",
+      eddDate: ops?.eddDate ?? "",
+      originalEddDate: ops?.originalEddDate ?? "",
+      cin7Exists: orderCin7Map.get(numericOrderId) ?? false,
+      // Restore persisted cached statuses so the UI shows DB values after a reload
+      cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
+        ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
+        ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+      mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
+        ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      mondayMismatches: typeof ops?.mondayCachedMismatches === "string" && ops.mondayCachedMismatches.trim()
+        ? ops.mondayCachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+    };
   });
   return {
     id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,

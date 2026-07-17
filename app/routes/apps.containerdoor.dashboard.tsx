@@ -269,10 +269,15 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
       letterSuffix: LETTERS[idx % 26],
       customerStatus: ops?.customerStatus ?? "",
       trackingNumber: ops?.trackingNumber ?? "",
-      freightRef: ops?.freightRef ?? "", 
+      freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
       cin7Exists: orderCin7Map.get(numericOrderId) ?? false,
+      // Restore persisted cached statuses so the UI shows DB values after a reload
+      cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim() ? ops.cin7CachedStatus.trim().toLowerCase() : undefined,
+      cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim() ? ops.cin7CachedMismatches.split(",").map(s => s.trim()).filter(Boolean) : [],
+      mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim() ? ops.mondayCachedStatus.trim().toLowerCase() as any : undefined,
+      mondayMismatches: typeof ops?.mondayCachedMismatches === "string" && ops.mondayCachedMismatches.trim() ? ops.mondayCachedMismatches.split(",").map(s => s.trim()).filter(Boolean) : [],
     };
   });
   return {
