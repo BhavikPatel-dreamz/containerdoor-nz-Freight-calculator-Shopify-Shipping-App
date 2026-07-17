@@ -1061,14 +1061,14 @@ export default function FreightDashboard({
                     </div>
                   )}
                   <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
-                    <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
+                    {/* <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
                       {isSyncing ? "Syncing all pages..." : "Sync all pages"}
-                    </button>
-                    <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
+                    </button> */}
+                    {/* <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
                       {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
-                    </button>
+                    </button> */}
                   </div>
                 </div>
                 <button className="fo-tool-btn">
