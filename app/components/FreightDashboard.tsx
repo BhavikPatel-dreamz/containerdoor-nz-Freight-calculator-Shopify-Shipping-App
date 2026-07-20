@@ -59,24 +59,7 @@ type NoteItem = {
   isSystem?: boolean;
 };
 
-type SyncProgressEntry = {
-  id: string;
-  label: string;
-  status: "created" | "updated" | "already-there" | "failed";
-  message: string;
-};
 
-type SyncProgressState = {
-  total: number;
-  completed: number;
-  created: number;
-  updated: number;
-  already: number;
-  failed: number;
-  entries: SyncProgressEntry[];
-  startedAt: number;
-  estimatedSecondsLeft: number;
-};
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
@@ -109,24 +92,24 @@ function getCustomerStatusStyle(status: string): { bg: string; text: string; lab
   }
 }
 
-function formatSeconds(seconds: number): string {
-  if (seconds <= 0) return "0m";
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-}
+// function formatSeconds(seconds: number): string {
+//   if (seconds <= 0) return "0m";
+//   const mins = Math.floor(seconds / 60);
+//   const secs = seconds % 60;
+//   return mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+// }
 
-function formatRelativeTime(diffMs: number): string {
-  const seconds = Math.max(0, Math.round(diffMs / 1000));
-  if (seconds < 10) return "just now";
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
+// function formatRelativeTime(diffMs: number): string {
+//   const seconds = Math.max(0, Math.round(diffMs / 1000));
+//   if (seconds < 10) return "just now";
+//   if (seconds < 60) return `${seconds}s ago`;
+//   const minutes = Math.floor(seconds / 60);
+//   if (minutes < 60) return `${minutes}m ago`;
+//   const hours = Math.floor(minutes / 60);
+//   if (hours < 24) return `${hours}h ago`;
+//   const days = Math.floor(hours / 24);
+//   return `${days}d ago`;
+// }
 
 function parseNotesString(raw: string): NoteItem[] {
   const text = String(raw ?? "").trim();
@@ -244,10 +227,7 @@ export default function FreightDashboard({
   const [notesFetching, setNotesFetching] = useState(false);
   const [isSavingTracking, setIsSavingTracking] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<SyncProgressState | null>(null);
-  const [syncProgressOpen, setSyncProgressOpen] = useState(false);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
-  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
   const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
   const [mondayFixingId, setMondayFixingId] = useState<string | null>(null);
@@ -255,7 +235,6 @@ export default function FreightDashboard({
   const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
   // By default, disable automatic polling of external APIs. Refresh button triggers checks.
   const [allowStatusPoll] = useState(false);
-  const [, setTimeTick] = useState(0);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
@@ -266,11 +245,6 @@ export default function FreightDashboard({
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
-  useEffect(() => {
-    if (!lastSyncAt) return;
-    const timer = window.setInterval(() => setTimeTick((n) => n + 1), 60000);
-    return () => window.clearInterval(timer);
-  }, [lastSyncAt]);
 
   // ── Fetch notes whenever a modal that shows notes opens ───────────────────
   useEffect(() => {
@@ -377,6 +351,88 @@ export default function FreightDashboard({
     return () => { cancelled = true; };
   }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
 
+// ── NEW: lightweight polling to pick up field changes pushed in via the
+// Monday webhook (EDD, tracking, status, carrier). Reuses the existing
+// GET /api/order-status endpoint — no new route, no other logic touched.
+useEffect(() => {
+  if (!rows || rows.length === 0) return;
+  let cancelled = false;
+
+  const pollFieldUpdates = async () => {
+    try {
+      const results = await Promise.all(
+        rows.map(async (order) => {
+          try {
+            const res = await fetch(
+              `/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`
+            );
+            if (!res.ok) return null;
+            const json = await res.json();
+            return { orderId: order.shopifyOrderId, lineItems: json.lineItems ?? [] };
+          } catch {
+            return null;
+          }
+        })
+      );
+      if (cancelled) return;
+
+      const byOrder: Record<string, any[]> = {};
+      for (const r of results) {
+        if (r) byOrder[r.orderId] = r.lineItems;
+      }
+      if (Object.keys(byOrder).length === 0) return;
+
+      const applyLatest = (o: FreightOrderRow): FreightOrderRow => {
+        const updates = byOrder[o.shopifyOrderId];
+        if (!updates) return o;
+        return {
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            const match = updates.find((u: any) => u.variantId === li.variantId);
+            if (!match) return li;
+            return {
+              ...li,
+              eddDate: match.eddDate || li.eddDate,
+              originalEddDate: match.originalEddDate || li.originalEddDate,
+              trackingNumber: match.trackingNumber || li.trackingNumber,
+              freightRef: match.freightRef || li.freightRef,
+              customerStatus: match.customerStatus || li.customerStatus,
+              company: match.carrier || li.company,
+            };
+          }),
+        };
+      };
+
+      setRows((prev) => prev.map(applyLatest));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+
+      setDetailView((prev) => {
+        if (!prev) return prev;
+        const updates = byOrder[prev.order.shopifyOrderId];
+        const match = updates?.find((u: any) => u.variantId === prev.item.variantId);
+        if (!match) return prev;
+        return {
+          ...prev,
+          item: {
+            ...prev.item,
+            eddDate: match.eddDate || prev.item.eddDate,
+            originalEddDate: match.originalEddDate || prev.item.originalEddDate,
+            trackingNumber: match.trackingNumber || prev.item.trackingNumber,
+            freightRef: match.freightRef || prev.item.freightRef,
+            customerStatus: match.customerStatus || prev.item.customerStatus,
+            company: match.carrier || prev.item.company,
+          },
+        };
+      });
+    } catch (e) {
+      console.error("Failed to poll line item field updates", e);
+    }
+  };
+
+  const interval = setInterval(pollFieldUpdates, 15000); // every 15s
+  return () => { cancelled = true; clearInterval(interval); };
+}, [rows.map((o) => o.id).join(","), shop]);
+  
   const filteredOrders = (rows || []).filter((o) => {
     // Tab filter — keep orders that have at least one matching line item
     if (activeTab !== "all") {
@@ -773,165 +829,6 @@ export default function FreightDashboard({
     }
   };
 
-  const handleBulkSync = async () => {
-    const syncOrders = allRows ?? rows;
-    const totalItems = syncOrders.reduce((count, order) => count + order.lineItems.length, 0);
-    if (totalItems === 0) return;
-
-    const startAt = Date.now();
-    setSyncProgress({
-      total: totalItems,
-      completed: 0,
-      created: 0,
-      updated: 0,
-      already: 0,
-      failed: 0,
-      entries: [],
-      startedAt: startAt,
-      estimatedSecondsLeft: 0,
-    });
-    setSyncProgressOpen(false);
-    setSyncNotification(null);
-    setIsSyncing(true);
-
-    const updateProgress = (update: (prev: SyncProgressState) => SyncProgressState) => {
-      setSyncProgress((prev) => {
-        if (!prev) return prev;
-        const next = update(prev);
-        const elapsedSeconds = Math.max(1, Math.round((Date.now() - prev.startedAt) / 1000));
-        const remaining = next.completed > 0
-          ? Math.round((elapsedSeconds / next.completed) * (next.total - next.completed))
-          : Math.round((next.total - next.completed) * 2);
-        return { ...next, estimatedSecondsLeft: remaining };
-      });
-    };
-
-    const itemsToSync = syncOrders.flatMap((order) =>
-      order.lineItems.map((item) => ({ order, item }))
-    );
-
-    const processItem = async (order: FreightOrderRow, item: FreightLineItem) => {
-      const entry: SyncProgressEntry = {
-        id: `${order.shopifyOrderId}-${item.variantId}`,
-        label: `${order.shopifyOrderName}${item.letterSuffix}`,
-        status: "failed",
-        message: "Failed to sync",
-      };
-
-      try {
-        const res = await fetch("/api/monday-sync-create-or-update", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            shop,
-            orderId: order.shopifyOrderId,
-            variantId: item.variantId,
-            itemName: `${order.shopifyOrderName}${item.letterSuffix}`,
-            row: {
-              customerName: order.customerName,
-              email: order.email,
-              carriers: item.company,
-              trackingNumber: item.trackingNumber,
-              eddDate: item.eddDate,
-              originalEddDate: item.originalEddDate,
-              productTitle: item.title ?? "",
-              sku: item.sku ?? "",
-              boxes: item.boxes ?? "",
-              customerStatus: item.customerStatus,
-            },
-          }),
-        });
-
-        if (!res.ok) {
-          updateProgress((prev) => ({
-            ...prev,
-            completed: prev.completed + 1,
-            failed: prev.failed + 1,
-            entries: [...prev.entries, entry],
-          }));
-          return;
-        }
-
-        const json = await res.json();
-        const status: SyncProgressEntry["status"] =
-          json.syncStatus === "created" ? "created" :
-            json.syncStatus === "updated" ? "updated" :
-              "already-there";
-        entry.status = status;
-        entry.message =
-          status === "created" ? "Created in Monday" :
-            status === "updated" ? "Updated in Monday" :
-              "Already in Monday";
-
-        const updatedLineItem = {
-          ...item,
-          ...json.updated,
-          trackingNumber: json.updated?.trackingNumber ?? item.trackingNumber ?? "",
-          eddDate: json.updated?.eddDate ?? item.eddDate ?? "",
-          originalEddDate: json.updated?.originalEddDate ?? item.originalEddDate ?? "",
-          customerStatus: json.updated?.customerStatus ?? item.customerStatus ?? "",
-          company: json.updated?.carrier ?? item.company ?? "",
-          title: json.updated?.productTitle ?? item.title ?? "",
-        };
-
-        updateProgress((prev) => ({
-          ...prev,
-          completed: prev.completed + 1,
-          created: prev.created + (status === "created" ? 1 : 0),
-          updated: prev.updated + (status === "updated" ? 1 : 0),
-          already: prev.already + (status === "already-there" ? 1 : 0),
-          entries: [...prev.entries, entry],
-        }));
-
-        setRows((prevRows = []) => prevRows.map((o: any) => o.id !== order.id ? o : {
-          ...o,
-          lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...updatedLineItem }),
-        }));
-
-        if (allRows) {
-          setAllRows((prev) => prev ? prev.map((o) => o.id !== order.id ? o : {
-            ...o,
-            lineItems: o.lineItems.map((li: any) => li.variantId !== item.variantId ? li : { ...li, ...updatedLineItem }),
-          }) : prev);
-        }
-
-        setDetailView((prev) => prev && prev.order.shopifyOrderId === order.shopifyOrderId && prev.item.variantId === item.variantId
-          ? { ...prev, item: { ...prev.item, ...updatedLineItem } }
-          : prev);
-      } catch (error) {
-        console.error("Monday bulk sync failed", error);
-        updateProgress((prev) => ({
-          ...prev,
-          completed: prev.completed + 1,
-          failed: prev.failed + 1,
-          entries: [...prev.entries, entry],
-        }));
-      }
-    };
-
-    const concurrency = 3;
-    const queue = itemsToSync.slice();
-    const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
-      while (queue.length > 0) {
-        const job = queue.shift();
-        if (!job) break;
-        await processItem(job.order, job.item);
-      }
-    });
-
-    try {
-      await Promise.all(workers);
-      setLastSyncAt(Date.now());
-      setSyncNotification("Sync completed successfully");
-      setSyncProgressOpen(false);
-      window.setTimeout(() => {
-        setSyncProgress(null);
-        setSyncNotification(null);
-      }, 5500);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
 
   const handleSync = async () => {
     if (!detailView) return;
@@ -970,6 +867,78 @@ export default function FreightDashboard({
           ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }),
         }) : prev);
       }
+
+      // ── NEW: also sync with Cin7 for this order/line item ──
+      try {
+        if (!detailView.item.cin7Exists) {
+          // No Cin7 order yet → create it (same as handleCreateCin7Order)
+          const cin7Res = await fetch("/api/cin7-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId }),
+          });
+          if (cin7Res.ok) {
+            const cin7Payload = await cin7Res.json();
+            const cin7Exists = Boolean(cin7Payload.cin7SalesOrderId && cin7Payload.cin7SalesOrderId !== "pending");
+            const applyCin7Created = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : {
+              ...o,
+              lineItems: o.lineItems.map((li) => ({ ...li, cin7Exists, cin7Status: cin7Exists ? "match" as const : "missing" as const, cin7Mismatches: [] })),
+            };
+            setRows((prev) => prev.map(applyCin7Created));
+            if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7Created) : prev);
+            setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists } } : prev);
+          }
+        } else {
+          // Cin7 order exists → push/pull mismatched fields (same as handleFixCin7Mismatch)
+          // Cin7 order exists → push/pull mismatched fields (same as handleFixCin7Mismatch)
+          const cin7Res = await fetch("/api/cin7-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop,
+              orderId: detailView.order.shopifyOrderId,
+              variantId: detailView.item.variantId,
+              trackingNumber: detailView.item.trackingNumber,
+              eddDate: detailView.item.eddDate,
+              carrier: detailView.item.company,
+              fields: ["trackingNumber", "eddDate", "carrier"],
+              forceCarrier: true, // NEW — Sync button always pushes carrier to Cin7
+            }),
+          });
+          const cin7Payload = await cin7Res.json().catch(() => ({}));
+          if (cin7Res.ok && cin7Payload.ok) {
+            const pulled = cin7Payload.updated || {};
+            const applyCin7Updated = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : {
+              ...o,
+              lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : {
+                ...li,
+                trackingNumber: pulled.trackingNumber ?? li.trackingNumber,
+                eddDate: pulled.eddDate ?? li.eddDate,
+                company: pulled.carrier ?? li.company,
+                cin7Status: "match" as const,
+                cin7Mismatches: [],
+              }),
+            };
+            setRows((prev) => prev.map(applyCin7Updated));
+            if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7Updated) : prev);
+            setDetailView((prev) => prev ? {
+              ...prev,
+              item: {
+                ...prev.item,
+                trackingNumber: pulled.trackingNumber ?? prev.item.trackingNumber,
+                eddDate: pulled.eddDate ?? prev.item.eddDate,
+                company: pulled.carrier ?? prev.item.company,
+                cin7Status: "match",
+                cin7Mismatches: [],
+              },
+            } : prev);
+          }
+        }
+      } catch (cin7Err) {
+        console.error("Cin7 sync failed", cin7Err);
+      }
+      // ── end new block ──
+
       // ── NEW: refresh notes — sync may have pulled in new Monday comments
       const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
       if (notesRes.ok) {
@@ -1055,20 +1024,11 @@ export default function FreightDashboard({
                   <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
                 </select>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
-                  {lastSyncAt && !isSyncing && (
-                    <div style={{ fontSize: "12px", color: "#6b7280" }}>
-                      Last sync: {formatRelativeTime(Date.now() - lastSyncAt)}
-                    </div>
-                  )}
                   <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
-                    {/* <button className="fo-tool-btn" onClick={handleBulkSync} disabled={isSyncing || (allRows ?? rows).length === 0}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                      {isSyncing ? "Syncing all pages..." : "Sync all pages"}
-                    </button> */}
-                    {/* <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
+                    <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
                       {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
-                    </button> */}
+                    </button>
                   </div>
                 </div>
                 <button className="fo-tool-btn">
@@ -1081,82 +1041,13 @@ export default function FreightDashboard({
                 </button>
               </div>
             </div>
-            {syncNotification ? (
+            {syncNotification && (
               <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                   <span style={{ fontSize: "13px", fontWeight: 700 }}>
                     {syncNotification}
                   </span>
-                  <span style={{ fontSize: "12px", color: "#065f46" }}>
-                    {syncProgress ? `${syncProgress.completed} / ${syncProgress.total} line items processed` : ""}
-                  </span>
                 </div>
-              </div>
-            ) : syncProgress && (
-              <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #e5e7eb", borderRadius: "12px", background: "#f8fafc" }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", alignItems: "center" }}>
-                  <div>
-                    <div style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>Monday bulk sync progress</div>
-                    <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>
-                      {syncProgress.completed} / {syncProgress.total} line items processed · Created {syncProgress.created} · Updated {syncProgress.updated} · Already there {syncProgress.already} · Failed {syncProgress.failed}
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#2563eb", fontWeight: 700 }}>Background sync running</span>
-                    <span style={{ fontSize: "11px", color: "#6b7280" }}>
-                      Estimated remaining: {formatSeconds(syncProgress.estimatedSecondsLeft)}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setSyncProgressOpen((open) => !open)}
-                    style={{
-                      border: "none",
-                      background: "transparent",
-                      color: "#2563eb",
-                      cursor: "pointer",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "6px",
-                      fontSize: "12px",
-                      fontWeight: 700,
-                      padding: "6px 8px",
-                      borderRadius: "8px",
-                    }}
-                  >
-                    {syncProgressOpen ? "Hide details" : "Show details"}
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ transform: syncProgressOpen ? "rotate(180deg)" : "rotate(0deg)", transition: "transform 0.2s" }}>
-                      <polyline points="6 9 12 15 18 9" />
-                    </svg>
-                  </button>
-                </div>
-                <div style={{ marginTop: "12px", minHeight: "8px" }}>
-                  <div style={{ height: "8px", borderRadius: "999px", background: "#e2e8f0", overflow: "hidden" }}>
-                    <div style={{ width: `${Math.round((syncProgress.completed / syncProgress.total) * 100)}%`, height: "100%", background: "#2563eb" }} />
-                  </div>
-                </div>
-                {syncProgressOpen && (
-                  <div style={{ marginTop: "12px", display: "grid", gap: "8px" }}>
-                    {syncProgress.entries.slice(-5).map((entry) => (
-                      <div key={entry.id} style={{ display: "flex", justifyContent: "space-between", gap: "12px", alignItems: "center", fontSize: "12px", color: "#374151" }}>
-                        <span>{entry.label}</span>
-                        <span style={{
-                          color:
-                            entry.status === "created" ? "#15803d" :
-                              entry.status === "updated" ? "#7c3aed" :
-                                entry.status === "already-there" ? "#1d4ed8" :
-                                  "#b91c1c",
-                          fontWeight: 700,
-                        }}>
-                          {entry.message}
-                        </span>
-                      </div>
-                    ))}
-                    {syncProgress.entries.length > 5 && (
-                      <div style={{ fontSize: "11px", color: "#6b7280" }}>Showing last 5 entries</div>
-                    )}
-                  </div>
-                )}
               </div>
             )}
 
@@ -1271,7 +1162,7 @@ export default function FreightDashboard({
 
                     <div className="fo-detail-panel">
                       <div className="fo-detail-panel-hdr">Sync Status</div>
-                      {(["Cin7", "Shopify"] as const).map((lbl) => {
+                      {(["Cin7", "Monday"] as const).map((lbl) => {
                         const isCin7 = lbl === "Cin7";
                         const isOk = isCin7 ? Boolean(detailView.item.cin7Exists) : true;
                         return (
@@ -1511,38 +1402,38 @@ export default function FreightDashboard({
                               })()}
                             </td>
                             <td className="fo-td">
-  {(() => {
-    const status = item.mondayStatus ?? "missing";
-    const cellKey = `${order.id}-${item.variantId}-monday`;
-    if (status === "match") return <span className="fo-circle green">✓</span>;
-    if (status === "mismatch") {
-      return (
-        <button
-          type="button"
-          className="fo-circle"
-          title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
-          onClick={() => handleSyncMondayItem(order, item)}
-          disabled={mondayFixingId === cellKey}
-          style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
-        >
-          !
-        </button>
-      );
-    }
-    return (
-      <button
-        type="button"
-        className="fo-circle"
-        title="Create order in Monday"
-        onClick={() => handleSyncMondayItem(order, item)}
-        disabled={mondayFixingId === cellKey}
-        style={{ color: "#dc2626", background: "#fee2e2", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
-      >
-        ✕
-      </button>
-    );
-  })()}
-</td>
+                              {(() => {
+                                const status = item.mondayStatus ?? "missing";
+                                const cellKey = `${order.id}-${item.variantId}-monday`;
+                                if (status === "match") return <span className="fo-circle green">✓</span>;
+                                if (status === "mismatch") {
+                                  return (
+                                    <button
+                                      type="button"
+                                      className="fo-circle"
+                                      title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
+                                      onClick={() => handleSyncMondayItem(order, item)}
+                                      disabled={mondayFixingId === cellKey}
+                                      style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+                                    >
+                                      !
+                                    </button>
+                                  );
+                                }
+                                return (
+                                  <button
+                                    type="button"
+                                    className="fo-circle"
+                                    title="Create order in Monday"
+                                    onClick={() => handleSyncMondayItem(order, item)}
+                                    disabled={mondayFixingId === cellKey}
+                                    style={{ color: "#dc2626", background: "#fee2e2", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+                                  >
+                                    ✕
+                                  </button>
+                                );
+                              })()}
+                            </td>
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">

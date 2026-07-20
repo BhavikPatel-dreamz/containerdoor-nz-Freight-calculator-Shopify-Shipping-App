@@ -460,6 +460,21 @@ export async function updateMondayItem(itemId: string, row: MondayRow) {
       throw err;
     }
   }
+
+  // ── NEW: Monday's API returns success even when writing to a deleted/archived
+  // item (the write is silently a no-op). Verify the item is actually active
+  // after updating, so callers' stale-item recovery logic actually triggers.
+  const verifyData = await mondayRequest(
+    `query ($itemId: [ID!]) { items(ids: $itemId) { id state } }`,
+    { itemId: [itemId] },
+  ).catch(() => null);
+  const verifiedState = verifyData?.items?.[0]?.state;
+  if (verifiedState && verifiedState !== "active") {
+    console.log(`[Monday] Item ${itemId} update was a no-op — item state is "${verifiedState}"`);
+    throw new Error("inactiveItems");
+  }
+  // ── end new block ──
+
   console.log("[Monday] Item updated:", itemId);
 }
 
