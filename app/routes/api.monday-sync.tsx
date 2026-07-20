@@ -230,5 +230,19 @@ export async function action({ request }: ActionFunctionArgs) {
   } catch (e) {
     console.error("[Monday][Sync] Failed to pull comments", e);
   }
+
+  // Persist match status to the Monday cache columns — same pattern as
+  // cin7-update.tsx. Without this, mondayCachedStatus/mondayCachedMismatches
+  // stay stale in the DB, so a reload or the next /api/monday-status refresh
+  // flips the icon back to mismatch/missing even though the sync succeeded.
+  try {
+    await prisma.orderLineItemOperationalData.update({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+      data: { mondayCachedStatus: "match", mondayCachedMismatches: "" },
+    });
+  } catch (cacheErr) {
+    console.error("[Monday][Sync] Failed to persist cache status", cacheErr);
+  }
+
   return Response.json({ ok: true, mondayItemId, updated }, { headers: getCorsHeaders(request) });
 }
