@@ -99,11 +99,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               phone
             }
             shippingLines(first: 5) {
-              nodes {
-                title
-                code
+          nodes {
+            title
+            code
+            discountedPriceSet {
+              shopMoney {
+                amount
               }
             }
+          }
+        }
+        totalDiscountsSet {
+          shopMoney {
+            amount
+          }
+        }
+        discountCodes
+        taxLines {
+          rate
+        }
+        taxesIncluded
             lineItems(first: 50) {
               nodes {
                 sku
@@ -179,6 +194,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     
     // Extract phone from various sources
     const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
+    const freightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.shopMoney?.amount ?? 0);
+    const freightDescription = orderData.shippingLines?.nodes?.[0]?.title ?? "";
+    const discountTotal = Number(orderData.totalDiscountsSet?.shopMoney?.amount ?? 0);
+    const discountDescription = orderData.discountCodes?.[0] ?? "";
+    const taxRate = Number(orderData.taxLines?.[0]?.rate ?? 0) * 100;
+    const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";
 
     let result;
     try {
@@ -206,6 +227,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         currencyCode: currencyCode,
         customerOrderNo: orderData.name ?? orderIdStr,
         internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
+        freightTotal,
+        freightDescription,
+        discountTotal,
+        discountDescription,
+        taxRate,
+        taxStatus,
         lineItems,
       });
     } catch (err) {
