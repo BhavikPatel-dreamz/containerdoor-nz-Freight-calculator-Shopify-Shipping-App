@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
@@ -379,6 +380,7 @@ export async function action({ request }: ActionFunctionArgs) {
     // ── end new block ──
 
     // ── NEW: push new notes to Monday Updates tab ──
+    // ── NEW: push new notes to Monday Updates tab ──
     try {
       const noteBlocks = String(updated.notes ?? "")
         .split(/\r?\n\r?\n/)
@@ -391,13 +393,23 @@ export async function action({ request }: ActionFunctionArgs) {
       const newBlocks = noteBlocks.slice(alreadyPushed);
 
       if (newBlocks.length > 0 && updated.mondayItemId && updated.mondayItemId !== "pending") {
+        const pushedIds: string[] = [];
         for (const block of newBlocks) {
           const cleaned = block.replace(/^\[[^\]]*\]\s*/, "");
-          await createMondayUpdate(updated.mondayItemId, cleaned);
+          const createdId = await createMondayUpdate(updated.mondayItemId, cleaned);
+          if (createdId) pushedIds.push(String(createdId));
         }
+        const existingPulledIds = new Set(
+          String(updated.notesPulledUpdateIds ?? "").split(",").filter(Boolean)
+        );
+        pushedIds.forEach((id) => existingPulledIds.add(id));
         updated = await prisma.orderLineItemOperationalData.update({
           where: { id: updated.id },
-          data: { notesPushedCount: noteBlocks.length, notesPushedMondayItemId: updated.mondayItemId },
+          data: {
+            notesPushedCount: noteBlocks.length,
+            notesPushedMondayItemId: updated.mondayItemId,
+            notesPulledUpdateIds: [...existingPulledIds].join(","),
+          },
         });
       }
     } catch (noteErr) {

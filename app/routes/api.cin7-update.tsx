@@ -7,9 +7,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405 });
 
   try {
-    const { shop, orderId, variantId, trackingNumber, eddDate, carrier, fields } = (await request.json()) as {
-      shop?: string; orderId?: string; variantId?: string; trackingNumber?: string; eddDate?: string; carrier?: string; fields?: string[];
-    };
+    const { shop, orderId, variantId, trackingNumber, eddDate, carrier, fields, forceCarrier } = (await request.json()) as {
+  shop?: string; orderId?: string; variantId?: string; trackingNumber?: string; eddDate?: string; carrier?: string; fields?: string[]; forceCarrier?: boolean;
+};
     if (!shop || !orderId) return Response.json({ error: "Missing shop or orderId" }, { status: 400 });
 
     const orderRecord = await prisma.orderOperationalData.findUnique({
@@ -34,7 +34,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const lastCheckedAt = (orderRecord.cin7StatusCheckedAt as Date | null | undefined)?.getTime() ?? 0;
     const trackingIsNewer = Boolean(lineRecord?.trackingNumberUpdatedAt && lineRecord.trackingNumberUpdatedAt.getTime() > lastCheckedAt);
     const eddIsNewer = Boolean(lineRecord?.eddDateUpdatedAt && lineRecord.eddDateUpdatedAt.getTime() > lastCheckedAt);
-    const carrierIsNewer = trackingIsNewer; // carrier is edited alongside tracking in the UI
+    const carrierIsNewer = trackingIsNewer || Boolean(forceCarrier); // NEW — Sync button forces carrier push
 
     const toFix = fields && fields.length ? fields : ["trackingNumber", "eddDate", "carrier"];
     const errors: string[] = [];

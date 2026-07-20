@@ -124,8 +124,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
 
     const orderJson = await orderRes.json();
-    if (!orderRes.ok || orderJson.errors) {
-      console.error(`[Cin7][API][${orderIdStr}] GraphQL error:`, orderJson.errors);
+    if (!orderRes.ok || (orderJson as any)?.errors) {
+      console.error(`[Cin7][API][${orderIdStr}] GraphQL error:`, (orderJson as any)?.errors);
       return Response.json(
         { ok: false, error: "Failed to fetch order from Shopify" },
         { status: 500 },
