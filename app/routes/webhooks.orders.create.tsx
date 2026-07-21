@@ -479,7 +479,7 @@ async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
       try {
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
-          data: { mondayItemId },
+          data: { mondayItemId, mondayCachedStatus: "match", mondayCachedMismatches: "" },
         });
         createdCount++;
         console.log(`[Monday][Webhook][${orderId}] DB updated with mondayItemId=${mondayItemId} for variant ${li.variantId}`);
