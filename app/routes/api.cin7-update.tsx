@@ -3,42 +3,26 @@ import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, syncCin7Carrier, fetchCin7SalesOrder } from "../lib/cin7.server";
 
-function getCorsHeaders(request: Request) {
-  const origin = request.headers.get("origin");
-  return {
-    "Access-Control-Allow-Origin": origin ?? "*",
-    "Access-Control-Allow-Credentials": "true",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
-    ...(origin ? { Vary: "Origin" } : {}),
-  };
-}
-
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const corsHeaders = getCorsHeaders(request);
-
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
-  }
-  if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405, headers: corsHeaders });
+  if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405 });
 
   try {
     const { shop, orderId, variantId, trackingNumber, eddDate, carrier, fields, forceCarrier } = (await request.json()) as {
   shop?: string; orderId?: string; variantId?: string; trackingNumber?: string; eddDate?: string; carrier?: string; fields?: string[]; forceCarrier?: boolean;
 };
-    if (!shop || !orderId) return Response.json({ error: "Missing shop or orderId" }, { status: 400, headers: corsHeaders });
+    if (!shop || !orderId) return Response.json({ error: "Missing shop or orderId" }, { status: 400 });
 
     const orderRecord = await prisma.orderOperationalData.findUnique({
       where: { shop_orderId: { shop, orderId } },
       select: { cin7SalesOrderId: true, cin7StatusCheckedAt: true },
     });
     if (!orderRecord?.cin7SalesOrderId || orderRecord.cin7SalesOrderId === "pending") {
-      return Response.json({ ok: false, error: "Order not yet created in Cin7" }, { status: 400, headers: corsHeaders });
+      return Response.json({ ok: false, error: "Order not yet created in Cin7" }, { status: 400 });
     }
     const salesOrderId = orderRecord.cin7SalesOrderId;
 
     const snapshot = await fetchCin7SalesOrder(salesOrderId);
-    if (!snapshot) return Response.json({ ok: false, error: "Could not load current Cin7 order" }, { status: 502, headers: corsHeaders });
+    if (!snapshot) return Response.json({ ok: false, error: "Could not load current Cin7 order" }, { status: 502 });
 
     const lineRecord = variantId
       ? await prisma.orderLineItemOperationalData.findUnique({
@@ -88,6 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     {
 
+      // Raw query on purpose: pulling values FROM Cin7 is not a genuine
       // freight-tab edit. A normal prisma.update()/updateMany() here would
       // bump `updatedAt`, which freightIsNewer relies on — bumping it would
       // make the NEXT check wrongly think freight is newer and push this
@@ -107,7 +92,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    if (errors.length) return Response.json({ ok: false, error: errors.join("; ") }, { status: 500, headers: corsHeaders });
+    if (errors.length) return Response.json({ ok: false, error: errors.join("; ") }, { status: 500 });
 
     await prisma.orderOperationalData.update({
       where: { shop_orderId: { shop, orderId } },
@@ -123,9 +108,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `;
     }
 
-    return Response.json({ ok: true, direction: pushedAny ? "pushed" : "pulled", updated: updatedFields }, { headers: corsHeaders });
+    return Response.json({ ok: true, direction: pushedAny ? "pushed" : "pulled", updated: updatedFields });
   } catch (error) {
     console.error("[Cin7][Fix] Error:", error);
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Internal server error" }, { status: 500, headers: corsHeaders });
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Internal server error" }, { status: 500 });
   }
 };
