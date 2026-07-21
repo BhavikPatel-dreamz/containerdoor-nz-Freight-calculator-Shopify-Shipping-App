@@ -477,7 +477,6 @@ async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
       }
 
       try {
-        try {
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
           data: { mondayItemId, mondayCachedStatus: "match", mondayCachedMismatches: "" },
