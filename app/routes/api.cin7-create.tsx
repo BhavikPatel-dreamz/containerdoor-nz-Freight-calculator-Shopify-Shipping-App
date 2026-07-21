@@ -164,7 +164,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         qty: li.quantity ?? 1,
         unitPrice: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
       }))
-      .filter((li) => li.code);
+      .filter((li: { code: any; }) => li.code);
 
     if (lineItems.length === 0) {
       console.log(`[Cin7][API][${orderIdStr}] SKIP - no line items with a SKU`);
