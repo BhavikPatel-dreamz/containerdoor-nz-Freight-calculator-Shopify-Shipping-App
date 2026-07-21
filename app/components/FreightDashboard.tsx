@@ -353,7 +353,6 @@ export default function FreightDashboard({
 
 // ── NEW: lightweight polling to pick up field changes pushed in via the
 // Monday webhook (EDD, tracking, status, carrier). Reuses the existing
-// GET /api/order-status endpoint — no new route, no other logic touched.
 useEffect(() => {
   if (!rows || rows.length === 0) return;
   let cancelled = false;
