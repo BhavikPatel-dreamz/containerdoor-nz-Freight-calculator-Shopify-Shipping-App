@@ -1,4 +1,4 @@
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, syncCin7Carrier, fetchCin7SalesOrder } from "../lib/cin7.server";
@@ -12,6 +12,13 @@ function getCorsHeaders(request: Request) {
     "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
     ...(origin ? { Vary: "Origin" } : {}),
   };
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
+  return new Response(null, { status: 405, headers: getCorsHeaders(request) });
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
