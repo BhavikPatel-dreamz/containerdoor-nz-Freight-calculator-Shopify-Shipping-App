@@ -3,12 +3,19 @@ import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, syncCin7Carrier, fetchCin7SalesOrder } from "../lib/cin7.server";
 
-export const action = async ({ request }: ActionFunctionArgs) => {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
+function getCorsHeaders(request: Request) {
+  const origin = request.headers.get("origin");
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Credentials": "true",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
+    ...(origin ? { Vary: "Origin" } : {}),
   };
+}
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const corsHeaders = getCorsHeaders(request);
 
   if (request.method === "OPTIONS") {
     return new Response(null, { status: 204, headers: corsHeaders });
