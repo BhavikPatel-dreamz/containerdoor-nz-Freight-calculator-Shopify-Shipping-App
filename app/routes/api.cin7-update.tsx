@@ -88,7 +88,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     {
 
-      // Raw query on purpose: pulling values FROM Cin7 is not a genuine
       // freight-tab edit. A normal prisma.update()/updateMany() here would
       // bump `updatedAt`, which freightIsNewer relies on — bumping it would
       // make the NEXT check wrongly think freight is newer and push this
