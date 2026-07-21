@@ -4,25 +4,34 @@ import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, syncCin7Carrier, fetchCin7SalesOrder } from "../lib/cin7.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405 });
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  };
+
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+  if (request.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405, headers: corsHeaders });
 
   try {
     const { shop, orderId, variantId, trackingNumber, eddDate, carrier, fields, forceCarrier } = (await request.json()) as {
   shop?: string; orderId?: string; variantId?: string; trackingNumber?: string; eddDate?: string; carrier?: string; fields?: string[]; forceCarrier?: boolean;
 };
-    if (!shop || !orderId) return Response.json({ error: "Missing shop or orderId" }, { status: 400 });
+    if (!shop || !orderId) return Response.json({ error: "Missing shop or orderId" }, { status: 400, headers: corsHeaders });
 
     const orderRecord = await prisma.orderOperationalData.findUnique({
       where: { shop_orderId: { shop, orderId } },
       select: { cin7SalesOrderId: true, cin7StatusCheckedAt: true },
     });
     if (!orderRecord?.cin7SalesOrderId || orderRecord.cin7SalesOrderId === "pending") {
-      return Response.json({ ok: false, error: "Order not yet created in Cin7" }, { status: 400 });
+      return Response.json({ ok: false, error: "Order not yet created in Cin7" }, { status: 400, headers: corsHeaders });
     }
     const salesOrderId = orderRecord.cin7SalesOrderId;
 
     const snapshot = await fetchCin7SalesOrder(salesOrderId);
-    if (!snapshot) return Response.json({ ok: false, error: "Could not load current Cin7 order" }, { status: 502 });
+    if (!snapshot) return Response.json({ ok: false, error: "Could not load current Cin7 order" }, { status: 502, headers: corsHeaders });
 
     const lineRecord = variantId
       ? await prisma.orderLineItemOperationalData.findUnique({
@@ -92,7 +101,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    if (errors.length) return Response.json({ ok: false, error: errors.join("; ") }, { status: 500 });
+    if (errors.length) return Response.json({ ok: false, error: errors.join("; ") }, { status: 500, headers: corsHeaders });
 
     await prisma.orderOperationalData.update({
       where: { shop_orderId: { shop, orderId } },
@@ -108,9 +117,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       `;
     }
 
-    return Response.json({ ok: true, direction: pushedAny ? "pushed" : "pulled", updated: updatedFields });
+    return Response.json({ ok: true, direction: pushedAny ? "pushed" : "pulled", updated: updatedFields }, { headers: corsHeaders });
   } catch (error) {
     console.error("[Cin7][Fix] Error:", error);
-    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Internal server error" }, { status: 500 });
+    return Response.json({ ok: false, error: error instanceof Error ? error.message : "Internal server error" }, { status: 500, headers: corsHeaders });
   }
 };
