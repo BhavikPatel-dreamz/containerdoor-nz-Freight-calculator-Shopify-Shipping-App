@@ -66,6 +66,7 @@ type MondayRow = {
   sku: string;
   boxes: number | string;
   customerStatus: string;
+  paymentStatus: string;
   shop: string;
   orderId: string;
   variantId: string;
@@ -114,6 +115,18 @@ const FIELD_DEFS: Record<
         "2": "Dispatched",
         "3": "Delivered",
         "4": "Cancelled",
+      },
+    }),
+  },
+  paymentStatus: {
+    title: "Payment Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Paid",
+        "1": "Partial",
+        "2": "Pending",
+        "3": "Overdue",
       },
     }),
   },
@@ -299,6 +312,24 @@ const statusLabelMap: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
+const paymentStatusLabelMap: Record<string, string> = {
+  paid: "Paid",
+  partial: "Partial",
+  pending: "Pending",
+  overdue: "Overdue",
+  refunded: "Refunded",
+  complete: "Paid",
+  fully_paid: "Paid",
+  authorized: "Paid",
+  captured: "Paid",
+  partially_paid: "Partial",
+  partially_refunded: "Partial",
+  pending_payment: "Pending",
+  unpaid: "Pending",
+  authorized_pending_capture: "Pending",
+  outstanding: "Pending",
+};
+
 const carrierLabelMap: Record<string, string> = {
   fliway: "Fliway - Linehaul",
   fliwaylinehaul: "Fliway - Linehaul",
@@ -332,6 +363,12 @@ async function buildColumnValues(row: MondayRow) {
       if (carrierVal)
         values[colId] = {
           label: carrierLabelMap[carrierVal.toLowerCase()] ?? carrierVal,
+        };
+    } else if (key === "paymentStatus") {
+      const paymentStatusVal = val as string;
+      if (paymentStatusVal)
+        values[colId] = {
+          label: paymentStatusLabelMap[paymentStatusVal.toLowerCase()] ?? paymentStatusVal,
         };
     } else if (
       key === "warehouseStatus" ||

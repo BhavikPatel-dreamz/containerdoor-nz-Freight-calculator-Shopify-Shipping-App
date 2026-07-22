@@ -125,6 +125,7 @@ model OrderLineItemOperationalData {
   carrier           String   @default("")
   customerStatus    String   @default("")
   customerStatusUpdatedAt DateTime?   // NEW
+  paymentStatus     String   @default("")
   warehouseStatus   String   @default("")
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")

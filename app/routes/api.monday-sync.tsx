@@ -41,6 +41,7 @@ export async function action({ request }: ActionFunctionArgs) {
     shop,
     orderId,
     variantId,
+    paymentStatus: existing.paymentStatus ?? "",
     warehouseStatus: existing.warehouseStatus ?? "",
     dispatchStatus: existing.dispatchStatus ?? "",
     deliveryStatus: existing.deliveryStatus ?? "",
@@ -159,11 +160,12 @@ export async function action({ request }: ActionFunctionArgs) {
     const freshRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
+    const mondayTaggedBlocks = noteBlocks.filter((b) => /^\[[^\]|]+:monday[|\]]/i.test(b));
     let alreadyPushed = freshRecord?.notesPushedMondayItemId === mondayItemId
       ? (freshRecord?.notesPushedCount ?? 0)
       : 0;
-    if (alreadyPushed > noteBlocks.length) alreadyPushed = 0;
-    const newBlocks = noteBlocks.slice(alreadyPushed);
+    if (alreadyPushed > mondayTaggedBlocks.length) alreadyPushed = 0;
+    const newBlocks = mondayTaggedBlocks.slice(alreadyPushed);
 
     if (newBlocks.length > 0 && mondayItemId) {
       for (const block of newBlocks) {
@@ -173,7 +175,7 @@ export async function action({ request }: ActionFunctionArgs) {
       }
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        data: { notesPushedCount: noteBlocks.length, notesPushedMondayItemId: mondayItemId },
+        data: { notesPushedCount: mondayTaggedBlocks.length, notesPushedMondayItemId: mondayItemId },
       });
       console.log(`[Monday][Sync] Pushed ${newBlocks.length} new note(s) to Monday Updates tab.`);
     } else {

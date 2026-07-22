@@ -16,6 +16,34 @@ const debug = (namespace: string, message: string, data?: any) => {
   }
 };
 
+// ── NEW: pushes a staff note into Shopify's native order timeline ──
+// Uses orderEditBegin/orderEditCommit purely to attach a staffNote — no
+// line items, quantities, or prices are actually changed.
+async function pushStaffNoteToShopifyOrder(shop: string, orderId: string, staffNote: string) {
+  if (!staffNote.trim()) return;
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+
+    const updateRes = await admin.graphql(
+      `#graphql
+        mutation OrderUpdateNote($input: OrderInput!) {
+          orderUpdate(input: $input) {
+            order { id note }
+            userErrors { field message }
+          }
+        }`,
+      { variables: { input: { id: `gid://shopify/Order/${orderId}`, note: staffNote } } }
+    );
+    const updateJson = await updateRes.json();
+    const errors = updateJson.data?.orderUpdate?.userErrors ?? [];
+    if (errors.length) {
+      console.error("[api.order-status] orderUpdate (note) failed", errors);
+    }
+  } catch (e) {
+    console.error("[api.order-status] pushStaffNoteToShopifyOrder error", e);
+  }
+}
+
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -47,6 +75,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         productTitle: true,
         carrier: true,
         customerStatus: true,
+        paymentStatus: true,
         warehouseStatus: true,
         deliveryStatus: true,
         dispatchStatus: true,
@@ -175,6 +204,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 // ───────────────────────────────────────────────────────────────────────────
 const EDITABLE_FIELDS = [
   "customerStatus",
+  "paymentStatus",
   "warehouseStatus",
   "dispatchStatus",
   "deliveryStatus",
@@ -209,10 +239,14 @@ export async function action({ request }: ActionFunctionArgs) {
       orderId?: string;
       variantId?: string;
       data?: Record<string, string>;
+      newNotes?: string[];
     };
 
-    const { shop, orderId, variantId, data } = body;
+    const { shop, orderId, variantId, data, newNotes } = body;
     const shopValue = typeof shop === "string" ? shop : "";
+    const newNotesForShopify = Array.isArray(newNotes)
+      ? newNotes.map((n) => String(n).trim()).filter(Boolean)
+      : [];
 
     if (!orderId || !variantId || !data) {
       return Response.json(
@@ -334,6 +368,7 @@ export async function action({ request }: ActionFunctionArgs) {
         sku: "",
         boxes: "",
         customerStatus: updated.customerStatus ?? "",
+        paymentStatus: updated.paymentStatus ?? "",
         shop: shopValue || updated.shop || "",
         orderId,
         variantId,
@@ -387,10 +422,12 @@ export async function action({ request }: ActionFunctionArgs) {
         .map((b) => b.trim())
         .filter(Boolean);
 
+      const mondayTaggedBlocks = noteBlocks.filter((b) => /^\[[^\]|]+:monday[|\]]/i.test(b));
+
       const alreadyPushed = updated.notesPushedMondayItemId === updated.mondayItemId
         ? (updated.notesPushedCount ?? 0)
         : 0;
-      const newBlocks = noteBlocks.slice(alreadyPushed);
+      const newBlocks = mondayTaggedBlocks.slice(alreadyPushed);
 
       if (newBlocks.length > 0 && updated.mondayItemId && updated.mondayItemId !== "pending") {
         const pushedIds: string[] = [];
@@ -406,7 +443,7 @@ export async function action({ request }: ActionFunctionArgs) {
         updated = await prisma.orderLineItemOperationalData.update({
           where: { id: updated.id },
           data: {
-            notesPushedCount: noteBlocks.length,
+            notesPushedCount: mondayTaggedBlocks.length,
             notesPushedMondayItemId: updated.mondayItemId,
             notesPulledUpdateIds: [...existingPulledIds].join(","),
           },
@@ -418,7 +455,21 @@ export async function action({ request }: ActionFunctionArgs) {
     // ── end new block ──
 
     // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
+    // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
     const resolvedShop = shopValue || updated.shop || "";
+
+    // ── NEW: push the newly-added note into Shopify's native order timeline ──
+    if (newNotesForShopify.length > 0 && resolvedShop) {
+      (async () => {
+        for (const note of newNotesForShopify) {
+          try {
+            await pushStaffNoteToShopifyOrder(resolvedShop, orderId, note);
+          } catch (e) {
+            console.error("[api.order-status] Failed to push staff note to Shopify", e);
+          }
+        }
+      })();
+    }
 
     fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
       method: "POST",

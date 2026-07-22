@@ -91,6 +91,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const get = (field: string) => String(formData.get(`${field}__${variantId}`) ?? "");
     const newEdd = get("eddDate");
     const newCustomerStatus = get("customerStatus");
+    const newPaymentStatus = get("paymentStatus");
     const existingRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
@@ -100,6 +101,7 @@ export async function action({ request, params }: ActionFunctionArgs) {
       carrier:           get("carrier"),
       customerStatus:    newCustomerStatus,
       customerStatusUpdatedAt: newCustomerStatus ? new Date() : undefined,
+      paymentStatus:     newPaymentStatus,
       warehouseStatus:   get("warehouseStatus"),
       dispatchStatus:    get("dispatchStatus"),
       deliveryStatus:    get("deliveryStatus"),
@@ -297,6 +299,17 @@ const cbm = codeParts[6]?.replace("cbm", "") ?? "—";
               <option value="Dispatched">Dispatched</option>
               <option value="Delivered">Delivered</option>
               <option value="Cancelled">Cancelled</option>
+            </select>
+          </label>
+
+          <label style={labelStyle}>
+            Payment status
+            <select name={`paymentStatus__${v}`} defaultValue={ex?.paymentStatus ?? ""} style={inputStyle}>
+              <option value="">— Select —</option>
+              <option value="Paid">Paid</option>
+              <option value="Partial">Partial</option>
+              <option value="Pending">Pending</option>
+              <option value="Overdue">Overdue</option>
             </select>
           </label>
 

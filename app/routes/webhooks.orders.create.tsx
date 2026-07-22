@@ -15,6 +15,13 @@ type OrderLineItem = {
   quantity?: number;
   grams?: number;
   properties?: OrderLineItemProperty[];
+  price?: string | number;
+  price_set?: {
+    presentment_money?: {
+      amount?: string;
+      currency_code?: string;
+    };
+  };
 };
 
 type OrderShippingLine = {
@@ -37,6 +44,14 @@ type OrderPayload = {
   created_at?: string;
   currency?: string;
   total_price?: string;
+  presentment_currency?: string;
+  current_total_price?: string;
+  current_total_price_set?: {
+    presentment_money?: {
+      amount?: string;
+      currency_code?: string;
+    };
+  };
   shipping_address?: {
     city?: string;
     zip?: string;
@@ -314,7 +329,7 @@ async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
         code: li.sku ?? "",
         name: li.title ?? "",
         qty: li.quantity ?? 1,
-        unitPrice: Number(li.price ?? 0),
+        unitPrice: Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0),
       }))
       .filter((li) => li.code);
 
@@ -351,10 +366,10 @@ async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
       billingPostalCode: billingAddress.zip ?? shippingAddress.zip ?? "",
       billingCountry: billingAddress.country ?? billingAddress.country_code ?? shippingAddress.country ?? shippingAddress.country_code ?? "",
       logisticsCarrier: carrier,
-      currencyCode: order.currency,
+      currencyCode: order.current_total_price_set?.presentment_money?.currency_code ?? "NZD",
       customerOrderNo: order.name ?? orderId,
       internalComments: `Auto-created from Shopify order ${order.name ?? orderId}`,
-      freightTotal: Number((order as any).shipping_lines?.[0]?.price ?? 0),
+      freightTotal: Number((order as any).shipping_lines?.[0]?.discounted_price_set?.presentment_money?.amount ?? (order as any).current_shipping_price_set?.presentment_money?.amount ?? 0),
       freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
       discountTotal: Number(order.total_discounts ?? 0),
       discountDescription: order.discount_codes?.[0]?.code ?? "",
@@ -464,6 +479,7 @@ async function createMondayEntriesForOrder(shop: string, order: OrderPayload) {
           deliveryStatus: "",
           depositPaid: "",
           balanceDue: "",
+          paymentStatus: "",
         });
         console.log(`[Monday][Webhook][${orderId}] SUCCESS - Monday item created, id=${mondayItemId} for variant ${li.variantId}`);
       } catch (mondayError) {

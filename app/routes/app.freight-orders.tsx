@@ -3,6 +3,7 @@ import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
 // import { companyLabels } from "../lib/freight";
 import FreightDashboard from "../components/FreightDashboard";
+import { updateMondayItem } from "../lib/monday.server";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -12,12 +13,54 @@ type ShopifyOrderNode = {
   displayFinancialStatus?: string; displayFulfillmentStatus?: string;
   shippingAddress?: { city?: string; zip?: string; address1?: string; province?: string; country?: string; firstName?: string; lastName?: string };
   shippingLines: { nodes: Array<{ title: string; code: string; originalPriceSet: { shopMoney: { amount: string; currencyCode: string } } }> };
-  lineItems: { nodes: Array<{ id: string; title: string; quantity: number; sku?: string; variant?: { id: string; sku?: string } }> };
+  lineItems: { nodes: Array<{ id: string; title: string; quantity: number; sku?: string; variant?: { id: string; sku?: string; product?: { id: string } } }> };
 };
 
 const PAGE_SIZE = 25;
 const FREIGHT_SERVICE_PREFIXES = ["standard_delivery::", "depot_delivery::", "customer_pickup::"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+function normalizePaymentStatus(status?: string | null): string {
+  const raw = (status ?? "").toString().trim();
+  if (!raw) return "";
+  const normalized = raw.toLowerCase();
+  if (["paid", "fully_paid", "authorized", "captured", "complete"].includes(normalized)) return "Paid";
+  if (["partial", "partially_paid", "partially_refunded"].includes(normalized)) return "Partial";
+  if (["pending", "pending_payment", "unpaid", "authorized_pending_capture", "outstanding"].includes(normalized)) return "Pending";
+  if (["overdue"].includes(normalized)) return "Overdue";
+  if (["refunded"].includes(normalized)) return "Refunded";
+  return raw;
+}
+
+function buildMondayPayload(
+  order: { customerName: string; email: string; carriers: string; shopifyOrderName: string; shopifyOrderId: string },
+  item: { title?: string; productId?: string; variantId: string; sku?: string; boxes?: number },
+  existing: any,
+  paymentStatus: string,
+  shop: string,
+) {
+  return {
+    customerName: order.customerName || order.shopifyOrderName || "",
+    email: order.email || "",
+    carriers: order.carriers || "",
+    trackingNumber: existing?.trackingNumber ?? "",
+    eddDate: existing?.eddDate ?? "",
+    originalEddDate: existing?.originalEddDate ?? "",
+    productTitle: item.title ?? (item.productId ? `#${item.productId}` : item.variantId),
+    sku: item.sku ?? "",
+    boxes: item.boxes ?? 1,
+    customerStatus: existing?.customerStatus ?? "",
+    paymentStatus,
+    shop,
+    orderId: order.shopifyOrderId,
+    variantId: item.variantId,
+    warehouseStatus: existing?.warehouseStatus ?? "",
+    dispatchStatus: existing?.dispatchStatus ?? "",
+    deliveryStatus: existing?.deliveryStatus ?? "",
+    depositPaid: existing?.depositPaid ?? "",
+    balanceDue: existing?.balanceDue ?? "",
+  };
+}
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
 
@@ -39,7 +82,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
           shippingAddress { city zip address1 province country firstName lastName }
           email phone displayFinancialStatus displayFulfillmentStatus
           shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
-          lineItems(first: 50) { nodes { id title quantity sku variant { id sku } } }
+          lineItems(first: 50) { nodes { id title quantity sku variant { id sku product { id } } } }
         }
       }
     }`,
@@ -64,7 +107,39 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const freightOrders = allOrders
     .map((order) => buildRow(order, opsMap, orderCin7Map))
-    .filter(Boolean) as ReturnType<typeof buildRow>[];
+    .filter((order): order is NonNullable<ReturnType<typeof buildRow>> => Boolean(order));
+
+  await Promise.all(
+    freightOrders.flatMap((order) =>
+      order.lineItems.map(async (item) => {
+        const paymentStatus = normalizePaymentStatus(order.financialStatus);
+        const existing = await prisma.orderLineItemOperationalData.findUnique({
+          where: { shop_orderId_variantId: { shop, orderId: order.shopifyOrderId, variantId: item.variantId } },
+        });
+
+        if (!existing) return;
+
+        const paymentChanged = existing.paymentStatus !== paymentStatus;
+        if (paymentChanged) {
+          await prisma.orderLineItemOperationalData.update({
+            where: { shop_orderId_variantId: { shop, orderId: order.shopifyOrderId, variantId: item.variantId } },
+            data: { paymentStatus },
+          });
+
+          if (existing.mondayItemId) {
+            try {
+              await updateMondayItem(
+                existing.mondayItemId,
+                buildMondayPayload(order, item, existing, paymentStatus, shop),
+              );
+            } catch (error) {
+              console.error("[app.freight-orders] Failed to sync payment status to Monday", error);
+            }
+          }
+        }
+      })
+    )
+  );
 
   const total = freightOrders.length;
   const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
@@ -84,10 +159,15 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
   const numericOrderId = order.id.replace("gid://shopify/Order/", "");
   const variantTitleMap = new Map<string, string>();
   const variantSkuMap = new Map<string, string>();
+  const variantProductIdMap = new Map<string, string>();
   for (const li of order.lineItems.nodes) {
     if (li.variant?.id) {
       variantTitleMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.title);
       variantSkuMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.variant.sku || li.sku || "");
+      variantProductIdMap.set(
+        li.variant.id.replace("gid://shopify/ProductVariant/", ""),
+        li.variant.product?.id?.replace("gid://shopify/Product/", "") ?? ""
+      );
     }
   }
   const lineItems = lineItemsRaw.split("|").map((part, idx) => {
@@ -99,11 +179,13 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
       variantId,
       title: variantTitleMap.get(variantId),
       sku: variantSkuMap.get(variantId) ?? "",
+      productId: variantProductIdMap.get(variantId) ?? "",
       company: company ?? "",
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),
       letterSuffix: LETTERS[idx % 26],
       customerStatus: ops?.customerStatus ?? "",
+      paymentStatus: normalizePaymentStatus(order.displayFinancialStatus),
       trackingNumber: ops?.trackingNumber ?? "",
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
@@ -124,7 +206,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
         : [],
     };
   });
-  return {
+    return {
     id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,
     totalFreight: Number(shippingLine.originalPriceSet.shopMoney.amount ?? 0),
     city: order.shippingAddress?.city ?? null, postalCode: order.shippingAddress?.zip ?? null,
