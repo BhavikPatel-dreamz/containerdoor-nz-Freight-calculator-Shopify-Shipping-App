@@ -252,6 +252,7 @@ export default function FreightDashboard({
   const [noteTab, setNoteTab] = useState("internal");
   const [noteText, setNoteText] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false); // NEW
+  const [sendToCin7, setSendToCin7] = useState(false);      // NEW
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingEdd, setIsSavingEdd] = useState(false);
   const [notesFetching, setNotesFetching] = useState(false);
@@ -530,6 +531,7 @@ export default function FreightDashboard({
         body: JSON.stringify({
           shop, orderId: eddModal.order.shopifyOrderId, variantId: eddModal.item.variantId,
           data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) },
+          newNotes: [systemNote.text],
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
@@ -599,6 +601,7 @@ export default function FreightDashboard({
             freightRef: newFreightRef,
             notes: serializeNotes(nextNotes),
           },
+          newNotes: notesToAdd.map((n) => n.text),
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
@@ -1025,7 +1028,7 @@ export default function FreightDashboard({
             </div>
           )}
 
-         {/* ── Main card ── */}
+          {/* ── Main card ── */}
           <div className="fo-card">
             {/* Tabs */}
             {!detailView && (
@@ -1043,36 +1046,36 @@ export default function FreightDashboard({
 
             {/* Toolbar */}
             {!detailView && (
-            <div className="fo-toolbar">
-              <label className="fo-select-label">
-                <input type="checkbox" className="fo-checkbox"
-                  checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
-                  onChange={toggleSelectAll}
-                />
-                {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
-              </label>
-              <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                <select className="fo-status-select">
-                  <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
-                </select>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
-                  <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
-                    <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                      {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
-                    </button>
+              <div className="fo-toolbar">
+                <label className="fo-select-label">
+                  <input type="checkbox" className="fo-checkbox"
+                    checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
+                    onChange={toggleSelectAll}
+                  />
+                  {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
+                </label>
+                <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
+                  <select className="fo-status-select">
+                    <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
+                  </select>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
+                    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
+                      <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                        {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
+                      </button>
+                    </div>
                   </div>
+                  <button className="fo-tool-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
+                    Filter
+                  </button>
+                  <button className="fo-tool-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
+                    Columns
+                  </button>
                 </div>
-                <button className="fo-tool-btn">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                  Filter
-                </button>
-                <button className="fo-tool-btn">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
-                  Columns
-                </button>
               </div>
-            </div>
             )}
             {syncNotification && (
               <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
@@ -1323,7 +1326,7 @@ export default function FreightDashboard({
                               </div>
                               {item.variantId && (
                                 <div className="fo-prod-sku">
-                                  VAR-{item.variantId.slice(-6)}{item.sku ? ` / ${item.sku}` : ""}
+                                  VAR-{item.variantId}{item.sku ? ` / ${item.sku}` : ""}
                                 </div>
                               )}
                             </td>
@@ -1734,6 +1737,10 @@ export default function FreightDashboard({
                 <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
                 Send this note to Monday.com (visible to Warehouse)
               </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer", marginTop: "8px" }}>
+                <input type="checkbox" checked={sendToCin7} onChange={(e) => setSendToCin7(e.target.checked)} />
+                Send this note to Cin7 (Internal Comments)
+              </label>
             </div>
             <div style={{ display: "flex", gap: "8px", padding: "12px", borderTop: "1px solid #e5e7eb", justifyContent: "flex-end" }}>
               <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280", cursor: "pointer" }}
@@ -1754,7 +1761,14 @@ export default function FreightDashboard({
                   try {
                     const res = await fetch("/api/order-status", {
                       method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ shop, orderId: activeNoteTarget.order.shopifyOrderId, variantId: activeNoteTarget.item.variantId, data: { notes: serializeNotes(nextNotes) } }),
+                      body: JSON.stringify({
+                        shop,
+                        orderId: activeNoteTarget.order.shopifyOrderId,
+                        variantId: activeNoteTarget.item.variantId,
+                        data: { notes: serializeNotes(nextNotes) },
+                        newNotes: [noteText.trim()],
+                        newCin7Notes: sendToCin7 ? [noteText.trim()] : [],   // NEW
+                      }),
                     });
                     if (!res.ok) {
                       const e = await res.json().catch(() => ({}));
@@ -1764,6 +1778,7 @@ export default function FreightDashboard({
                     setNotes(nextNotes);
                     setNoteText("");
                     setSendToMonday(false);
+                    setSendToCin7(false);
                     setNoteModal(false);
                     setNoteModalTarget(null);
                   } catch (error) {

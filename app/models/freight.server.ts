@@ -322,15 +322,29 @@ export async function importRatesCsv(shop: string, csv: string) {
 
   // Rows WITH id → upsert in parallel
   const rowsWithId = rowsToProcess.filter((r) => r.id);
-  // Rows WITHOUT id → single createMany
+  // Rows WITHOUT id → batch createMany in smaller chunks with delay
   const rowsWithoutId = rowsToProcess.filter((r) => !r.id);
 
   if (rowsWithoutId.length > 0) {
-    const result = await prisma.shippingRate.createMany({
-      data: rowsWithoutId.map((r) => r.data),
-      skipDuplicates: true,
-    });
-    created = result.count;
+    // Use very small chunks (100) and add delay between batches to prevent pooler timeout
+    const chunkSize = 100;
+    for (let i = 0; i < rowsWithoutId.length; i += chunkSize) {
+      const chunk = rowsWithoutId.slice(i, i + chunkSize);
+      try {
+        const result = await prisma.shippingRate.createMany({
+          data: chunk.map((r) => r.data),
+          skipDuplicates: true,
+        });
+        created += result.count;
+      } catch (error) {
+        console.error(`[importRatesCsv] Error on chunk ${Math.floor(i / chunkSize)}:`, error);
+        throw error;
+      }
+      // Add 100ms delay between batches to allow connection pooler to recover
+      if (i + chunkSize < rowsWithoutId.length) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
   }
 
   if (rowsWithId.length > 0) {

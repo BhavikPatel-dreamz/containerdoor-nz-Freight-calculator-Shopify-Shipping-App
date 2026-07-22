@@ -3,7 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
-import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber } from "../lib/cin7.server";
+import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
 
 // Debug logging helper
 const debug = (namespace: string, message: string, data?: any) => {
@@ -240,12 +240,16 @@ export async function action({ request }: ActionFunctionArgs) {
       variantId?: string;
       data?: Record<string, string>;
       newNotes?: string[];
+      newCin7Notes?: string[];   // NEW
     };
 
-    const { shop, orderId, variantId, data, newNotes } = body;
+    const { shop, orderId, variantId, data, newNotes, newCin7Notes } = body;
     const shopValue = typeof shop === "string" ? shop : "";
     const newNotesForShopify = Array.isArray(newNotes)
       ? newNotes.map((n) => String(n).trim()).filter(Boolean)
+      : [];
+    const newNotesForCin7 = Array.isArray(newCin7Notes)
+      ? newCin7Notes.map((n) => String(n).trim()).filter(Boolean)
       : [];
 
     if (!orderId || !variantId || !data) {
@@ -327,7 +331,16 @@ export async function action({ request }: ActionFunctionArgs) {
     const cin7SalesOrderId = orderOperationalData?.cin7SalesOrderId?.trim() || "";
     let cin7Exists = Boolean(cin7SalesOrderId && cin7SalesOrderId !== "pending");
     debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}, newEdd=${updateData.eddDate}`);
-
+    // ── NEW: push note to Cin7 internal comments if checkbox was ticked ──
+    if (newNotesForCin7.length > 0 && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+      for (const note of newNotesForCin7) {
+        try {
+          await appendCin7InternalComment({ salesOrderId: cin7SalesOrderId, comment: note });
+        } catch (e) {
+          console.error("[api.order-status] Failed to push note to Cin7", e);
+        }
+      }
+    }
     if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
       debug("Cin7", `Syncing EDD to Cin7: salesOrderId=${cin7SalesOrderId}, eddDate=${updateData.eddDate}`);
       const cin7Update = await syncCin7EstimatedDispatchDate({

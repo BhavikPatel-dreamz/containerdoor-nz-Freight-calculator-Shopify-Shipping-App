@@ -331,6 +331,44 @@ export async function syncCin7Carrier(input: {
   }
 }
 
+
+export async function appendCin7InternalComment(input: {
+  salesOrderId?: string;
+  comment?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  const comment = input.comment?.trim();
+  if (!salesOrderId || !comment) return { exists: false, updated: false };
+  if (!CIN7_API_URL) return { exists: true, updated: false, salesOrderId };
+
+  try {
+    // Fetch existing internal comments so we append instead of overwriting
+    const getUrl = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const getRes = await fetch(getUrl, { method: "GET", headers: { Authorization: getCin7AuthHeader() } });
+    const existingJson: any = getRes.ok ? await getRes.json().catch(() => null) : null;
+    const existingComments = existingJson?.internalComments ?? "";
+    const nextComments = existingComments ? `${existingComments}\n${comment}` : comment;
+
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, internalComments: nextComments }];
+    const res = await fetch(getUrl, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    const responseText = await res.text();
+    let json: any;
+    try { json = responseText ? JSON.parse(responseText) : null; } catch { json = null; }
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    if (res.ok) return { exists: true, updated: true, salesOrderId };
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    return { exists: true, updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export async function createCin7SalesOrder(
   input: Cin7SalesOrderInput,
 ): Promise<{ id: number; code: string }> {
