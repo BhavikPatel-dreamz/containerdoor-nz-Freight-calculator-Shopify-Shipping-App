@@ -158,6 +158,9 @@ export async function listRates(
     prisma.shippingRate.count({ where }),
   ]);
 
+
+  console.log(`[DEBUG] listRates ${rates.length} shop:${shop} page:${page} query:${query} company:${company} serviceType:${serviceType} total:${total}`);
+
    return {
      rates: rates.map((rate) => ({
        ...rate,
@@ -284,8 +287,10 @@ async function upsertWithRetry(id: string, data: any, retries: number): Promise<
       });
       return;
     } catch (err: any) {
-      if (attempt < retries && err?.message?.includes("cache lookup failed")) {
-        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+      const msg = err?.message ?? "";
+      const retriable = msg.includes("cache lookup failed") || msg.includes("Can't reach database") || msg.includes("P1001");
+      if (attempt < retries && retriable) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
         continue;
       }
       throw err;
@@ -318,10 +323,10 @@ export async function importRatesCsv(shop: string, csv: string) {
       city: row.city || "All",
       sector: row.sector || null,
       postalCode: row.postalCode || "*",
-      useWeightRange: normaliseBoolean(row.useWeightRange),
+      useWeightRange: row.useWeightRange ? normaliseBoolean(row.useWeightRange) : false,
       minWeightGrams: toNullableInt(row.minWeightGrams),
       maxWeightGrams: toNullableInt(row.maxWeightGrams),
-      useVolumeRange: normaliseBoolean(row.useVolumeRange),
+      useVolumeRange: row.useVolumeRange ? normaliseBoolean(row.useVolumeRange) : false,
       minVolumeCm3: toNullableInt(row.minVolumeCm3),
       maxVolumeCm3: toNullableInt(row.maxVolumeCm3),
       rate: parseDecimalStringFull(row.rate),
@@ -334,7 +339,7 @@ export async function importRatesCsv(shop: string, csv: string) {
       homeDeliveryFee: row.homeDeliveryFee ? parseDecimalStringFull(row.homeDeliveryFee) : null,
       residentialFee: parseDecimalStringFull(row.residentialFee ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
-      active: row.active === "" ? true : normaliseBoolean(row.active),
+      active: row.active == null || row.active === "" ? true : normaliseBoolean(row.active),
     };
 
     if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
