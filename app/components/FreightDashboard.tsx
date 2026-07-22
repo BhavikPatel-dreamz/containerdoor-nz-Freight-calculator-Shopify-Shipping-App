@@ -77,6 +77,18 @@ export type FreightDashboardProps = {
    * Defaults to "SP" if not provided.
    */
   noteAuthor?: string;
+  /**
+   * When set, the dashboard auto-opens the detail view for this order on mount
+   * (used by the standalone /app/freight-orders/:orderId route). Pairs with
+   * initialDetailVariantId to pick which line item is focused.
+   */
+  initialDetailOrderId?: string;
+  initialDetailVariantId?: string;
+  /**
+   * Where the detail-view Back button navigates. When omitted, Back just closes
+   * the inline detail (list stays). Set to the list URL in the route detail page.
+   */
+  detailBackHref?: string;
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -203,6 +215,9 @@ export default function FreightDashboard({
   shop,
   navbarRight,
   noteAuthor = "SP",
+  initialDetailOrderId,
+  initialDetailVariantId,
+  detailBackHref,
 }: FreightDashboardProps) {
   const [rows, setRows] = useState<FreightOrderRow[]>(orders);
   const [allRows, setAllRows] = useState<FreightOrderRow[] | null>(allOrders ?? null);
@@ -236,6 +251,21 @@ export default function FreightDashboard({
   const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
   // By default, disable automatic polling of external APIs. Refresh button triggers checks.
   const [allowStatusPoll] = useState(false);
+
+  // Standalone route detail: auto-open the detail view for the order in the URL.
+  useEffect(() => {
+    if (!initialDetailOrderId) return;
+    const source = allRows ?? rows;
+    const order = source.find((o) => o.shopifyOrderId === initialDetailOrderId);
+    if (!order) return;
+    const item =
+      order.lineItems.find((li) => li.variantId === initialDetailVariantId) ??
+      order.lineItems[0];
+    if (!item) return;
+    setDetailView((prev) => (prev ? prev : { order, item }));
+    setNotes([]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialDetailOrderId, initialDetailVariantId, rows, allRows]);
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
@@ -1062,7 +1092,7 @@ useEffect(() => {
               <div className="fo-detail-wrap">
                 <div className="fo-detail-bar">
                   <div className="fo-detail-bar-left">
-                    <button className="fo-icon-btn" onClick={() => setDetailView(null)} title="Back">
+                    <button className="fo-icon-btn" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { setDetailView(null); } }} title="Back">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <polyline points="15 18 9 12 15 6" />
                       </svg>
