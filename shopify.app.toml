@@ -12,10 +12,6 @@ automatically_update_urls_on_dev = true
 api_version = "2026-07"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
@@ -23,9 +19,17 @@ api_version = "2026-07"
   uri = "/webhooks/orders/create"
   topics = [ "orders/create" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/orders/update"
+  topics = [ "orders/update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
+
 [access_scopes]
-# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,write_products,write_shipping,read_shipping,read_orders,write_orders,read_customers"
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_orders,read_products,read_shipping,write_order_edits,write_orders,write_products,write_shipping"
 
 [auth]
 redirect_urls = [
@@ -34,5 +38,5 @@ redirect_urls = [
 
 [app_proxy]
 url = "https://containerdoor-nz-freight-calculator.vercel.app/apps/containerdoor"
-subpath = "containerdoor"       
+subpath = "containerdoor"
 prefix = "apps"

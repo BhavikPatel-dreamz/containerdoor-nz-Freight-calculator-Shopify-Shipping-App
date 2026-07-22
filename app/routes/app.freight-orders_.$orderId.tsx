@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation, Link } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation, useSearchParams, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
@@ -164,6 +164,8 @@ export async function action({ request, params }: ActionFunctionArgs) {
 export default function FreightOrderDetailPage() {
   const { order, lineItemsWithData, shippingLine, codeParts, cin7Exists } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
+  const [searchParams] = useSearchParams();
+  const highlightVariantId = searchParams.get("variantId") ?? "";
   const navigation = useNavigation();
   const saving = navigation.state === "submitting";
 
@@ -243,11 +245,14 @@ const cbm = codeParts[6]?.replace("cbm", "") ?? "—";
     const ex = item.existing;
     const unitPrice = Number(item.originalUnitPriceSet?.shopMoney?.amount ?? 0);
     const total = unitPrice * (item.quantity ?? 1);
+    const isHighlighted = highlightVariantId && v === highlightVariantId;
 
     return (
       <div key={item.id} style={{
-        border: "1px solid #e5e7eb", borderRadius: "8px",
+        border: isHighlighted ? "2px solid #2563eb" : "1px solid #e5e7eb",
+        borderRadius: "8px",
         marginBottom: "20px", overflow: "hidden",
+        boxShadow: isHighlighted ? "0 0 0 3px rgba(37,99,235,0.15)" : undefined,
       }}>
         <input type="hidden" name={`productTitle__${v}`} value={item.title ?? ""} />
         {/* Product header */}

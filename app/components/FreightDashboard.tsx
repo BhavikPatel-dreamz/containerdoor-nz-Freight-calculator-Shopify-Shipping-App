@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { companyLabels } from "../lib/freight";
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useSearchParams, useNavigate } from "react-router";
 import "../styles/freight-orders.css";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -209,6 +209,7 @@ export default function FreightDashboard({
   useEffect(() => setRows(orders), [orders]);
   useEffect(() => { if (allOrders) setAllRows(allOrders); }, [allOrders]);
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [currentPage, setCurrentPage] = useState<number>(page ?? 1);
 
   useEffect(() => {
@@ -981,6 +982,7 @@ useEffect(() => {
 
         <div className="fo-body">
           {/* ── Stat cards ── */}
+          {!detailView && (
           <div className="fo-stats">
             {[
               { label: "Total line orders", value: totalLineItems, color: "#111827" },
@@ -994,10 +996,12 @@ useEffect(() => {
               </div>
             ))}
           </div>
+          )}
 
           {/* ── Main card ── */}
           <div className="fo-card">
             {/* Tabs */}
+            {!detailView && (
             <div className="fo-tabs">
               {TABS.map((tab) => (
                 <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setActiveTab(tab.key)}>
@@ -1008,8 +1012,10 @@ useEffect(() => {
                 </button>
               ))}
             </div>
+            )}
 
             {/* Toolbar */}
+            {!detailView && (
             <div className="fo-toolbar">
               <label className="fo-select-label">
                 <input type="checkbox" className="fo-checkbox"
@@ -1040,6 +1046,7 @@ useEffect(() => {
                 </button>
               </div>
             </div>
+            )}
             {syncNotification && (
               <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -1436,7 +1443,7 @@ useEffect(() => {
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">
-                                  <button className="fo-icon-btn" title="View order" onClick={() => { setDetailView({ order, item }); setNotes([]); }}><IconEye /></button>
+                                  <button className="fo-icon-btn" title="View order" onClick={() => navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}><IconEye /></button>
                                   <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); }}><IconChat /></button>
                                 </div>
                                 <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
