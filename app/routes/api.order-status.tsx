@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
+import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
 
 // Debug logging helper
@@ -320,6 +321,31 @@ export async function action({ request }: ActionFunctionArgs) {
       updated = await prisma.orderLineItemOperationalData.create({
         data: { shop: shopValue, orderId, variantId, ...payload },
       });
+    }
+
+    // ── Push changed fields to ALL systems (Shopify + Monday + Cin7) ──
+    if (shopValue && updated) {
+      const syncFields: import("../lib/sync-middleware.server").LineItemSyncFields = {
+        shop: shopValue,
+        orderId,
+        variantId,
+      };
+      if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && updateData.eddDate !== (existing?.eddDate ?? "")) {
+        syncFields.eddDate = updateData.eddDate;
+      }
+      if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && updateData.trackingNumber !== (existing?.trackingNumber ?? "")) {
+        syncFields.trackingNumber = updateData.trackingNumber;
+      }
+      if (Object.prototype.hasOwnProperty.call(updateData, "dispatchStatus") && updateData.dispatchStatus !== (existing?.dispatchStatus ?? "")) {
+        syncFields.dispatchStatus = updateData.dispatchStatus;
+      }
+      if (Object.prototype.hasOwnProperty.call(updateData, "customerStatus") && updateData.customerStatus !== (existing?.customerStatus ?? "")) {
+        syncFields.customerStatus = updateData.customerStatus;
+      }
+      // Fire-and-forget — push to Shopify + Monday + Cin7
+      pushLineItemToAllSystems(syncFields, "admin").catch((e) =>
+        console.error("[api.order-status] Sync to other systems failed", e),
+      );
     }
 
     const orderOperationalData = shopValue

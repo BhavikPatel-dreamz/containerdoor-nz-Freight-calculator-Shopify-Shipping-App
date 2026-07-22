@@ -2,6 +2,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, syncCin7Carrier, fetchCin7SalesOrder } from "../lib/cin7.server";
+import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -111,6 +112,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           `;
         }
       }
+    }
+
+    // Push pulled Cin7 data to Shopify + Monday (fire-and-forget)
+    if (variantId && (updatedFields.eddDate !== undefined || updatedFields.trackingNumber !== undefined || updatedFields.carrier !== undefined)) {
+      pushLineItemToAllSystems(
+        {
+          shop,
+          orderId,
+          variantId,
+          ...(updatedFields.eddDate !== undefined ? { eddDate: updatedFields.eddDate } : {}),
+          ...(updatedFields.trackingNumber !== undefined ? { trackingNumber: updatedFields.trackingNumber } : {}),
+          ...(updatedFields.carrier !== undefined ? { carrier: updatedFields.carrier } : {}),
+        },
+        "cin7",
+      ).catch((e) =>
+        console.error("[Cin7][Update] Push to other systems failed:", e),
+      );
     }
 
     if (errors.length) return Response.json({ ok: false, error: errors.join("; ") }, { status: 500, headers: corsHeaders });

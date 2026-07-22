@@ -4,6 +4,7 @@ import { Form, useActionData, useLoaderData, useNavigation, Link } from "react-r
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
+import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 
 // ─── Prisma model needed (see schema change below) ────────────────────────────
 
@@ -126,6 +127,18 @@ export async function action({ request, params }: ActionFunctionArgs) {
       update: data,
       create: { shop, orderId, variantId, ...data },
     });
+
+    // Push changed fields to ALL systems (fire-and-forget)
+    pushLineItemToAllSystems(
+      {
+        shop,
+        orderId,
+        variantId,
+        ...(newEdd !== undefined ? { eddDate: newEdd } : {}),
+        ...(get("trackingNumber") ? { trackingNumber: get("trackingNumber") } : {}),
+      },
+      "admin",
+    ).catch((e) => console.error("[freight-order] Sync to other systems failed", e));
 
     const orderOperationalData = await prisma.orderOperationalData.findUnique({
       where: { shop_orderId: { shop, orderId } },

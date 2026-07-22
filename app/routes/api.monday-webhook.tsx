@@ -2,6 +2,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { fetchMondayItem } from "../lib/monday.server";
+import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Monday.com fires this webhook whenever a column value changes on an item
@@ -110,6 +111,21 @@ export async function action({ request }: ActionFunctionArgs) {
         console.log(
           `[Monday][Webhook] Updated shop=${record.shop} orderId=${record.orderId} variantId=${record.variantId}:`,
           updates,
+        );
+
+        // Push pulled changes to Shopify + Cin7 (fire-and-forget)
+        pushLineItemToAllSystems(
+          {
+            shop: record.shop,
+            orderId: record.orderId,
+            variantId: record.variantId,
+            ...(updates.eddDate !== undefined ? { eddDate: updates.eddDate } : {}),
+            ...(updates.trackingNumber !== undefined ? { trackingNumber: updates.trackingNumber } : {}),
+            ...(updates.customerStatus !== undefined ? { customerStatus: updates.customerStatus } : {}),
+          },
+          "monday",
+        ).catch((e) =>
+          console.error("[Monday][Webhook] Push to other systems failed:", e),
         );
       }
     }
