@@ -274,7 +274,29 @@ export async function exportRatesCsv(shop: string) {
   return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
 }
 
+async function upsertWithRetry(id: string, data: any, retries: number): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await prisma.shippingRate.upsert({
+        where: { id },
+        update: data,
+        create: { ...data, id },
+      });
+      return;
+    } catch (err: any) {
+      if (attempt < retries && err?.message?.includes("cache lookup failed")) {
+        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export async function importRatesCsv(shop: string, csv: string) {
+  // Warm up the Neon connection pool before bulk ops
+  await prisma.$queryRaw`SELECT 1`;
+
   const [headerLine, ...lines] = csv.split(/\r?\n/).filter(Boolean);
   if (!headerLine) return { ok: false, message: "CSV is empty" };
 
@@ -348,15 +370,15 @@ export async function importRatesCsv(shop: string, csv: string) {
   }
 
   if (rowsWithId.length > 0) {
-    await Promise.all(
-      rowsWithId.map((r) =>
-        prisma.shippingRate.upsert({
-          where: { id: r.id },
-          update: r.data,
-          create: { ...r.data, id: r.id },
-        })
-      )
-    );
+    const BATCH = 5;
+    for (let i = 0; i < rowsWithId.length; i += BATCH) {
+      const batch = rowsWithId.slice(i, i + BATCH);
+      await Promise.all(
+        batch.map((r) =>
+          upsertWithRetry(r.id, r.data, 3)
+        )
+      );
+    }
     updated = rowsWithId.length;
   }
 
