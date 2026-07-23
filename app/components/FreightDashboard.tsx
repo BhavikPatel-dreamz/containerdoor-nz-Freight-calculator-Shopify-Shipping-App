@@ -1310,14 +1310,14 @@ export default function FreightDashboard({
             ) : (
               <div className="fo-table-scroll">
                 <table className="fo-table">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
-                      <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Qty</th>
-                      <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
-                      <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
-                    </tr>
-                  </thead>
+                      <thead>
+                        <tr>
+                          <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
+                          <th>Line order #</th><th>Customer</th><th>Product / SKU</th>
+                          <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
+                          <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
+                        </tr>
+                      </thead>
                   <tbody>
                     {filteredOrders.flatMap((order, idx) => {
                       const isSelected = selected.has(order.id);
@@ -1354,6 +1354,8 @@ export default function FreightDashboard({
                             <td className="fo-td">
                               <div className="fo-prod-name">
                                 {item.title ?? (item.productId ? `#${item.productId}` : <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>#{item.variantId}</span>)}
+                                {" "}
+                                <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span>
                               </div>
                               {item.variantId && (
                                 <div className="fo-prod-sku">
@@ -1361,7 +1363,6 @@ export default function FreightDashboard({
                                 </div>
                               )}
                             </td>
-                            <td className="fo-td"><span className="fo-qty-cell">{item.boxes || 1}</span></td>
                             <td className="fo-td">
                               <div className="fo-edd-wrap">
                                 {item.eddDate ? (

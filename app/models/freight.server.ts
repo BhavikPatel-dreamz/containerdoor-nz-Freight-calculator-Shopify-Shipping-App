@@ -631,15 +631,16 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
   const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
   const resolvedHomeDeliveryFee =
-  rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
-    ? Number(rate.homeDeliveryFee)
-    : resolveHomeDeliveryFee(rate.company, settings);
-const homeDeliveryFee =
-  rate.serviceType === "STANDARD_DELIVERY" &&
-  rate.company !== "TGE" &&
-  resolvedHomeDeliveryFee > 0
-    ? resolvedHomeDeliveryFee
-    : 0;
+    rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
+      ? Number(rate.homeDeliveryFee)
+      : resolveHomeDeliveryFee(rate.company, settings);
+  const homeDeliveryFee =
+    rate.serviceType === "STANDARD_DELIVERY" &&
+    rate.company !== "TGE" &&
+    rate.company !== "FLIWAYMIDSIZE" &&
+    resolvedHomeDeliveryFee > 0
+      ? resolvedHomeDeliveryFee
+      : 0;
   const fafRate = resolveFafRate(rate.company, settings);
   const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
   const withFaf = (effectiveBase + adminFee) * (1 + fafRate);
