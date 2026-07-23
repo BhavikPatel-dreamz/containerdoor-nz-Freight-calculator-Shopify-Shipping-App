@@ -12,10 +12,6 @@ automatically_update_urls_on_dev = true
 api_version = "2026-07"
 
   [[webhooks.subscriptions]]
-  uri = "/webhooks/app/uninstalled"
-  topics = [ "app/uninstalled" ]
-
-  [[webhooks.subscriptions]]
   uri = "/webhooks/app/scopes_update"
   topics = [ "app/scopes_update" ]
 
@@ -38,5 +34,5 @@ redirect_urls = [
 
 [app_proxy]
 url = "https://containerdoor-nz-freight-calculator.vercel.app/apps/containerdoor"
-subpath = "containerdoor"       
+subpath = "containerdoor"
 prefix = "apps"
