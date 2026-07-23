@@ -12,6 +12,8 @@ export type FreightLineItem = {
   id: string;
   variantId: string;
   title?: string;
+  variantTitle?: string;
+  vendor?: string;
   sku?: string;
   productId?: string;
   company: string;
@@ -24,6 +26,12 @@ export type FreightLineItem = {
   freightRef?: string;   // NEW
   eddDate: string;
   originalEddDate: string;
+  warehouseStatus?: string;
+  dispatchStatus?: string;
+  deliveryStatus?: string;
+  depositPaid?: string;
+  balanceDue?: string;
+  poNumber?: string;
   cin7Exists?: boolean;
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
@@ -66,9 +74,24 @@ type NoteItem = {
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+export type DashboardCounts = {
+  totalLineItems: number;
+  awaitingCount: number;
+  dispatchedCount: number;
+  pendingNotifyCount: number;
+  completedCount: number;
+};
+
 export type FreightDashboardProps = {
   orders: FreightOrderRow[];
   allOrders?: FreightOrderRow[];
+  /**
+   * Global (all-page) line-item counts from the server, for the stat cards +
+   * tab pills. Omitted by the detail route (which shows a single order).
+   */
+  counts?: DashboardCounts;
+  /** Distinct suppliers (Shopify Vendor) for the filter dropdown. Server list. */
+  suppliers?: string[];
   total: number;
   page: number;
   pageCount: number;
@@ -93,6 +116,13 @@ export type FreightDashboardProps = {
    */
   detailBackHref?: string;
 };
+
+// The list now renders one row per line item, so several rows can share a
+// shopifyOrderId. Collapse to one entry per order before building per-order API
+// request payloads (status polls / refresh) to avoid duplicate fetches.
+function dedupeOrders(list: FreightOrderRow[]): FreightOrderRow[] {
+  return Array.from(new Map(list.map((o) => [o.shopifyOrderId, o])).values());
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -238,6 +268,8 @@ const IconPlus = () => (
 export default function FreightDashboard({
   orders,
   allOrders,
+  counts,
+  suppliers = [],
   page,
   pageCount,
   shop,
@@ -301,9 +333,62 @@ export default function FreightDashboard({
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
   const [eddForm, setEddForm] = useState({ newEdd: "", reason: "", notifyCustomer: false });
-  const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState("all");
+  // Server-driven when the parent supplies global `counts` (the admin
+  // /app/freight-orders list): search/filter/sort/pagination run in the DB via
+  // the URL (?q, ?tab, ?page). Other consumers (external dashboard, detail
+  // route) keep the legacy client-side search/filter over the rows they pass.
+  const serverDriven = Boolean(counts);
+  const [search, setSearch] = useState(searchParams.get("q") ?? "");
+  const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Server-driven only: debounce the search box into the URL (?q=), resetting to
+  // page 1, so the loader re-queries across ALL rows, not just the current page.
+  useEffect(() => {
+    if (!serverDriven) return;
+    const current = searchParams.get("q") ?? "";
+    if (search === current) return;
+    const t = setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const np = new URLSearchParams(prev);
+          if (search) np.set("q", search); else np.delete("q");
+          np.set("page", "1");
+          return np;
+        },
+        { replace: true },
+      );
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, serverDriven]);
+
+  const setTab = (key: string) => {
+    setActiveTab(key);
+    if (!serverDriven) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (key === "all") np.delete("tab"); else np.set("tab", key);
+      np.set("page", "1");
+      return np;
+    });
+  };
+
+  const activeSupplier = searchParams.get("supplier") ?? "";
+  const setSupplier = (v: string) =>
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (v) np.set("supplier", v); else np.delete("supplier");
+      np.set("page", "1");
+      return np;
+    });
+
+  // Bulk EDD update over the selected line items.
+  const [bulkEddModal, setBulkEddModal] = useState(false);
+  const [bulkEddForm, setBulkEddForm] = useState({ newEdd: "", notifyCustomer: false });
+  const [bulkEddError, setBulkEddError] = useState("");
+  const [isBulkSavingEdd, setIsBulkSavingEdd] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -344,7 +429,7 @@ export default function FreightDashboard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             shop,
-            orders: rows.map((order) => ({
+            orders: dedupeOrders(rows).map((order) => ({
               orderId: order.shopifyOrderId,
               lineItems: order.lineItems.map((li) => ({
                 variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
@@ -386,7 +471,7 @@ export default function FreightDashboard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             shop,
-            orders: rows.map((order) => ({
+            orders: dedupeOrders(rows).map((order) => ({
               orderId: order.shopifyOrderId,
               lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })),
             })),
@@ -422,7 +507,7 @@ export default function FreightDashboard({
     const pollFieldUpdates = async () => {
       try {
         const results = await Promise.all(
-          rows.map(async (order) => {
+          dedupeOrders(rows).map(async (order) => {
             try {
               const res = await fetch(
                 `/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`
@@ -494,45 +579,51 @@ export default function FreightDashboard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [rows.map((o) => o.id).join(","), shop]);
 
-  const filteredOrders = (rows || []).filter((o) => {
-    // Tab filter — keep orders that have at least one matching line item
-    if (activeTab !== "all") {
-      const hasMatch = o.lineItems.some((li) => {
-        const s = (li.customerStatus || "").toLowerCase();
-        if (activeTab === "awaiting") return s === "confirmed";
-        if (activeTab === "dispatch") return s === "dispatched";
-        if (activeTab === "complete") return s === "delivered";
-        return true;
+  // Server-driven: rows are already searched/filtered by the loader → render as-is.
+  // Legacy consumers: filter client-side (tab has a match + text search).
+  const filteredOrders = serverDriven
+    ? (rows || [])
+    : (rows || []).filter((o) => {
+        if (activeTab !== "all") {
+          const hasMatch = o.lineItems.some((li) => {
+            const s = (li.customerStatus || "").toLowerCase();
+            if (activeTab === "awaiting") return s === "confirmed";
+            if (activeTab === "dispatch") return s === "dispatched";
+            if (activeTab === "complete") return s === "delivered";
+            return true;
+          });
+          if (!hasMatch) return false;
+        }
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
       });
-      if (!hasMatch) return false;
-    }
-    // Search filter
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      o.shopifyOrderName.toLowerCase().includes(q) ||
-      o.customerName.toLowerCase().includes(q) ||
-      o.email.toLowerCase().includes(q) ||
-      (o.city ?? "").toLowerCase().includes(q) ||
-      o.carriers.toLowerCase().includes(q)
-    );
-  });
 
+  // Selection is keyed by per-line-item id (each rendered row is one line item).
+  const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
   const toggleSelectAll = () =>
-    setSelected(selected.size === filteredOrders.length
+    setSelected(selected.size === selectableIds.length && selectableIds.length > 0
       ? new Set()
-      : new Set(filteredOrders.map((o) => o.id)));
+      : new Set(selectableIds));
 
   const toggleSelect = (id: string) =>
     setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
+  // Global counts come from the server (all pages). Detail route omits `counts`
+  // (single order) — fall back to computing from the rows on screen.
   const allLineItems = (rows || []).flatMap((o) => o.lineItems);
-  const totalLineItems = allLineItems.length;
-  const awaitingCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "confirmed").length;
-  const dispatchedCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "dispatched").length;
-  const pendingNotifyCount = allLineItems.filter((li) => !li.trackingNumber && (li.customerStatus || "").toLowerCase() === "dispatched").length;
-  const completedCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "delivered").length;
+  const totalLineItems = counts?.totalLineItems ?? allLineItems.length;
+  const awaitingCount = counts?.awaitingCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "confirmed").length;
+  const dispatchedCount = counts?.dispatchedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const pendingNotifyCount = counts?.pendingNotifyCount ?? allLineItems.filter((li) => !li.trackingNumber && (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const completedCount = counts?.completedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "delivered").length;
 
   const TABS = [
     { key: "all", label: "All orders", count: null, color: "#2563eb" },
@@ -591,6 +682,70 @@ export default function FreightDashboard({
       setEddError(e instanceof Error ? e.message : "Failed to save EDD");
     } finally {
       setIsSavingEdd(false);
+    }
+  };
+
+  // Selected line items among the loaded rows (bulk acts on the current view).
+  const selectedTargets = (rows || []).flatMap((o) =>
+    o.lineItems.filter((li) => selected.has(li.id)).map((li) => ({ order: o, item: li })),
+  );
+
+  // ── Bulk EDD update ───────────────────────────────────────────────────────
+  // Reuses the single-item /api/order-status endpoint per selected line item,
+  // so each update keeps its own note trail + Cin7/Monday side effects.
+  const handleBulkEddSave = async () => {
+    if (!bulkEddForm.newEdd) { setBulkEddError("Please select a date before saving"); return; }
+    if (selectedTargets.length === 0) { setBulkEddError("No line items selected"); return; }
+    setBulkEddError("");
+    setIsBulkSavingEdd(true);
+    const newEdd = bulkEddForm.newEdd;
+    const fmt = (d: string) => new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+    let done = 0;
+    setBulkProgress({ done: 0, total: selectedTargets.length });
+    const succeeded = new Set<string>();
+    try {
+      for (const t of selectedTargets) {
+        const note: NoteItem = {
+          author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
+          text: t.item.eddDate ? `EDD changed from ${fmt(t.item.eddDate)} to ${fmt(newEdd)} (bulk).` : `EDD set to ${fmt(newEdd)} (bulk).`,
+        };
+        try {
+          const res = await fetch("/api/order-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop, orderId: t.order.shopifyOrderId, variantId: t.item.variantId,
+              data: { eddDate: newEdd, originalEddDate: t.item.originalEddDate || t.item.eddDate || newEdd },
+              newNotes: [note.text],
+            }),
+          });
+          if (res.ok) succeeded.add(t.item.id);
+        } catch { /* keep going; count as failed */ }
+        done++;
+        setBulkProgress({ done, total: selectedTargets.length });
+      }
+
+      // Optimistically apply the new EDD to the rows that succeeded.
+      const apply = (o: FreightOrderRow): FreightOrderRow => ({
+        ...o,
+        lineItems: o.lineItems.map((li) =>
+          succeeded.has(li.id)
+            ? { ...li, eddDate: newEdd, originalEddDate: li.originalEddDate || li.eddDate || newEdd }
+            : li,
+        ),
+      });
+      setRows((prev = []) => prev.map(apply));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(apply) : prev));
+
+      const failed = selectedTargets.length - succeeded.size;
+      setSyncNotification(`Bulk EDD: ${succeeded.size} updated${failed ? `, ${failed} failed` : ""}`);
+      window.setTimeout(() => setSyncNotification(null), 4500);
+      setSelected(new Set());
+      setBulkEddModal(false);
+      setBulkEddForm({ newEdd: "", notifyCustomer: false });
+    } finally {
+      setIsBulkSavingEdd(false);
+      setBulkProgress(null);
     }
   };
 
@@ -760,7 +915,7 @@ export default function FreightDashboard({
   };
 
   const handleRefreshCin7Status = async (ordersArg?: FreightOrderRow[]) => {
-    const useOrders = ordersArg ?? rows;
+    const useOrders = dedupeOrders(ordersArg ?? rows);
     if (isRefreshingCin7 || useOrders.length === 0) return;
     setIsRefreshingCin7(true);
     try {
@@ -802,7 +957,7 @@ export default function FreightDashboard({
   };
 
   const handleRefreshMondayStatus = async (ordersArg?: FreightOrderRow[]) => {
-    const useOrders = ordersArg ?? rows;
+    const useOrders = dedupeOrders(ordersArg ?? rows);
     if (isRefreshingMonday || useOrders.length === 0) return;
     setIsRefreshingMonday(true);
     try {
@@ -843,7 +998,8 @@ export default function FreightDashboard({
 
   const handleRefreshStatuses = async () => {
     // Run both checks for the latest orders (prefer `allRows` if available).
-    const source = allRows ?? rows;
+    // Dedupe first so `slice(0, 100)` caps distinct orders, not line-item rows.
+    const source = dedupeOrders(allRows ?? rows);
     const ordersToCheck = source.slice(0, 100);
     if (ordersToCheck.length === 0) return;
     await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
@@ -1065,7 +1221,7 @@ export default function FreightDashboard({
             {!detailView && (
               <div className="fo-tabs">
                 {TABS.map((tab) => (
-                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setActiveTab(tab.key)}>
+                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setTab(tab.key)}>
                     {tab.label}
                     <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
                       {tab.key === "all" ? totalLineItems : tab.count}
@@ -1080,15 +1236,32 @@ export default function FreightDashboard({
               <div className="fo-toolbar">
                 <label className="fo-select-label">
                   <input type="checkbox" className="fo-checkbox"
-                    checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
+                    checked={selected.size === selectableIds.length && selectableIds.length > 0}
                     onChange={toggleSelectAll}
                   />
                   {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
                 </label>
+                {selected.size > 0 && (
+                  <button
+                    className="fo-tool-btn"
+                    style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}
+                    onClick={() => { setBulkEddError(""); setBulkEddForm({ newEdd: "", notifyCustomer: false }); setBulkEddModal(true); }}
+                  >
+                    <IconCalendar /> Bulk update EDD ({selected.size})
+                  </button>
+                )}
                 <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                  <select className="fo-status-select">
-                    <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
-                  </select>
+                  {serverDriven && (
+                    <select
+                      className="fo-status-select"
+                      value={activeSupplier}
+                      onChange={(e) => setSupplier(e.target.value)}
+                      title="Filter by supplier (Shopify Vendor)"
+                    >
+                      <option value="">All suppliers</option>
+                      {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  )}
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
                     <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
                       <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
@@ -1178,11 +1351,13 @@ export default function FreightDashboard({
                         </span>
                       </div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Parent order #</span><span className="fo-detail-value">{detailView.order.shopifyOrderName}</span></div>
-                      <div className="fo-detail-row"><span className="fo-detail-label">Product</span><span className="fo-detail-value">{detailView.item.title ?? "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Product</span><span className="fo-detail-value">{detailView.item.title || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Variant</span><span className="fo-detail-value">{detailView.item.variantTitle || "—"}</span></div>
                       <div className="fo-detail-row">
                         <span className="fo-detail-label">SKU</span>
-                        <span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.variantId ? `VAR-${detailView.item.variantId.slice(-6)}` : "—"}</span>
+                        <span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.sku || "—"}</span>
                       </div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Product ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.productId || "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Quantity</span><span className="fo-detail-value">{detailView.item.boxes || 1}</span></div>
                       <div className="fo-detail-row">
                         <span className="fo-detail-label">Order date</span>
@@ -1258,6 +1433,23 @@ export default function FreightDashboard({
                         <span className="fo-detail-value">Today 09:41 · {detailView.order.customerName.split(" ")[0]}</span>
                       </div>
                     </div>
+
+                    <div className="fo-detail-panel">
+                      <div className="fo-detail-panel-hdr">Operational</div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Warehouse status</span><span className="fo-detail-value">{detailView.item.warehouseStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Dispatch status</span><span className="fo-detail-value">{detailView.item.dispatchStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Delivery status</span><span className="fo-detail-value">{detailView.item.deliveryStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">PO #</span><span className="fo-detail-value">{detailView.item.poNumber || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Deposit paid</span><span className="fo-detail-value">{detailView.item.depositPaid || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{detailView.item.balanceDue || "—"}</span></div>
+                    </div>
+
+                    {/* Technical IDs — de-emphasized, not needed for day-to-day CS work */}
+                    <div className="fo-detail-panel" style={{ opacity: 0.75 }}>
+                      <div className="fo-detail-panel-hdr" style={{ fontSize: "11px", color: "#9ca3af" }}>Technical</div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>{detailView.item.variantId || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Line item id</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>{detailView.item.id}</span></div>
+                    </div>
                   </div>
 
                   {/* RIGHT — Notes */}
@@ -1310,21 +1502,20 @@ export default function FreightDashboard({
             ) : (
               <div className="fo-table-scroll">
                 <table className="fo-table">
-                  <thead>
-                    <tr>
-                      <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
-                      <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Qty</th>
-                      <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
-                      <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
-                    </tr>
-                  </thead>
+                      <thead>
+                        <tr>
+                          <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
+                          <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th><th>Supplier</th>
+                          <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
+                          <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
+                        </tr>
+                      </thead>
                   <tbody>
                     {filteredOrders.flatMap((order, idx) => {
-                      const isSelected = selected.has(order.id);
                       const chipColor = orderLetterColors[idx % orderLetterColors.length];
-                      const carrierList = order.carriers.split(",").map((c) => c.trim()).filter(Boolean);
 
                       return order.lineItems.map((item, liIdx) => {
+                        const isSelected = selected.has(item.id);
                         const isFirstItem = liIdx === 0;
                         const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
                         const statusClass = item.customerStatus ? `fo-fulfil ${item.customerStatus.toLowerCase()}` : "fo-fulfil none";
@@ -1332,7 +1523,7 @@ export default function FreightDashboard({
                         return (
                           <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
                             <td className="fo-td">
-                              <input type="checkbox" className="fo-checkbox" checked={isSelected} onChange={() => toggleSelect(order.id)} />
+                              <input type="checkbox" className="fo-checkbox" checked={isSelected} onChange={() => toggleSelect(item.id)} />
                             </td>
                             <td className="fo-td">
                               {isFirstItem ? (
@@ -1353,15 +1544,20 @@ export default function FreightDashboard({
                             </td>
                             <td className="fo-td">
                               <div className="fo-prod-name">
-                                {item.title ?? (item.productId ? `#${item.productId}` : <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>#{item.variantId}</span>)}
+                                {item.title || "—"}
+                                {" "}
+                                <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span>
                               </div>
-                              {item.variantId && (
-                                <div className="fo-prod-sku">
-                                  VAR-{item.variantId}{item.sku ? ` / ${item.sku}` : ""}
-                                </div>
+                              {item.variantTitle && (
+                                <div style={{ fontSize: "11px", color: "#374151" }}>{item.variantTitle}</div>
                               )}
+                              <div className="fo-prod-sku" style={{ fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
+                                {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
+                              </div>
                             </td>
-                            <td className="fo-td"><span className="fo-qty-cell">{item.boxes || 1}</span></td>
+                            <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                              {item.vendor || "—"}
+                            </td>
                             <td className="fo-td">
                               <div className="fo-edd-wrap">
                                 {item.eddDate ? (
@@ -1390,6 +1586,7 @@ export default function FreightDashboard({
                               </div>
                             </td>
                             <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
+                            <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>
                             <td className="fo-td">
                               {(() => {
                                 const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
@@ -1401,13 +1598,7 @@ export default function FreightDashboard({
                               })()}
                             </td>
                             <td className="fo-td">
-                              {isFirstItem ? (
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                                  {carrierList.map((c) => <span key={c} className="fo-carrier-badge">{companyLabels[c as keyof typeof companyLabels] ?? c}</span>)}
-                                </div>
-                              ) : (
-                                <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
-                              )}
+                              <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
                             </td>
                             <td className="fo-td">
                               {item.trackingNumber ? (
@@ -1528,7 +1719,7 @@ export default function FreightDashboard({
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">
-                                  <button className="fo-icon-btn" title="View order" onClick={() => { setDetailView({ order, item }); setNotes([]); }}><IconEye /></button>
+                                  <button className="fo-icon-btn" title="View order" onClick={() => { navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`); }}><IconEye /></button>
                                   <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}><IconChat /></button>
                                 </div>
                                 <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
@@ -1551,7 +1742,7 @@ export default function FreightDashboard({
                   disabled={currentPage <= 1}
                   onClick={() => {
                     const newPage = Math.max(1, currentPage - 1);
-                    if (allRows) {
+                    if (!serverDriven && allRows) {
                       setCurrentPage(newPage);
                       setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
                       return;
@@ -1567,7 +1758,7 @@ export default function FreightDashboard({
                   disabled={currentPage >= pageCount}
                   onClick={() => {
                     const newPage = Math.min(pageCount, currentPage + 1);
-                    if (allRows) {
+                    if (!serverDriven && allRows) {
                       setCurrentPage(newPage);
                       setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
                       return;
@@ -1723,6 +1914,41 @@ export default function FreightDashboard({
               <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}
                 onClick={handleEddSave} disabled={isSavingEdd}>
                 {isSavingEdd ? "Saving…" : "Update EDD"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk EDD Modal ── */}
+      {bulkEddModal && (
+        <div className="fo-overlay" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }}>
+          <div style={{ background: "#fff", borderRadius: "10px", width: "480px", maxWidth: "95vw", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
+              <span style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>📅 Bulk update EDD — {selectedTargets.length} line item{selectedTargets.length === 1 ? "" : "s"}</span>
+              <button className="fo-modal-close" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }}>✕</button>
+            </div>
+            <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+              {bulkEddError && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{bulkEddError}</div>}
+              <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                Applies the new EDD to all {selectedTargets.length} selected line item{selectedTargets.length === 1 ? "" : "s"} on this view.
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "6px" }}>New EDD</label>
+                <input type="date" value={bulkEddForm.newEdd} onChange={(e) => setBulkEddForm((p) => ({ ...p, newEdd: e.target.value }))}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", background: "#fff", color: "#111827", fontSize: "13px", outline: "none" }} />
+              </div>
+              {bulkProgress && (
+                <div style={{ fontSize: "13px", color: "#2563eb", fontWeight: 600 }}>
+                  Updating {bulkProgress.done} / {bulkProgress.total}…
+                </div>
+              )}
+            </div>
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button className="fo-btn-ghost" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }} disabled={isBulkSavingEdd}>Cancel</button>
+              <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: isBulkSavingEdd ? "wait" : "pointer" }}
+                onClick={handleBulkEddSave} disabled={isBulkSavingEdd}>
+                {isBulkSavingEdd ? "Updating…" : `Update ${selectedTargets.length} EDD`}
               </button>
             </div>
           </div>

@@ -1,161 +1,197 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
 import { useLoaderData } from "react-router";
+import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import FreightDashboard from "../components/FreightDashboard";
-import { freightServicePrefixes } from "../lib/freight";
+import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 const PAGE_SIZE = 25;
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-function normalizePaymentStatus(status?: string | null): string {
-  const raw = (status ?? "").toString().trim();
-  if (!raw) return "";
-  const normalized = raw.toLowerCase();
-  if (["paid", "fully_paid", "authorized", "captured", "complete"].includes(normalized)) return "Paid";
-  if (["partial", "partially_paid", "partially_refunded"].includes(normalized)) return "Partial";
-  if (["pending", "pending_payment", "unpaid", "authorized_pending_capture", "outstanding"].includes(normalized)) return "Pending";
-  if (["overdue"].includes(normalized)) return "Overdue";
-  if (["refunded"].includes(normalized)) return "Refunded";
-  return raw;
-}
+// Tab key → the customerStatus it filters on (null = no status filter).
+const TAB_STATUS: Record<string, string | null> = {
+  all: null,
+  awaiting: "confirmed",
+  dispatch: "dispatched",
+  complete: "delivered",
+};
+
+const statusOf = (v: any): any =>
+  typeof v === "string" && v.trim() ? v.trim().toLowerCase() : undefined;
+const listOf = (v: any): string[] =>
+  typeof v === "string" && v.trim()
+    ? v.split(",").map((s: string) => s.trim()).filter(Boolean)
+    : [];
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
+// Search / filter / sort / pagination all run in Postgres, by line item.
+// The OrderLineItemIndex holds the immutable order+item snapshot fields (built by
+// the order webhooks + backfill); mutable status/tracking is joined live from
+// OrderLineItemOperationalData, and cin7 existence from OrderOperationalData.
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { authenticate } = await import("../shopify.server");
-
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+
   const url = new URL(request.url);
-  const page = Math.max(Number(url.searchParams.get("page") || "1"), 1);
+  const q = (url.searchParams.get("q") || "").trim();
+  const tab = url.searchParams.get("tab") || "all";
+  const supplier = (url.searchParams.get("supplier") || "").trim();
+  const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
-  // Fetch order snapshots from DB — no Shopify API call needed
-  const snapshots = await prisma.orderSnapshot.findMany({
-    where: { shop, carriers: { not: "" } },
-    orderBy: { createdAt: "desc" },
-  });
-
-  // Batch-load operational data
-  const allOpsData = await prisma.orderLineItemOperationalData.findMany({ where: { shop } });
-  const opsMap = new Map(allOpsData.map((r) => [`${r.orderId}::${r.variantId}`, r]));
-
-  const orderOpData = await prisma.orderOperationalData.findMany({
-    where: { shop },
-    select: { orderId: true, cin7SalesOrderId: true },
-  });
-  const orderCin7Map = new Map(
-    orderOpData
-      .filter((row) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
-      .map((row) => [row.orderId, true]),
-  );
-
-  // Build rows from snapshots (same shape as before)
-  const freightOrders = snapshots
-    .map((snap) => buildRowFromSnapshot(snap, opsMap, orderCin7Map))
-    .filter((row): row is NonNullable<ReturnType<typeof buildRowFromSnapshot>> => Boolean(row));
-
-  const total = freightOrders.length;
-  const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
-  const paged = freightOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-
-  return { orders: paged, allOrders: freightOrders, total, page, pageCount, shop };
-}
-
-// ─── Build row from DB snapshot (replaces buildRow from Shopify API data) ─────
-
-function buildRowFromSnapshot(
-  snap: any,
-  opsMap: Map<string, any>,
-  orderCin7Map: Map<string, boolean>,
-) {
-  if (!snap.carriers || !snap.shippingCode) return null;
-
-  const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
-  if (!lineItemsRaw) return null;
-
-  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string }> = [];
-  try {
-    parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
-  } catch { /* empty */ }
-
-  const variantTitleMap = new Map<string, string>();
-  const variantSkuMap = new Map<string, string>();
-  for (const li of parsedLineItems) {
-    if (li.variantId != null) {
-      const vid = String(li.variantId);
-      if (li.title) variantTitleMap.set(vid, li.title);
-      if (li.sku) variantSkuMap.set(vid, li.sku);
-    }
+  // Search predicate (shop + optional trigram search + supplier). Reused by rows
+  // + counts. Search matches the denormalized lowercase `searchText` so a single
+  // pg_trgm GIN index backs the leading-wildcard ILIKE (scales to ~1M rows).
+  const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
+  if (q) {
+    const like = `%${q.toLowerCase()}%`;
+    conds.push(Prisma.sql`idx."searchText" LIKE ${like}`);
   }
+  if (supplier) {
+    conds.push(Prisma.sql`idx."vendor" = ${supplier}`);
+  }
+  const searchWhere = Prisma.join(conds, " AND ");
 
-  const lineItems = lineItemsRaw.split("|").map((part: string, idx: number) => {
-    const [variantId, rest] = part.split(":");
-    const [company, boxesStr, amountStr] = (rest ?? "").split("x");
-    const ops = opsMap.get(`${snap.orderId}::${variantId}`);
-    return {
-      id: `${snap.orderId}-${idx}`,
+  // Distinct suppliers (Shopify Vendor) for the filter dropdown.
+  const supplierRows = await prisma.$queryRaw<Array<{ vendor: string }>>`
+    SELECT DISTINCT idx."vendor" FROM "OrderLineItemIndex" idx
+    WHERE idx."shop" = ${shop} AND idx."vendor" <> ''
+    ORDER BY idx."vendor" ASC
+  `;
+  const suppliers = supplierRows.map((r) => r.vendor);
+
+  // Global counts (search applied, tab NOT applied) — feeds tab pills + stat cards.
+  const countRows = await prisma.$queryRaw<
+    Array<{ total_all: number; awaiting: number; dispatched: number; completed: number; pending_notify: number }>
+  >`
+    SELECT
+      COUNT(*)::int AS total_all,
+      COUNT(*) FILTER (WHERE lower(ops."customerStatus") = 'confirmed')::int AS awaiting,
+      COUNT(*) FILTER (WHERE lower(ops."customerStatus") = 'dispatched')::int AS dispatched,
+      COUNT(*) FILTER (WHERE lower(ops."customerStatus") = 'delivered')::int AS completed,
+      COUNT(*) FILTER (WHERE lower(ops."customerStatus") = 'dispatched' AND coalesce(ops."trackingNumber", '') = '')::int AS pending_notify
+    FROM "OrderLineItemIndex" idx
+    LEFT JOIN "OrderLineItemOperationalData" ops
+      ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
+    WHERE ${searchWhere}
+  `;
+  const c = countRows[0] ?? { total_all: 0, awaiting: 0, dispatched: 0, completed: 0, pending_notify: 0 };
+
+  const total =
+    tab === "awaiting" ? c.awaiting
+    : tab === "dispatch" ? c.dispatched
+    : tab === "complete" ? c.completed
+    : c.total_all;
+  const pageCount = Math.max(Math.ceil(total / PAGE_SIZE), 1);
+  const page = Math.min(Math.max(requestedPage, 1), pageCount);
+  const offset = (page - 1) * PAGE_SIZE;
+
+  // Row predicate = search + optional tab status.
+  const tabStatus = TAB_STATUS[tab] ?? null;
+  const rowConds = [...conds];
+  if (tabStatus) rowConds.push(Prisma.sql`lower(ops."customerStatus") = ${tabStatus}`);
+  const rowWhere = Prisma.join(rowConds, " AND ");
+
+  const rows = await prisma.$queryRaw<any[]>`
+    SELECT
+      idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
+      idx."letterSuffix", idx."customerName", idx."email", idx."phone", idx."city", idx."zip",
+      idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
+      idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
+      idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
+      ops."customerStatus", ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
+      ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
+      ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
+      ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po
+    FROM "OrderLineItemIndex" idx
+    LEFT JOIN "OrderLineItemOperationalData" ops
+      ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
+    LEFT JOIN "OrderOperationalData" ood
+      ON idx."shop" = ood."shop" AND idx."orderId" = ood."orderId"
+    WHERE ${rowWhere}
+    ORDER BY idx."createdAt" DESC, idx."orderId" DESC, idx."letterSuffix" ASC
+    LIMIT ${PAGE_SIZE} OFFSET ${offset}
+  `;
+
+  // Each SQL row → one FreightOrderRow carrying a single line item, so the
+  // dashboard's flatMap + {order,item} handlers keep working unchanged.
+  const orders = rows.map((r) => {
+    const variantId = String(r.variantId);
+    const cin7Exists = Boolean(r.ood_cin7 && r.ood_cin7 !== "pending");
+    const item = {
+      id: `${r.orderId}-${variantId}`,
       variantId,
-      title: variantTitleMap.get(variantId) ?? ops?.productTitle ?? "",
-      sku: variantSkuMap.get(variantId) ?? "",
-      productId: "",
-      company: company ?? "",
-      boxes: Number(boxesStr ?? 0),
-      amount: Number(amountStr ?? 0),
-      letterSuffix: LETTERS[idx % 26],
-      customerStatus: ops?.customerStatus ?? "",
-      paymentStatus: normalizePaymentStatus(snap.financialStatus),
-      trackingNumber: ops?.trackingNumber ?? "",
-      freightRef: ops?.freightRef ?? "",
-      eddDate: ops?.eddDate ?? "",
-      originalEddDate: ops?.originalEddDate ?? "",
-      cin7Exists: orderCin7Map.get(snap.orderId) ?? false,
-      cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
-        ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
-        : undefined,
-      cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
-        ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
-        : [],
-      mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
-        ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
-        : undefined,
-      mondayMismatches: typeof ops?.mondayCachedMismatches === "string" && ops.mondayCachedMismatches.trim()
-        ? ops.mondayCachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
-        : [],
+      title: r.productTitle || "",
+      variantTitle: r.variantTitle || "",
+      vendor: r.vendor || "",
+      sku: r.sku || "",
+      productId: r.productId || "",
+      company: r.company || "",
+      boxes: Number(r.boxes ?? 0),
+      amount: Number(r.amount ?? 0),
+      letterSuffix: r.letterSuffix || "",
+      customerStatus: r.customerStatus ?? "",
+      paymentStatus: normalizePaymentStatus(r.financialStatus),
+      trackingNumber: r.trackingNumber ?? "",
+      freightRef: r.freightRef ?? "",
+      eddDate: r.eddDate ?? "",
+      originalEddDate: r.originalEddDate ?? "",
+      warehouseStatus: r.warehouseStatus ?? "",
+      dispatchStatus: r.dispatchStatus ?? "",
+      deliveryStatus: r.deliveryStatus ?? "",
+      depositPaid: r.depositPaid ?? "",
+      balanceDue: r.balanceDue ?? "",
+      poNumber: r.ood_po ?? "",
+      cin7Exists,
+      cin7Status: statusOf(r.cin7CachedStatus),
+      cin7Mismatches: listOf(r.cin7CachedMismatches),
+      mondayStatus: statusOf(r.mondayCachedStatus),
+      mondayMismatches: listOf(r.mondayCachedMismatches),
+    };
+    return {
+      id: r.gid || `gid://shopify/Order/${r.orderId}`,
+      shopifyOrderId: String(r.orderId),
+      shopifyOrderName: r.orderName || "",
+      currency: r.currency || "NZD",
+      totalFreight: Number(r.totalFreight ?? 0),
+      city: r.city || null,
+      postalCode: r.zip || null,
+      createdAt: (r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt)).toISOString(),
+      carriers: r.carriers || "",
+      packageCount: "",
+      shippingTitle: r.shippingTitle || "",
+      lineItems: [item],
+      customerName: r.customerName || "—",
+      email: r.email || "—",
+      phone: r.phone || "—",
+      financialStatus: r.financialStatus || "—",
+      fulfillmentStatus: r.fulfillmentStatus || "UNFULFILLED",
+      fullAddress: r.fullAddress || "",
     };
   });
 
-  return {
-    id: `gid://shopify/Order/${snap.orderId}`,
-    shopifyOrderId: snap.orderId,
-    shopifyOrderName: snap.orderName,
-    currency: snap.currencyCode,
-    totalFreight: Number(snap.totalFreight ?? 0),
-    city: snap.shippingCity || null,
-    postalCode: snap.shippingZip || null,
-    createdAt: snap.createdAt.toISOString(),
-    carriers: snap.carriers,
-    packageCount: snap.packageCount,
-    shippingTitle: snap.shippingTitle,
-    lineItems,
-    customerName: `${snap.shippingFirstName} ${snap.shippingLastName}`.trim() || "—",
-    email: snap.email || "—",
-    phone: snap.phone || "—",
-    financialStatus: snap.financialStatus || "—",
-    fulfillmentStatus: snap.fulfillmentStatus || "UNFULFILLED",
-    fullAddress: [snap.shippingAddress1, snap.shippingCity, snap.shippingProvince, snap.shippingZip, snap.shippingCountry].filter(Boolean).join(", "),
+  const counts = {
+    totalLineItems: c.total_all,
+    awaitingCount: c.awaiting,
+    dispatchedCount: c.dispatched,
+    pendingNotifyCount: c.pending_notify,
+    completedCount: c.completed,
   };
+
+  return { orders, counts, total, page, pageCount, shop, suppliers, supplier };
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FreightOrdersPage() {
-  const { orders, allOrders, total, page, pageCount, shop } = useLoaderData<typeof loader>();
+  const { orders, counts, total, page, pageCount, shop, suppliers } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
       orders={orders as any}
-      allOrders={allOrders as any}
+      counts={counts}
+      suppliers={suppliers}
       total={total}
       page={page}
       pageCount={pageCount}

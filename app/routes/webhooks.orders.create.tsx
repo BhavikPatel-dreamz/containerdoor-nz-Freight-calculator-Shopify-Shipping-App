@@ -9,6 +9,7 @@ import {
   createCin7EntryForOrder,
   saveOrderSnapshot,
 } from "../lib/order-webhook.server";
+import { reindexOrderById } from "../lib/line-index.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, payload, topic, shop } = await authenticate.webhook(request);
@@ -19,6 +20,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (admin && order.id) {
     // 1. Save order snapshot to DB (so pages can fetch from DB, not Shopify API)
     await saveOrderSnapshot(shop, order);
+
+    // 1b. Build the per-line-item index (powers the freight-orders list search/filter/pagination)
+    await reindexOrderById(shop, String(order.id));
 
     // 2. Create operational record for every line item
     await createOrderLineItemRecords(shop, order);

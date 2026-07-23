@@ -57,8 +57,11 @@ export type OrderPayload = {
   line_items?: Array<{
     id?: number;
     variant_id?: number;
+    product_id?: number;
+    variant_title?: string;
     title?: string;
     sku?: string;
+    vendor?: string;
     quantity?: number;
     grams?: number;
     price?: string | number;
@@ -196,9 +199,12 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   const lineItemsForJson = (order.line_items ?? []).map((li) => ({
     id: li.id,
     variantId: (li as any).variant_id,
+    productId: li.product_id ?? null,
+    variantTitle: li.variant_title ?? "",
     title: li.title,
     quantity: li.quantity,
     sku: li.sku,
+    vendor: li.vendor ?? "",
     price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
   }));
 
