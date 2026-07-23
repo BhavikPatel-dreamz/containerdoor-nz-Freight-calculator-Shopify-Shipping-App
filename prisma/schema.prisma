@@ -193,6 +193,45 @@ model OrderLineItemOperationalData {
   @@unique([shop, orderId, variantId])
 }
 
+// Denormalized index: one row per FREIGHT line item. Immutable order/item
+// snapshot data used to power the freight-orders LIST page with DB-side search,
+// filter, sort and pagination (mutable status/tracking stays in
+// OrderLineItemOperationalData and is joined live). Populated by the order
+// webhooks (create/update) and the backfill route; keyed to match the ops table
+// for the join.
+model OrderLineItemIndex {
+  id             String   @id @default(cuid())
+  shop           String
+  orderId        String
+  variantId      String
+  shopifyOrderId String   @default("")
+  gid            String   @default("")
+  orderName      String   @default("")
+  letterSuffix   String   @default("")
+  customerName   String   @default("")
+  email          String   @default("")
+  phone          String   @default("")
+  city           String   @default("")
+  zip            String   @default("")
+  fullAddress    String   @default("")
+  createdAt      DateTime @default(now())
+  currency       String   @default("NZD")
+  totalFreight   Decimal  @default(0) @db.Decimal(10, 2)
+  carriers       String   @default("")
+  shippingTitle  String   @default("")
+  productTitle   String   @default("")
+  sku            String   @default("")
+  vendor         String   @default("")
+  company        String   @default("")
+  boxes          Int      @default(0)
+  amount         Decimal  @default(0) @db.Decimal(10, 2)
+  financialStatus   String @default("")
+  fulfillmentStatus String @default("")
+
+  @@unique([shop, orderId, variantId])
+  @@index([shop, createdAt])
+}
+
 model ExternalUser {
   id            String            @id @default(cuid())
   shop          String

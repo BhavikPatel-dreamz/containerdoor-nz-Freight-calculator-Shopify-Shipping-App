@@ -57,20 +57,30 @@ export function normalizePaymentStatus(status?: string | null): string {
   return raw;
 }
 
-// Build a FreightDashboard row from a DB OrderSnapshot. Used by the list loader
-// and the detail loader so both render identical data (same shape as buildRow,
-// plus per-item paymentStatus derived from the snapshot financial status).
-export function buildRowFromSnapshot(
-  snap: any,
-  opsMap: Map<string, any>,
-  orderCin7Map: Map<string, boolean>,
-) {
-  if (!snap.carriers || !snap.shippingCode) return null;
+// Immutable per-item snapshot fields for one freight line item. Shared by the
+// row builder (below), the order-webhook indexer, and the backfill route so the
+// three can't drift on how the shipping code / lineItemsJson is parsed.
+export type LineItemSnapshot = {
+  idx: number;
+  variantId: string;
+  letterSuffix: string;
+  productTitle: string;
+  sku: string;
+  vendor: string;
+  company: string;
+  boxes: number;
+  amount: number;
+};
 
+// Parse a DB OrderSnapshot's shippingCode + lineItemsJson into the immutable
+// per-freight-line-item fields. Returns [] when the order has no freight code.
+// Parts with an empty variantId are skipped (they can't be keyed/joined).
+export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
+  if (!snap.carriers || !snap.shippingCode) return [];
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
-  if (!lineItemsRaw) return null;
+  if (!lineItemsRaw) return [];
 
-  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string; vendor?: string }> = [];
+  let parsedLineItems: Array<{ variantId?: number; title?: string; sku?: string; vendor?: string }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
@@ -87,21 +97,52 @@ export function buildRowFromSnapshot(
     }
   }
 
-  const lineItems = lineItemsRaw.split("|").map((part: string, idx: number) => {
+  const out: LineItemSnapshot[] = [];
+  lineItemsRaw.split("|").forEach((part: string, idx: number) => {
     const [variantId, rest] = part.split(":");
+    if (!variantId) return; // skip malformed / empty-variant parts
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
-    const ops = opsMap.get(`${snap.orderId}::${variantId}`);
-    return {
-      id: `${snap.orderId}-${idx}`,
+    out.push({
+      idx,
       variantId,
-      title: variantTitleMap.get(variantId) ?? ops?.productTitle ?? "",
-      vendor: variantVendorMap.get(variantId) ?? "",
+      letterSuffix: LETTERS[idx % 26],
+      productTitle: variantTitleMap.get(variantId) ?? "",
       sku: variantSkuMap.get(variantId) ?? "",
-      productId: "",
+      vendor: variantVendorMap.get(variantId) ?? "",
       company: company ?? "",
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),
-      letterSuffix: LETTERS[idx % 26],
+    });
+  });
+  return out;
+}
+
+// Build a FreightDashboard row from a DB OrderSnapshot. Used by the list loader
+// and the detail loader so both render identical data (same shape as buildRow,
+// plus per-item paymentStatus derived from the snapshot financial status).
+export function buildRowFromSnapshot(
+  snap: any,
+  opsMap: Map<string, any>,
+  orderCin7Map: Map<string, boolean>,
+) {
+  if (!snap.carriers || !snap.shippingCode) return null;
+
+  const itemSnaps = buildLineItemSnapshots(snap);
+  if (itemSnaps.length === 0) return null;
+
+  const lineItems = itemSnaps.map((it) => {
+    const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
+    return {
+      id: `${snap.orderId}-${it.idx}`,
+      variantId: it.variantId,
+      title: it.productTitle || ops?.productTitle || "",
+      vendor: it.vendor,
+      sku: it.sku,
+      productId: "",
+      company: it.company,
+      boxes: it.boxes,
+      amount: it.amount,
+      letterSuffix: it.letterSuffix,
       customerStatus: ops?.customerStatus ?? "",
       paymentStatus: normalizePaymentStatus(snap.financialStatus),
       trackingNumber: ops?.trackingNumber ?? "",

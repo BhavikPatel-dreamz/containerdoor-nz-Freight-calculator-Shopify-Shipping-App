@@ -67,9 +67,22 @@ type NoteItem = {
 
 // ─── Props ────────────────────────────────────────────────────────────────────
 
+export type DashboardCounts = {
+  totalLineItems: number;
+  awaitingCount: number;
+  dispatchedCount: number;
+  pendingNotifyCount: number;
+  completedCount: number;
+};
+
 export type FreightDashboardProps = {
   orders: FreightOrderRow[];
   allOrders?: FreightOrderRow[];
+  /**
+   * Global (all-page) line-item counts from the server, for the stat cards +
+   * tab pills. Omitted by the detail route (which shows a single order).
+   */
+  counts?: DashboardCounts;
   total: number;
   page: number;
   pageCount: number;
@@ -94,6 +107,13 @@ export type FreightDashboardProps = {
    */
   detailBackHref?: string;
 };
+
+// The list now renders one row per line item, so several rows can share a
+// shopifyOrderId. Collapse to one entry per order before building per-order API
+// request payloads (status polls / refresh) to avoid duplicate fetches.
+function dedupeOrders(list: FreightOrderRow[]): FreightOrderRow[] {
+  return Array.from(new Map(list.map((o) => [o.shopifyOrderId, o])).values());
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -239,6 +259,7 @@ const IconPlus = () => (
 export default function FreightDashboard({
   orders,
   allOrders,
+  counts,
   page,
   pageCount,
   shop,
@@ -302,9 +323,46 @@ export default function FreightDashboard({
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
   const [eddForm, setEddForm] = useState({ newEdd: "", reason: "", notifyCustomer: false });
-  const [search, setSearch] = useState("");
-  const [activeTab, setActiveTab] = useState("all");
+  // Server-driven when the parent supplies global `counts` (the admin
+  // /app/freight-orders list): search/filter/sort/pagination run in the DB via
+  // the URL (?q, ?tab, ?page). Other consumers (external dashboard, detail
+  // route) keep the legacy client-side search/filter over the rows they pass.
+  const serverDriven = Boolean(counts);
+  const [search, setSearch] = useState(searchParams.get("q") ?? "");
+  const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Server-driven only: debounce the search box into the URL (?q=), resetting to
+  // page 1, so the loader re-queries across ALL rows, not just the current page.
+  useEffect(() => {
+    if (!serverDriven) return;
+    const current = searchParams.get("q") ?? "";
+    if (search === current) return;
+    const t = setTimeout(() => {
+      setSearchParams(
+        (prev) => {
+          const np = new URLSearchParams(prev);
+          if (search) np.set("q", search); else np.delete("q");
+          np.set("page", "1");
+          return np;
+        },
+        { replace: true },
+      );
+    }, 350);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [search, serverDriven]);
+
+  const setTab = (key: string) => {
+    setActiveTab(key);
+    if (!serverDriven) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (key === "all") np.delete("tab"); else np.set("tab", key);
+      np.set("page", "1");
+      return np;
+    });
+  };
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -345,7 +403,7 @@ export default function FreightDashboard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             shop,
-            orders: rows.map((order) => ({
+            orders: dedupeOrders(rows).map((order) => ({
               orderId: order.shopifyOrderId,
               lineItems: order.lineItems.map((li) => ({
                 variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company,
@@ -387,7 +445,7 @@ export default function FreightDashboard({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             shop,
-            orders: rows.map((order) => ({
+            orders: dedupeOrders(rows).map((order) => ({
               orderId: order.shopifyOrderId,
               lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })),
             })),
@@ -423,7 +481,7 @@ export default function FreightDashboard({
     const pollFieldUpdates = async () => {
       try {
         const results = await Promise.all(
-          rows.map(async (order) => {
+          dedupeOrders(rows).map(async (order) => {
             try {
               const res = await fetch(
                 `/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`
@@ -495,45 +553,51 @@ export default function FreightDashboard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [rows.map((o) => o.id).join(","), shop]);
 
-  const filteredOrders = (rows || []).filter((o) => {
-    // Tab filter — keep orders that have at least one matching line item
-    if (activeTab !== "all") {
-      const hasMatch = o.lineItems.some((li) => {
-        const s = (li.customerStatus || "").toLowerCase();
-        if (activeTab === "awaiting") return s === "confirmed";
-        if (activeTab === "dispatch") return s === "dispatched";
-        if (activeTab === "complete") return s === "delivered";
-        return true;
+  // Server-driven: rows are already searched/filtered by the loader → render as-is.
+  // Legacy consumers: filter client-side (tab has a match + text search).
+  const filteredOrders = serverDriven
+    ? (rows || [])
+    : (rows || []).filter((o) => {
+        if (activeTab !== "all") {
+          const hasMatch = o.lineItems.some((li) => {
+            const s = (li.customerStatus || "").toLowerCase();
+            if (activeTab === "awaiting") return s === "confirmed";
+            if (activeTab === "dispatch") return s === "dispatched";
+            if (activeTab === "complete") return s === "delivered";
+            return true;
+          });
+          if (!hasMatch) return false;
+        }
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
       });
-      if (!hasMatch) return false;
-    }
-    // Search filter
-    if (!search.trim()) return true;
-    const q = search.toLowerCase();
-    return (
-      o.shopifyOrderName.toLowerCase().includes(q) ||
-      o.customerName.toLowerCase().includes(q) ||
-      o.email.toLowerCase().includes(q) ||
-      (o.city ?? "").toLowerCase().includes(q) ||
-      o.carriers.toLowerCase().includes(q)
-    );
-  });
 
+  // Selection is keyed by per-line-item id (each rendered row is one line item).
+  const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
   const toggleSelectAll = () =>
-    setSelected(selected.size === filteredOrders.length
+    setSelected(selected.size === selectableIds.length && selectableIds.length > 0
       ? new Set()
-      : new Set(filteredOrders.map((o) => o.id)));
+      : new Set(selectableIds));
 
   const toggleSelect = (id: string) =>
     setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
+  // Global counts come from the server (all pages). Detail route omits `counts`
+  // (single order) — fall back to computing from the rows on screen.
   const allLineItems = (rows || []).flatMap((o) => o.lineItems);
-  const totalLineItems = allLineItems.length;
-  const awaitingCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "confirmed").length;
-  const dispatchedCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "dispatched").length;
-  const pendingNotifyCount = allLineItems.filter((li) => !li.trackingNumber && (li.customerStatus || "").toLowerCase() === "dispatched").length;
-  const completedCount = allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "delivered").length;
+  const totalLineItems = counts?.totalLineItems ?? allLineItems.length;
+  const awaitingCount = counts?.awaitingCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "confirmed").length;
+  const dispatchedCount = counts?.dispatchedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const pendingNotifyCount = counts?.pendingNotifyCount ?? allLineItems.filter((li) => !li.trackingNumber && (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const completedCount = counts?.completedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "delivered").length;
 
   const TABS = [
     { key: "all", label: "All orders", count: null, color: "#2563eb" },
@@ -761,7 +825,7 @@ export default function FreightDashboard({
   };
 
   const handleRefreshCin7Status = async (ordersArg?: FreightOrderRow[]) => {
-    const useOrders = ordersArg ?? rows;
+    const useOrders = dedupeOrders(ordersArg ?? rows);
     if (isRefreshingCin7 || useOrders.length === 0) return;
     setIsRefreshingCin7(true);
     try {
@@ -803,7 +867,7 @@ export default function FreightDashboard({
   };
 
   const handleRefreshMondayStatus = async (ordersArg?: FreightOrderRow[]) => {
-    const useOrders = ordersArg ?? rows;
+    const useOrders = dedupeOrders(ordersArg ?? rows);
     if (isRefreshingMonday || useOrders.length === 0) return;
     setIsRefreshingMonday(true);
     try {
@@ -844,7 +908,8 @@ export default function FreightDashboard({
 
   const handleRefreshStatuses = async () => {
     // Run both checks for the latest orders (prefer `allRows` if available).
-    const source = allRows ?? rows;
+    // Dedupe first so `slice(0, 100)` caps distinct orders, not line-item rows.
+    const source = dedupeOrders(allRows ?? rows);
     const ordersToCheck = source.slice(0, 100);
     if (ordersToCheck.length === 0) return;
     await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
@@ -1066,7 +1131,7 @@ export default function FreightDashboard({
             {!detailView && (
               <div className="fo-tabs">
                 {TABS.map((tab) => (
-                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setActiveTab(tab.key)}>
+                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setTab(tab.key)}>
                     {tab.label}
                     <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
                       {tab.key === "all" ? totalLineItems : tab.count}
@@ -1081,7 +1146,7 @@ export default function FreightDashboard({
               <div className="fo-toolbar">
                 <label className="fo-select-label">
                   <input type="checkbox" className="fo-checkbox"
-                    checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
+                    checked={selected.size === selectableIds.length && selectableIds.length > 0}
                     onChange={toggleSelectAll}
                   />
                   {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
@@ -1313,7 +1378,7 @@ export default function FreightDashboard({
                 <table className="fo-table">
                       <thead>
                         <tr>
-                          <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
+                          <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
                           <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Vendor</th>
                           <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
                           <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
@@ -1321,11 +1386,10 @@ export default function FreightDashboard({
                       </thead>
                   <tbody>
                     {filteredOrders.flatMap((order, idx) => {
-                      const isSelected = selected.has(order.id);
                       const chipColor = orderLetterColors[idx % orderLetterColors.length];
-                      const carrierList = order.carriers.split(",").map((c) => c.trim()).filter(Boolean);
 
                       return order.lineItems.map((item, liIdx) => {
+                        const isSelected = selected.has(item.id);
                         const isFirstItem = liIdx === 0;
                         const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
                         const statusClass = item.customerStatus ? `fo-fulfil ${item.customerStatus.toLowerCase()}` : "fo-fulfil none";
@@ -1333,7 +1397,7 @@ export default function FreightDashboard({
                         return (
                           <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
                             <td className="fo-td">
-                              <input type="checkbox" className="fo-checkbox" checked={isSelected} onChange={() => toggleSelect(order.id)} />
+                              <input type="checkbox" className="fo-checkbox" checked={isSelected} onChange={() => toggleSelect(item.id)} />
                             </td>
                             <td className="fo-td">
                               {isFirstItem ? (
@@ -1406,13 +1470,7 @@ export default function FreightDashboard({
                               })()}
                             </td>
                             <td className="fo-td">
-                              {isFirstItem ? (
-                                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
-                                  {carrierList.map((c) => <span key={c} className="fo-carrier-badge">{companyLabels[c as keyof typeof companyLabels] ?? c}</span>)}
-                                </div>
-                              ) : (
-                                <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
-                              )}
+                              <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
                             </td>
                             <td className="fo-td">
                               {item.trackingNumber ? (
@@ -1556,7 +1614,7 @@ export default function FreightDashboard({
                   disabled={currentPage <= 1}
                   onClick={() => {
                     const newPage = Math.max(1, currentPage - 1);
-                    if (allRows) {
+                    if (!serverDriven && allRows) {
                       setCurrentPage(newPage);
                       setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
                       return;
@@ -1572,7 +1630,7 @@ export default function FreightDashboard({
                   disabled={currentPage >= pageCount}
                   onClick={() => {
                     const newPage = Math.min(pageCount, currentPage + 1);
-                    if (allRows) {
+                    if (!serverDriven && allRows) {
                       setCurrentPage(newPage);
                       setRows(allRows.slice((newPage - 1) * 25, newPage * 25));
                       return;
