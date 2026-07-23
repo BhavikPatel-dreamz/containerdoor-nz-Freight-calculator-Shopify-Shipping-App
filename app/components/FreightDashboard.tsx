@@ -1533,7 +1533,7 @@ export default function FreightDashboard({
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">
-                                  <button className="fo-icon-btn" title="View order" onClick={() => { setDetailView({ order, item }); setNotes([]); }}><IconEye /></button>
+                                  <button className="fo-icon-btn" title="View order" onClick={() => { navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`); }}><IconEye /></button>
                                   <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}><IconChat /></button>
                                 </div>
                                 <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
