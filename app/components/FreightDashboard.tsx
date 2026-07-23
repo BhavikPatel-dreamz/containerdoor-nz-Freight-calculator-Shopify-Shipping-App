@@ -1405,7 +1405,7 @@ export default function FreightDashboard({
                       <thead>
                         <tr>
                           <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-                          <th>Line order #</th><th>Customer</th><th>Product</th><th>Supplier</th>
+                          <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th><th>Supplier</th>
                           <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
                           <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                         </tr>
