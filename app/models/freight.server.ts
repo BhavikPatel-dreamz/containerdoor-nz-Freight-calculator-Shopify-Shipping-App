@@ -126,6 +126,7 @@ export async function listRates(
     query?: string;
     company?: CarrierCompany | "";
     serviceType?: ServiceType | "";
+    active?: "true" | "false" | "";
   },
 ) {
   const take = 100;
@@ -133,10 +134,13 @@ export async function listRates(
   const query = filters?.query?.trim();
   const company = filters?.company || "";
   const serviceType = filters?.serviceType || "";
+  const activeFilter = filters?.active ?? "";
   const where = {
     shop,
     ...(company ? { company } : {}),
     ...(serviceType ? { serviceType } : {}),
+    ...(activeFilter === "true" ? { active: true } : {}),
+    ...(activeFilter === "false" ? { active: false } : {}),
     ...(query
       ? {
           OR: [
@@ -212,6 +216,15 @@ export async function bulkDeleteRates(shop: string, ids: string[]) {
     where: { id: { in: ids }, shop },
   });
   return { ok: true, message: `${result.count} rates deleted` };
+}
+
+export async function bulkToggleActive(shop: string, ids: string[], active: boolean) {
+  if (ids.length === 0) return { ok: true, message: "0 rates updated" };
+  const result = await prisma.shippingRate.updateMany({
+    where: { id: { in: ids }, shop },
+    data: { active },
+  });
+  return { ok: true, message: `${result.count} rates ${active ? "activated" : "deactivated"}` };
 }
 
 export async function exportRatesCsv(shop: string) {
