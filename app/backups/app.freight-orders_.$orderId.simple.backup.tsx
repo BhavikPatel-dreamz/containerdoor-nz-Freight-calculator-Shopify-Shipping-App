@@ -1,25 +1,49 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { Form, useActionData, useLoaderData, useNavigation, Link } from "react-router";
+import { Form, useActionData, useLoaderData, useNavigation, useSearchParams, Link } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
-import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
+
+// ─── Prisma model needed (see schema change below) ────────────────────────────
 
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const orderId = params.orderId!;
   const shop = session.shop;
-  const orderId = params.orderId!;
 
-  // Fetch from DB — no Shopify API call
-  const snap = await prisma.orderSnapshot.findUnique({
-    where: { shop_orderId: { shop, orderId } },
-  });
-  if (!snap) throw new Response("Order not found", { status: 404 });
+  const response = await admin.graphql(`
+    #graphql
+    query GetOrder($id: ID!) {
+      order(id: $id) {
+        id name createdAt currencyCode email phone displayFinancialStatus
+        shippingAddress { firstName lastName address1 city province zip country }
+        shippingLines(first: 5) {
+          nodes { title code originalPriceSet { shopMoney { amount currencyCode } } }
+        }
+        lineItems(first: 50) {
+          nodes {
+            id title quantity
+            originalUnitPriceSet { shopMoney { amount } }
+            variant { id sku }
+          }
+        }
+      }
+    }
+  `, { variables: { id: `gid://shopify/Order/${orderId}` } });
 
-  // Parse line items from DB snapshot
-  const codeParts = snap.shippingCode.split("::");
+  const json = await response.json();
+  const order = json.data?.order;
+  if (!order) throw new Response("Order not found", { status: 404 });
+
+  // Parse line items from service_code
+  const shippingLine = order.shippingLines.nodes.find((s: any) =>
+    ["standard_delivery::", "depot_delivery::", "customer_pickup::"].some(
+      (p) => s.code?.startsWith(p)
+    )
+  );
+
+  const codeParts = shippingLine?.code?.split("::") ?? [];
   const lineItemsRaw = codeParts[4] ?? "";
 
   // Build variantId -> carrier map from service_code
@@ -32,10 +56,6 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     }
   }
 
-  // Parse line items from snapshot JSON
-  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string }> = [];
-  try { parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]"); } catch { /* empty */ }
-
   // Load existing per-line-item operational data
   const existingRecords = await prisma.orderLineItemOperationalData.findMany({
     where: { shop, orderId },
@@ -47,51 +67,15 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   });
   const cin7Exists = Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending");
 
-  // Build order object matching the shape the component expects
-  const order = {
-    id: `gid://shopify/Order/${orderId}`,
-    name: snap.orderName,
-    createdAt: snap.createdAt.toISOString(),
-    currencyCode: snap.currencyCode,
-    email: snap.email,
-    phone: snap.phone,
-    displayFinancialStatus: snap.financialStatus,
-    shippingAddress: {
-      firstName: snap.shippingFirstName,
-      lastName: snap.shippingLastName,
-      address1: snap.shippingAddress1,
-      city: snap.shippingCity,
-      province: snap.shippingProvince,
-      zip: snap.shippingZip,
-      country: snap.shippingCountry,
-    },
-    shippingLines: {
-      nodes: [{
-        title: snap.shippingTitle,
-        code: snap.shippingCode,
-        originalPriceSet: { shopMoney: { amount: String(snap.totalFreight), currencyCode: snap.currencyCode } },
-      }],
-    },
-  };
-
   // Attach carrier + existing data to each line item
-  const lineItemsWithData = parsedLineItems.map((item: any) => {
-    const numericVariantId = item.variantId != null ? String(item.variantId) : "";
+  const lineItemsWithData = order.lineItems.nodes.map((item: any) => {
+    const numericVariantId = item.variant?.id?.replace("gid://shopify/ProductVariant/", "") ?? "";
     const carrier = carrierMap.get(numericVariantId) ?? "";
     const existing = existingMap.get(numericVariantId) ?? null;
-    return {
-      id: item.id ? `gid://shopify/OrderLineItem/${item.id}` : "",
-      title: item.title ?? "",
-      quantity: item.quantity ?? 1,
-      originalUnitPriceSet: { shopMoney: { amount: item.price ?? "0" } },
-      variant: { id: `gid://shopify/ProductVariant/${numericVariantId}`, sku: item.sku ?? "" },
-      numericVariantId,
-      carrier,
-      existing,
-    };
+    return { ...item, numericVariantId, carrier, existing };
   });
 
-  return { order, lineItemsWithData, shippingLine: order.shippingLines.nodes[0], codeParts, cin7Exists };
+  return { order, lineItemsWithData, shippingLine, codeParts, cin7Exists };
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {
@@ -107,7 +91,6 @@ export async function action({ request, params }: ActionFunctionArgs) {
     const get = (field: string) => String(formData.get(`${field}__${variantId}`) ?? "");
     const newEdd = get("eddDate");
     const newCustomerStatus = get("customerStatus");
-    const newPaymentStatus = get("paymentStatus");
     const existingRecord = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
     });
@@ -117,7 +100,6 @@ export async function action({ request, params }: ActionFunctionArgs) {
       carrier:           get("carrier"),
       customerStatus:    newCustomerStatus,
       customerStatusUpdatedAt: newCustomerStatus ? new Date() : undefined,
-      paymentStatus:     newPaymentStatus,
       warehouseStatus:   get("warehouseStatus"),
       dispatchStatus:    get("dispatchStatus"),
       deliveryStatus:    get("deliveryStatus"),
@@ -142,18 +124,6 @@ export async function action({ request, params }: ActionFunctionArgs) {
       update: data,
       create: { shop, orderId, variantId, ...data },
     });
-
-    // Push changed fields to ALL systems (fire-and-forget)
-    pushLineItemToAllSystems(
-      {
-        shop,
-        orderId,
-        variantId,
-        ...(newEdd !== undefined ? { eddDate: newEdd } : {}),
-        ...(get("trackingNumber") ? { trackingNumber: get("trackingNumber") } : {}),
-      },
-      "admin",
-    ).catch((e) => console.error("[freight-order] Sync to other systems failed", e));
 
     const orderOperationalData = await prisma.orderOperationalData.findUnique({
       where: { shop_orderId: { shop, orderId } },
@@ -192,9 +162,23 @@ export async function action({ request, params }: ActionFunctionArgs) {
 
 
 export default function FreightOrderDetailPage() {
-  const { row, shop } = useLoaderData<typeof loader>();
+  const { order, lineItemsWithData, shippingLine, codeParts, cin7Exists } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
   const [searchParams] = useSearchParams();
-  const variantId = searchParams.get("variantId") ?? undefined;
+  const highlightVariantId = searchParams.get("variantId") ?? "";
+  const navigation = useNavigation();
+  const saving = navigation.state === "submitting";
+
+  const freightAmount = Number(shippingLine?.originalPriceSet?.shopMoney?.amount ?? 0);
+const totalBoxes = codeParts[2]?.replace("boxes", "") ?? "—";
+const weightKg = codeParts[5]?.replace("kg", "") ?? "—";
+const cbm = codeParts[6]?.replace("cbm", "") ?? "—";
+  
+
+  const formatCurrency = (amount: number) =>
+  new Intl.NumberFormat("en-NZ", { style: "currency", currency: order.currencyCode || "NZD" }).format(amount);
+
+  const customerName = `${order.shippingAddress?.firstName ?? ""} ${order.shippingAddress?.lastName ?? ""}`.trim() || "—";
 
   return (
     <div style={{ padding: "20px", fontFamily: "sans-serif", maxWidth: "900px" }}>
@@ -261,11 +245,14 @@ export default function FreightOrderDetailPage() {
     const ex = item.existing;
     const unitPrice = Number(item.originalUnitPriceSet?.shopMoney?.amount ?? 0);
     const total = unitPrice * (item.quantity ?? 1);
+    const isHighlighted = highlightVariantId && v === highlightVariantId;
 
     return (
       <div key={item.id} style={{
-        border: "1px solid #e5e7eb", borderRadius: "8px",
+        border: isHighlighted ? "2px solid #2563eb" : "1px solid #e5e7eb",
+        borderRadius: "8px",
         marginBottom: "20px", overflow: "hidden",
+        boxShadow: isHighlighted ? "0 0 0 3px rgba(37,99,235,0.15)" : undefined,
       }}>
         <input type="hidden" name={`productTitle__${v}`} value={item.title ?? ""} />
         {/* Product header */}
@@ -315,17 +302,6 @@ export default function FreightOrderDetailPage() {
               <option value="Dispatched">Dispatched</option>
               <option value="Delivered">Delivered</option>
               <option value="Cancelled">Cancelled</option>
-            </select>
-          </label>
-
-          <label style={labelStyle}>
-            Payment status
-            <select name={`paymentStatus__${v}`} defaultValue={ex?.paymentStatus ?? ""} style={inputStyle}>
-              <option value="">— Select —</option>
-              <option value="Paid">Paid</option>
-              <option value="Partial">Partial</option>
-              <option value="Pending">Pending</option>
-              <option value="Overdue">Overdue</option>
             </select>
           </label>
 
@@ -446,4 +422,29 @@ export default function FreightOrderDetailPage() {
 
     </div>
   );
+}
+
+const labelStyle: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: "4px",
+  fontSize: "13px", color: "#374151", fontWeight: 500,
+};
+
+const inputStyle: React.CSSProperties = {
+  padding: "7px 10px", fontSize: "13px", border: "1px solid #d1d5db",
+  borderRadius: "6px", background: "#fff", color: "#111827",
+  width: "100%", boxSizing: "border-box",
+};
+
+function carrierColor(company: string): { bg: string; text: string } {
+  const colors: Record<string, { bg: string; text: string }> = {
+    FLIWAY:         { bg: "#dbeafe", text: "#1e40af" },
+    FLIWAYLINEHAUL: { bg: "#dbeafe", text: "#1e40af" },
+    FLIWAYMIDSIZE:  { bg: "#dbeafe", text: "#1e40af" },
+    TGE:            { bg: "#dcfce7", text: "#166534" },
+    MAINFREIGHT:    { bg: "#fef3c7", text: "#92400e" },
+    NZP:            { bg: "#f3e8ff", text: "#6b21a8" },
+    CASTLE:         { bg: "#ffe4e6", text: "#9f1239" },
+    M2H:            { bg: "#f0f9ff", text: "#0369a1" },
+  };
+  return colors[company] ?? { bg: "#f3f4f6", text: "#374151" };
 }
