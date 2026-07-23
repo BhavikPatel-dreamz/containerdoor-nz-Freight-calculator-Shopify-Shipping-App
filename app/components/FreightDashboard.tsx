@@ -90,6 +90,8 @@ export type FreightDashboardProps = {
    * tab pills. Omitted by the detail route (which shows a single order).
    */
   counts?: DashboardCounts;
+  /** Distinct suppliers (Shopify Vendor) for the filter dropdown. Server list. */
+  suppliers?: string[];
   total: number;
   page: number;
   pageCount: number;
@@ -267,6 +269,7 @@ export default function FreightDashboard({
   orders,
   allOrders,
   counts,
+  suppliers = [],
   page,
   pageCount,
   shop,
@@ -370,6 +373,22 @@ export default function FreightDashboard({
       return np;
     });
   };
+
+  const activeSupplier = searchParams.get("supplier") ?? "";
+  const setSupplier = (v: string) =>
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (v) np.set("supplier", v); else np.delete("supplier");
+      np.set("page", "1");
+      return np;
+    });
+
+  // Bulk EDD update over the selected line items.
+  const [bulkEddModal, setBulkEddModal] = useState(false);
+  const [bulkEddForm, setBulkEddForm] = useState({ newEdd: "", notifyCustomer: false });
+  const [bulkEddError, setBulkEddError] = useState("");
+  const [isBulkSavingEdd, setIsBulkSavingEdd] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -663,6 +682,70 @@ export default function FreightDashboard({
       setEddError(e instanceof Error ? e.message : "Failed to save EDD");
     } finally {
       setIsSavingEdd(false);
+    }
+  };
+
+  // Selected line items among the loaded rows (bulk acts on the current view).
+  const selectedTargets = (rows || []).flatMap((o) =>
+    o.lineItems.filter((li) => selected.has(li.id)).map((li) => ({ order: o, item: li })),
+  );
+
+  // ── Bulk EDD update ───────────────────────────────────────────────────────
+  // Reuses the single-item /api/order-status endpoint per selected line item,
+  // so each update keeps its own note trail + Cin7/Monday side effects.
+  const handleBulkEddSave = async () => {
+    if (!bulkEddForm.newEdd) { setBulkEddError("Please select a date before saving"); return; }
+    if (selectedTargets.length === 0) { setBulkEddError("No line items selected"); return; }
+    setBulkEddError("");
+    setIsBulkSavingEdd(true);
+    const newEdd = bulkEddForm.newEdd;
+    const fmt = (d: string) => new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+    let done = 0;
+    setBulkProgress({ done: 0, total: selectedTargets.length });
+    const succeeded = new Set<string>();
+    try {
+      for (const t of selectedTargets) {
+        const note: NoteItem = {
+          author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(),
+          text: t.item.eddDate ? `EDD changed from ${fmt(t.item.eddDate)} to ${fmt(newEdd)} (bulk).` : `EDD set to ${fmt(newEdd)} (bulk).`,
+        };
+        try {
+          const res = await fetch("/api/order-status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop, orderId: t.order.shopifyOrderId, variantId: t.item.variantId,
+              data: { eddDate: newEdd, originalEddDate: t.item.originalEddDate || t.item.eddDate || newEdd },
+              newNotes: [note.text],
+            }),
+          });
+          if (res.ok) succeeded.add(t.item.id);
+        } catch { /* keep going; count as failed */ }
+        done++;
+        setBulkProgress({ done, total: selectedTargets.length });
+      }
+
+      // Optimistically apply the new EDD to the rows that succeeded.
+      const apply = (o: FreightOrderRow): FreightOrderRow => ({
+        ...o,
+        lineItems: o.lineItems.map((li) =>
+          succeeded.has(li.id)
+            ? { ...li, eddDate: newEdd, originalEddDate: li.originalEddDate || li.eddDate || newEdd }
+            : li,
+        ),
+      });
+      setRows((prev = []) => prev.map(apply));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(apply) : prev));
+
+      const failed = selectedTargets.length - succeeded.size;
+      setSyncNotification(`Bulk EDD: ${succeeded.size} updated${failed ? `, ${failed} failed` : ""}`);
+      window.setTimeout(() => setSyncNotification(null), 4500);
+      setSelected(new Set());
+      setBulkEddModal(false);
+      setBulkEddForm({ newEdd: "", notifyCustomer: false });
+    } finally {
+      setIsBulkSavingEdd(false);
+      setBulkProgress(null);
     }
   };
 
@@ -1158,10 +1241,27 @@ export default function FreightDashboard({
                   />
                   {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
                 </label>
+                {selected.size > 0 && (
+                  <button
+                    className="fo-tool-btn"
+                    style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb" }}
+                    onClick={() => { setBulkEddError(""); setBulkEddForm({ newEdd: "", notifyCustomer: false }); setBulkEddModal(true); }}
+                  >
+                    <IconCalendar /> Bulk update EDD ({selected.size})
+                  </button>
+                )}
                 <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                  <select className="fo-status-select">
-                    <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
-                  </select>
+                  {serverDriven && (
+                    <select
+                      className="fo-status-select"
+                      value={activeSupplier}
+                      onChange={(e) => setSupplier(e.target.value)}
+                      title="Filter by supplier (Shopify Vendor)"
+                    >
+                      <option value="">All suppliers</option>
+                      {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                  )}
                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
                     <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
                       <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
@@ -1814,6 +1914,41 @@ export default function FreightDashboard({
               <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: "pointer" }}
                 onClick={handleEddSave} disabled={isSavingEdd}>
                 {isSavingEdd ? "Saving…" : "Update EDD"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Bulk EDD Modal ── */}
+      {bulkEddModal && (
+        <div className="fo-overlay" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }}>
+          <div style={{ background: "#fff", borderRadius: "10px", width: "480px", maxWidth: "95vw", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
+              <span style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>📅 Bulk update EDD — {selectedTargets.length} line item{selectedTargets.length === 1 ? "" : "s"}</span>
+              <button className="fo-modal-close" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }}>✕</button>
+            </div>
+            <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
+              {bulkEddError && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{bulkEddError}</div>}
+              <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                Applies the new EDD to all {selectedTargets.length} selected line item{selectedTargets.length === 1 ? "" : "s"} on this view.
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "6px" }}>New EDD</label>
+                <input type="date" value={bulkEddForm.newEdd} onChange={(e) => setBulkEddForm((p) => ({ ...p, newEdd: e.target.value }))}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", background: "#fff", color: "#111827", fontSize: "13px", outline: "none" }} />
+              </div>
+              {bulkProgress && (
+                <div style={{ fontSize: "13px", color: "#2563eb", fontWeight: 600 }}>
+                  Updating {bulkProgress.done} / {bulkProgress.total}…
+                </div>
+              )}
+            </div>
+            <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
+              <button className="fo-btn-ghost" onClick={() => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } }} disabled={isBulkSavingEdd}>Cancel</button>
+              <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: isBulkSavingEdd ? "wait" : "pointer" }}
+                onClick={handleBulkEddSave} disabled={isBulkSavingEdd}>
+                {isBulkSavingEdd ? "Updating…" : `Update ${selectedTargets.length} EDD`}
               </button>
             </div>
           </div>

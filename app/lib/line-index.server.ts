@@ -47,6 +47,7 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
       it.productTitle,
       it.variantTitle,
       it.sku,
+      it.vendor, // supplier — enables supplier-based search/filter
     ]
       .filter(Boolean)
       .join(" ")

@@ -37,17 +37,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
   const tab = url.searchParams.get("tab") || "all";
+  const supplier = (url.searchParams.get("supplier") || "").trim();
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
-  // Search predicate (shop + optional trigram search). Reused by rows + counts.
-  // Matches against the denormalized lowercase `searchText` so a single pg_trgm
-  // GIN index backs the leading-wildcard ILIKE (scales to ~1M rows).
+  // Search predicate (shop + optional trigram search + supplier). Reused by rows
+  // + counts. Search matches the denormalized lowercase `searchText` so a single
+  // pg_trgm GIN index backs the leading-wildcard ILIKE (scales to ~1M rows).
   const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
   if (q) {
     const like = `%${q.toLowerCase()}%`;
     conds.push(Prisma.sql`idx."searchText" LIKE ${like}`);
   }
+  if (supplier) {
+    conds.push(Prisma.sql`idx."vendor" = ${supplier}`);
+  }
   const searchWhere = Prisma.join(conds, " AND ");
+
+  // Distinct suppliers (Shopify Vendor) for the filter dropdown.
+  const supplierRows = await prisma.$queryRaw<Array<{ vendor: string }>>`
+    SELECT DISTINCT idx."vendor" FROM "OrderLineItemIndex" idx
+    WHERE idx."shop" = ${shop} AND idx."vendor" <> ''
+    ORDER BY idx."vendor" ASC
+  `;
+  const suppliers = supplierRows.map((r) => r.vendor);
 
   // Global counts (search applied, tab NOT applied) — feeds tab pills + stat cards.
   const countRows = await prisma.$queryRaw<
@@ -167,18 +179,19 @@ export async function loader({ request }: LoaderFunctionArgs) {
     completedCount: c.completed,
   };
 
-  return { orders, counts, total, page, pageCount, shop };
+  return { orders, counts, total, page, pageCount, shop, suppliers, supplier };
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FreightOrdersPage() {
-  const { orders, counts, total, page, pageCount, shop } = useLoaderData<typeof loader>();
+  const { orders, counts, total, page, pageCount, shop, suppliers } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
       orders={orders as any}
       counts={counts}
+      suppliers={suppliers}
       total={total}
       page={page}
       pageCount={pageCount}
