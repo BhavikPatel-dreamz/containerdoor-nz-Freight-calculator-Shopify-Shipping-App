@@ -6,45 +6,19 @@ import prisma from "../db.server";
 import { syncCin7EstimatedDispatchDate } from "../lib/cin7.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 
-// ─── Prisma model needed (see schema change below) ────────────────────────────
-
 export async function loader({ request, params }: LoaderFunctionArgs) {
-  const { admin, session } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const orderId = params.orderId!;
   const shop = session.shop;
 
-  const response = await admin.graphql(`
-    #graphql
-    query GetOrder($id: ID!) {
-      order(id: $id) {
-        id name createdAt currencyCode email phone displayFinancialStatus
-        shippingAddress { firstName lastName address1 city province zip country }
-        shippingLines(first: 5) {
-          nodes { title code originalPriceSet { shopMoney { amount currencyCode } } }
-        }
-        lineItems(first: 50) {
-          nodes {
-            id title quantity
-            originalUnitPriceSet { shopMoney { amount } }
-            variant { id sku }
-          }
-        }
-      }
-    }
-  `, { variables: { id: `gid://shopify/Order/${orderId}` } });
+  // Fetch from DB — no Shopify API call
+  const snap = await prisma.orderSnapshot.findUnique({
+    where: { shop_orderId: { shop, orderId } },
+  });
+  if (!snap) throw new Response("Order not found", { status: 404 });
 
-  const json = await response.json();
-  const order = json.data?.order;
-  if (!order) throw new Response("Order not found", { status: 404 });
-
-  // Parse line items from service_code
-  const shippingLine = order.shippingLines.nodes.find((s: any) =>
-    ["standard_delivery::", "depot_delivery::", "customer_pickup::"].some(
-      (p) => s.code?.startsWith(p)
-    )
-  );
-
-  const codeParts = shippingLine?.code?.split("::") ?? [];
+  // Parse line items from DB snapshot
+  const codeParts = snap.shippingCode.split("::");
   const lineItemsRaw = codeParts[4] ?? "";
 
   // Build variantId -> carrier map from service_code
@@ -57,6 +31,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     }
   }
 
+  // Parse line items from snapshot JSON
+  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string }> = [];
+  try { parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]"); } catch { /* empty */ }
+
   // Load existing per-line-item operational data
   const existingRecords = await prisma.orderLineItemOperationalData.findMany({
     where: { shop, orderId },
@@ -68,15 +46,51 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   });
   const cin7Exists = Boolean(orderOperationalData?.cin7SalesOrderId && orderOperationalData.cin7SalesOrderId !== "pending");
 
+  // Build order object matching the shape the component expects
+  const order = {
+    id: `gid://shopify/Order/${orderId}`,
+    name: snap.orderName,
+    createdAt: snap.createdAt.toISOString(),
+    currencyCode: snap.currencyCode,
+    email: snap.email,
+    phone: snap.phone,
+    displayFinancialStatus: snap.financialStatus,
+    shippingAddress: {
+      firstName: snap.shippingFirstName,
+      lastName: snap.shippingLastName,
+      address1: snap.shippingAddress1,
+      city: snap.shippingCity,
+      province: snap.shippingProvince,
+      zip: snap.shippingZip,
+      country: snap.shippingCountry,
+    },
+    shippingLines: {
+      nodes: [{
+        title: snap.shippingTitle,
+        code: snap.shippingCode,
+        originalPriceSet: { shopMoney: { amount: String(snap.totalFreight), currencyCode: snap.currencyCode } },
+      }],
+    },
+  };
+
   // Attach carrier + existing data to each line item
-  const lineItemsWithData = order.lineItems.nodes.map((item: any) => {
-    const numericVariantId = item.variant?.id?.replace("gid://shopify/ProductVariant/", "") ?? "";
+  const lineItemsWithData = parsedLineItems.map((item: any) => {
+    const numericVariantId = item.variantId != null ? String(item.variantId) : "";
     const carrier = carrierMap.get(numericVariantId) ?? "";
     const existing = existingMap.get(numericVariantId) ?? null;
-    return { ...item, numericVariantId, carrier, existing };
+    return {
+      id: item.id ? `gid://shopify/OrderLineItem/${item.id}` : "",
+      title: item.title ?? "",
+      quantity: item.quantity ?? 1,
+      originalUnitPriceSet: { shopMoney: { amount: item.price ?? "0" } },
+      variant: { id: `gid://shopify/ProductVariant/${numericVariantId}`, sku: item.sku ?? "" },
+      numericVariantId,
+      carrier,
+      existing,
+    };
   });
 
-  return { order, lineItemsWithData, shippingLine, codeParts, cin7Exists };
+  return { order, lineItemsWithData, shippingLine: order.shippingLines.nodes[0], codeParts, cin7Exists };
 }
 
 export async function action({ request, params }: ActionFunctionArgs) {

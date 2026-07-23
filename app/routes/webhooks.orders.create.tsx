@@ -7,6 +7,7 @@ import {
   createOrderLineItemRecords,
   createMondayEntriesForOrder,
   createCin7EntryForOrder,
+  saveOrderSnapshot,
 } from "../lib/order-webhook.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -16,7 +17,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const order = payload as OrderPayload;
 
   if (admin && order.id) {
-    // 1. Create operational record for every line item
+    // 1. Save order snapshot to DB (so pages can fetch from DB, not Shopify API)
+    await saveOrderSnapshot(shop, order);
+
+    // 2. Create operational record for every line item
     await createOrderLineItemRecords(shop, order);
 
     // 2. Write freight breakdown to order metafield (for customer-account extension)

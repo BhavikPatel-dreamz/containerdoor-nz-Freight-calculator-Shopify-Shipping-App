@@ -181,6 +181,83 @@ export async function writeFreightMetafield(
   }
 }
 
+// ─── Order snapshot (store full order data in DB) ───────────────────────────
+// Saves/updates order data so the freight-orders pages can read from DB
+// instead of calling the Shopify API on every page load.
+
+export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  const shipping = getShippingAddress(order);
+
+  const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+  const freightCode = freightLine?.code ?? "";
+  const freightParts = freightCode.split("::");
+
+  const lineItemsForJson = (order.line_items ?? []).map((li) => ({
+    id: li.id,
+    variantId: (li as any).variant_id,
+    title: li.title,
+    quantity: li.quantity,
+    sku: li.sku,
+    price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
+  }));
+
+  try {
+    await prisma.orderSnapshot.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      update: {
+        orderName: order.name ?? "",
+        email: order.email ?? "",
+        phone: order.phone ?? "",
+        currencyCode: order.currency ?? "NZD",
+        totalPrice: order.total_price ?? "0",
+        financialStatus: (order as any).financial_status ?? "",
+        fulfillmentStatus: (order as any).fulfillment_status ?? "",
+        shippingFirstName: shipping.first_name ?? "",
+        shippingLastName: shipping.last_name ?? "",
+        shippingAddress1: shipping.address1 ?? "",
+        shippingCity: shipping.city ?? "",
+        shippingProvince: shipping.province ?? "",
+        shippingZip: shipping.zip ?? "",
+        shippingCountry: shipping.country ?? shipping.country_code ?? "",
+        carriers: freightParts[1] ?? "",
+        packageCount: freightParts[2] ?? "",
+        shippingTitle: freightLine?.title ?? "",
+        shippingCode: freightCode,
+        totalFreight: Number(freightLine?.price ?? 0),
+        lineItemsJson: JSON.stringify(lineItemsForJson),
+      },
+      create: {
+        shop,
+        orderId,
+        orderName: order.name ?? "",
+        email: order.email ?? "",
+        phone: order.phone ?? "",
+        currencyCode: order.currency ?? "NZD",
+        totalPrice: order.total_price ?? "0",
+        financialStatus: (order as any).financial_status ?? "",
+        fulfillmentStatus: (order as any).fulfillment_status ?? "",
+        shippingFirstName: shipping.first_name ?? "",
+        shippingLastName: shipping.last_name ?? "",
+        shippingAddress1: shipping.address1 ?? "",
+        shippingCity: shipping.city ?? "",
+        shippingProvince: shipping.province ?? "",
+        shippingZip: shipping.zip ?? "",
+        shippingCountry: shipping.country ?? shipping.country_code ?? "",
+        carriers: freightParts[1] ?? "",
+        packageCount: freightParts[2] ?? "",
+        shippingTitle: freightLine?.title ?? "",
+        shippingCode: freightCode,
+        totalFreight: Number(freightLine?.price ?? 0),
+        lineItemsJson: JSON.stringify(lineItemsForJson),
+      },
+    });
+    console.log(`[OrderSnapshot][${orderId}] Saved for shop ${shop}`);
+  } catch (error) {
+    console.error(`[OrderSnapshot][${orderId}] FAILED`, error);
+  }
+}
+
 // ─── Line-item operational records ───────────────────────────────────────────
 // Creates an OrderLineItemOperationalData row for EVERY line item in the order.
 // This ensures all items are tracked operationally from the moment the order is placed.
