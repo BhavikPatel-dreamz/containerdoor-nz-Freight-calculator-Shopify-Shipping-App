@@ -12,6 +12,7 @@ export type FreightLineItem = {
   id: string;
   variantId: string;
   title?: string;
+  vendor?: string;
   sku?: string;
   productId?: string;
   company: string;
@@ -1313,7 +1314,7 @@ export default function FreightDashboard({
                       <thead>
                         <tr>
                           <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
-                          <th>Line order #</th><th>Customer</th><th>Product / SKU</th>
+                          <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Vendor</th>
                           <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
                           <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                         </tr>
@@ -1362,6 +1363,9 @@ export default function FreightDashboard({
                                   VAR-{item.variantId}{item.sku ? ` / ${item.sku}` : ""}
                                 </div>
                               )}
+                            </td>
+                            <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                              {item.vendor || "—"}
                             </td>
                             <td className="fo-td">
                               <div className="fo-edd-wrap">

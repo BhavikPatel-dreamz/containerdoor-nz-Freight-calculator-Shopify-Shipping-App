@@ -59,6 +59,7 @@ export type OrderPayload = {
     variant_id?: number;
     title?: string;
     sku?: string;
+    vendor?: string;
     quantity?: number;
     grams?: number;
     price?: string | number;
@@ -199,6 +200,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     title: li.title,
     quantity: li.quantity,
     sku: li.sku,
+    vendor: li.vendor ?? "",
     price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
   }));
 

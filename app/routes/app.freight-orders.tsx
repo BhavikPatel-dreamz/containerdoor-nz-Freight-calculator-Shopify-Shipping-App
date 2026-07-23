@@ -74,18 +74,20 @@ function buildRowFromSnapshot(
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
   if (!lineItemsRaw) return null;
 
-  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string }> = [];
+  let parsedLineItems: Array<{ id?: number; variantId?: number; title?: string; quantity?: number; sku?: string; price?: string; vendor?: string }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
 
   const variantTitleMap = new Map<string, string>();
   const variantSkuMap = new Map<string, string>();
+  const variantVendorMap = new Map<string, string>();
   for (const li of parsedLineItems) {
     if (li.variantId != null) {
       const vid = String(li.variantId);
       if (li.title) variantTitleMap.set(vid, li.title);
       if (li.sku) variantSkuMap.set(vid, li.sku);
+      if (li.vendor) variantVendorMap.set(vid, li.vendor);
     }
   }
 
@@ -97,6 +99,7 @@ function buildRowFromSnapshot(
       id: `${snap.orderId}-${idx}`,
       variantId,
       title: variantTitleMap.get(variantId) ?? ops?.productTitle ?? "",
+      vendor: variantVendorMap.get(variantId) ?? "",
       sku: variantSkuMap.get(variantId) ?? "",
       productId: "",
       company: company ?? "",
