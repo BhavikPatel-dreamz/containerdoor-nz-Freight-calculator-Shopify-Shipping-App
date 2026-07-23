@@ -39,13 +39,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const tab = url.searchParams.get("tab") || "all";
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
-  // Search predicate (shop + optional ILIKE-OR). Reused by rows + counts.
+  // Search predicate (shop + optional trigram search). Reused by rows + counts.
+  // Matches against the denormalized lowercase `searchText` so a single pg_trgm
+  // GIN index backs the leading-wildcard ILIKE (scales to ~1M rows).
   const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
   if (q) {
-    const like = `%${q}%`;
-    conds.push(
-      Prisma.sql`(idx."orderName" ILIKE ${like} OR idx."customerName" ILIKE ${like} OR idx."email" ILIKE ${like} OR idx."carriers" ILIKE ${like} OR idx."productTitle" ILIKE ${like} OR idx."sku" ILIKE ${like})`,
-    );
+    const like = `%${q.toLowerCase()}%`;
+    conds.push(Prisma.sql`idx."searchText" LIKE ${like}`);
   }
   const searchWhere = Prisma.join(conds, " AND ");
 

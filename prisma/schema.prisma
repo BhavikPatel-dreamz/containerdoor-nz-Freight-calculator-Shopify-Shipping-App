@@ -11,6 +11,10 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  // Emulate relations in Prisma (no DB-level foreign keys). Chosen because the
+  // order tables share legacy data that predates OrderSnapshot, so a hard FK
+  // could reject existing orphan rows on deploy.
+  relationMode = "prisma"
 }
 
 model Session {
@@ -122,6 +126,11 @@ model OrderSnapshot {
   // Raw line items JSON (for detail page)
   lineItemsJson  String   @default("[]")
 
+  // Relations — one order (snapshot) owns its operational + index rows.
+  operational  OrderOperationalData?
+  lineItemOps  OrderLineItemOperationalData[]
+  lineIndex    OrderLineItemIndex[]
+
   @@unique([shop, orderId])
   @@index([shop, createdAt])
 }
@@ -148,6 +157,8 @@ model OrderOperationalData {
   mondayStatusCheckedAt DateTime?
   createdAt           DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
 
   @@unique([shop, orderId])
 }
@@ -190,7 +201,11 @@ model OrderLineItemOperationalData {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
   @@unique([shop, orderId, variantId])
+  // Speeds the list tab-filter + count FILTER on customer status.
+  @@index([shop, customerStatus])
 }
 
 // Denormalized index: one row per FREIGHT line item. Immutable order/item
@@ -227,8 +242,17 @@ model OrderLineItemIndex {
   amount         Decimal  @default(0) @db.Decimal(10, 2)
   financialStatus   String @default("")
   fulfillmentStatus String @default("")
+  // Lowercased concatenation of the searchable fields (orderName, customerName,
+  // email, carriers, productTitle, sku). A pg_trgm GIN index on this (added in
+  // the migration SQL — Prisma can't express GIN) makes `ILIKE '%q%'` search
+  // index-backed instead of a full scan at scale.
+  searchText        String @default("")
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
 
   @@unique([shop, orderId, variantId])
+  // Matches the list ORDER BY so paginated reads are an ordered index scan.
+  @@index([shop, createdAt(sort: Desc), orderId(sort: Desc), letterSuffix])
   @@index([shop, createdAt])
 }
 

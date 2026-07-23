@@ -39,6 +39,17 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
   const variantIds = items.map((it) => it.variantId);
 
   const upserts = items.map((it) => {
+    const searchText = [
+      orderFields.orderName,
+      orderFields.customerName,
+      orderFields.email,
+      orderFields.carriers,
+      it.productTitle,
+      it.sku,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
     const data = {
       ...orderFields,
       letterSuffix: it.letterSuffix,
@@ -48,6 +59,7 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
       company: it.company,
       boxes: it.boxes,
       amount: it.amount,
+      searchText,
     };
     return prisma.orderLineItemIndex.upsert({
       where: { shop_orderId_variantId: { shop, orderId, variantId: it.variantId } },
