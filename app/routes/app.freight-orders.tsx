@@ -86,11 +86,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
       idx."letterSuffix", idx."customerName", idx."email", idx."phone", idx."city", idx."zip",
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
-      idx."shippingTitle", idx."productTitle", idx."sku", idx."vendor", idx."company",
+      idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
       ops."customerStatus", ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
+      ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
-      ood."cin7SalesOrderId" AS ood_cin7
+      ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -110,9 +111,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       id: `${r.orderId}-${variantId}`,
       variantId,
       title: r.productTitle || "",
+      variantTitle: r.variantTitle || "",
       vendor: r.vendor || "",
       sku: r.sku || "",
-      productId: "",
+      productId: r.productId || "",
       company: r.company || "",
       boxes: Number(r.boxes ?? 0),
       amount: Number(r.amount ?? 0),
@@ -123,6 +125,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       freightRef: r.freightRef ?? "",
       eddDate: r.eddDate ?? "",
       originalEddDate: r.originalEddDate ?? "",
+      warehouseStatus: r.warehouseStatus ?? "",
+      dispatchStatus: r.dispatchStatus ?? "",
+      deliveryStatus: r.deliveryStatus ?? "",
+      depositPaid: r.depositPaid ?? "",
+      balanceDue: r.balanceDue ?? "",
+      poNumber: r.ood_po ?? "",
       cin7Exists,
       cin7Status: statusOf(r.cin7CachedStatus),
       cin7Mismatches: listOf(r.cin7CachedMismatches),

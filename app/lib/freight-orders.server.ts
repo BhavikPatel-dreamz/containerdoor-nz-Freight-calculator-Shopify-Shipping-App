@@ -65,6 +65,8 @@ export type LineItemSnapshot = {
   variantId: string;
   letterSuffix: string;
   productTitle: string;
+  productId: string;
+  variantTitle: string;
   sku: string;
   vendor: string;
   company: string;
@@ -80,18 +82,22 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
   if (!lineItemsRaw) return [];
 
-  let parsedLineItems: Array<{ variantId?: number; title?: string; sku?: string; vendor?: string }> = [];
+  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
 
   const variantTitleMap = new Map<string, string>();
+  const variantProductIdMap = new Map<string, string>();
+  const variantOptionMap = new Map<string, string>();
   const variantSkuMap = new Map<string, string>();
   const variantVendorMap = new Map<string, string>();
   for (const li of parsedLineItems) {
     if (li.variantId != null) {
       const vid = String(li.variantId);
       if (li.title) variantTitleMap.set(vid, li.title);
+      if (li.productId != null) variantProductIdMap.set(vid, String(li.productId));
+      if (li.variantTitle) variantOptionMap.set(vid, li.variantTitle);
       if (li.sku) variantSkuMap.set(vid, li.sku);
       if (li.vendor) variantVendorMap.set(vid, li.vendor);
     }
@@ -107,6 +113,8 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
       variantId,
       letterSuffix: LETTERS[idx % 26],
       productTitle: variantTitleMap.get(variantId) ?? "",
+      productId: variantProductIdMap.get(variantId) ?? "",
+      variantTitle: variantOptionMap.get(variantId) ?? "",
       sku: variantSkuMap.get(variantId) ?? "",
       vendor: variantVendorMap.get(variantId) ?? "",
       company: company ?? "",
@@ -136,9 +144,10 @@ export function buildRowFromSnapshot(
       id: `${snap.orderId}-${it.idx}`,
       variantId: it.variantId,
       title: it.productTitle || ops?.productTitle || "",
+      variantTitle: it.variantTitle,
       vendor: it.vendor,
       sku: it.sku,
-      productId: "",
+      productId: it.productId,
       company: it.company,
       boxes: it.boxes,
       amount: it.amount,

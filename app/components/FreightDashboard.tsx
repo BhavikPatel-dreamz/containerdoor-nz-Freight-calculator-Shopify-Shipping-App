@@ -12,6 +12,7 @@ export type FreightLineItem = {
   id: string;
   variantId: string;
   title?: string;
+  variantTitle?: string;
   vendor?: string;
   sku?: string;
   productId?: string;
@@ -25,6 +26,12 @@ export type FreightLineItem = {
   freightRef?: string;   // NEW
   eddDate: string;
   originalEddDate: string;
+  warehouseStatus?: string;
+  dispatchStatus?: string;
+  deliveryStatus?: string;
+  depositPaid?: string;
+  balanceDue?: string;
+  poNumber?: string;
   cin7Exists?: boolean;
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
@@ -1244,11 +1251,13 @@ export default function FreightDashboard({
                         </span>
                       </div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Parent order #</span><span className="fo-detail-value">{detailView.order.shopifyOrderName}</span></div>
-                      <div className="fo-detail-row"><span className="fo-detail-label">Product</span><span className="fo-detail-value">{detailView.item.title ?? "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Product</span><span className="fo-detail-value">{detailView.item.title || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Variant</span><span className="fo-detail-value">{detailView.item.variantTitle || "—"}</span></div>
                       <div className="fo-detail-row">
                         <span className="fo-detail-label">SKU</span>
-                        <span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.variantId ? `VAR-${detailView.item.variantId.slice(-6)}` : "—"}</span>
+                        <span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.sku || "—"}</span>
                       </div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Product ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{detailView.item.productId || "—"}</span></div>
                       <div className="fo-detail-row"><span className="fo-detail-label">Quantity</span><span className="fo-detail-value">{detailView.item.boxes || 1}</span></div>
                       <div className="fo-detail-row">
                         <span className="fo-detail-label">Order date</span>
@@ -1324,6 +1333,23 @@ export default function FreightDashboard({
                         <span className="fo-detail-value">Today 09:41 · {detailView.order.customerName.split(" ")[0]}</span>
                       </div>
                     </div>
+
+                    <div className="fo-detail-panel">
+                      <div className="fo-detail-panel-hdr">Operational</div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Warehouse status</span><span className="fo-detail-value">{detailView.item.warehouseStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Dispatch status</span><span className="fo-detail-value">{detailView.item.dispatchStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Delivery status</span><span className="fo-detail-value">{detailView.item.deliveryStatus || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">PO #</span><span className="fo-detail-value">{detailView.item.poNumber || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Deposit paid</span><span className="fo-detail-value">{detailView.item.depositPaid || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{detailView.item.balanceDue || "—"}</span></div>
+                    </div>
+
+                    {/* Technical IDs — de-emphasized, not needed for day-to-day CS work */}
+                    <div className="fo-detail-panel" style={{ opacity: 0.75 }}>
+                      <div className="fo-detail-panel-hdr" style={{ fontSize: "11px", color: "#9ca3af" }}>Technical</div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>{detailView.item.variantId || "—"}</span></div>
+                      <div className="fo-detail-row"><span className="fo-detail-label">Line item id</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>{detailView.item.id}</span></div>
+                    </div>
                   </div>
 
                   {/* RIGHT — Notes */}
@@ -1379,8 +1405,8 @@ export default function FreightDashboard({
                       <thead>
                         <tr>
                           <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-                          <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Vendor</th>
-                          <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
+                          <th>Line order #</th><th>Customer</th><th>Product</th><th>Variant</th><th>SKU</th><th>Product ID</th><th>Supplier</th>
+                          <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
                           <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                         </tr>
                       </thead>
@@ -1418,15 +1444,19 @@ export default function FreightDashboard({
                             </td>
                             <td className="fo-td">
                               <div className="fo-prod-name">
-                                {item.title ?? (item.productId ? `#${item.productId}` : <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>#{item.variantId}</span>)}
+                                {item.title || "—"}
                                 {" "}
                                 <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span>
                               </div>
-                              {item.variantId && (
-                                <div className="fo-prod-sku">
-                                  VAR-{item.variantId}{item.sku ? ` / ${item.sku}` : ""}
-                                </div>
-                              )}
+                            </td>
+                            <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>
+                              {item.variantTitle || "—"}
+                            </td>
+                            <td className="fo-td" style={{ fontFamily: "monospace", fontSize: "12px" }}>
+                              {item.sku || "—"}
+                            </td>
+                            <td className="fo-td" style={{ fontFamily: "monospace", fontSize: "12px", color: "#6b7280" }}>
+                              {item.productId || "—"}
                             </td>
                             <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
                               {item.vendor || "—"}
@@ -1459,6 +1489,7 @@ export default function FreightDashboard({
                               </div>
                             </td>
                             <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
+                            <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>
                             <td className="fo-td">
                               {(() => {
                                 const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");

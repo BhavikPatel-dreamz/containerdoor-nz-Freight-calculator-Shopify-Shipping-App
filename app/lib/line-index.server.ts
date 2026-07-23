@@ -45,6 +45,7 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
       orderFields.email,
       orderFields.carriers,
       it.productTitle,
+      it.variantTitle,
       it.sku,
     ]
       .filter(Boolean)
@@ -54,6 +55,8 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
       ...orderFields,
       letterSuffix: it.letterSuffix,
       productTitle: it.productTitle,
+      productId: it.productId,
+      variantTitle: it.variantTitle,
       sku: it.sku,
       vendor: it.vendor,
       company: it.company,

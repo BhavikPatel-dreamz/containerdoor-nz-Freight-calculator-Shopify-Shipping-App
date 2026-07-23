@@ -235,6 +235,8 @@ model OrderLineItemIndex {
   carriers       String   @default("")
   shippingTitle  String   @default("")
   productTitle   String   @default("")
+  productId      String   @default("")
+  variantTitle   String   @default("")
   sku            String   @default("")
   vendor         String   @default("")
   company        String   @default("")
