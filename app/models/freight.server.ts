@@ -135,7 +135,6 @@ export async function listRates(
   const serviceType = filters?.serviceType || "";
   const where = {
     shop,
-    active: true,
     ...(company ? { company } : {}),
     ...(serviceType ? { serviceType } : {}),
     ...(query
