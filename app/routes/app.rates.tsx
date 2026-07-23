@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
   Link,
+  redirect,
   useActionData,
   useLoaderData,
   useNavigation,
@@ -52,18 +53,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "save");
 
   if (intent === "delete") {
-    return deleteRate(session.shop, String(formData.get("id")));
+    await deleteRate(session.shop, String(formData.get("id")));
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
   }
 
   if (intent === "bulkDelete") {
-  const ids = formData.getAll("ids").map(String);
-  return bulkDeleteRates(session.shop, ids);
-}
+    const ids = formData.getAll("ids").map(String);
+    await bulkDeleteRates(session.shop, ids);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
 
   if (intent === "bulkToggleActive") {
     const ids = formData.getAll("ids").map(String);
     const active = formData.get("active") === "true";
-    return bulkToggleActive(session.shop, ids, active);
+    await bulkToggleActive(session.shop, ids, active);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
   }
 
   if (intent === "export") {
@@ -444,7 +451,7 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
             <tbody>
               {rates.map((rate) => (
                 <InlineRateRow
-                  key={rate.id}
+                  key={`${rate.id}-${rate.active}-${rate.updatedAt}`}
                   rate={rate}
                   selected={selectedIds.has(rate.id)}
                   isDeleting={isDeleting}
