@@ -1405,7 +1405,7 @@ export default function FreightDashboard({
                       <thead>
                         <tr>
                           <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-                          <th>Line order #</th><th>Customer</th><th>Product</th><th>Variant</th><th>SKU</th><th>Product ID</th><th>Supplier</th>
+                          <th>Line order #</th><th>Customer</th><th>Product</th><th>Supplier</th>
                           <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
                           <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                         </tr>
@@ -1448,15 +1448,12 @@ export default function FreightDashboard({
                                 {" "}
                                 <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span>
                               </div>
-                            </td>
-                            <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>
-                              {item.variantTitle || "—"}
-                            </td>
-                            <td className="fo-td" style={{ fontFamily: "monospace", fontSize: "12px" }}>
-                              {item.sku || "—"}
-                            </td>
-                            <td className="fo-td" style={{ fontFamily: "monospace", fontSize: "12px", color: "#6b7280" }}>
-                              {item.productId || "—"}
+                              {item.variantTitle && (
+                                <div style={{ fontSize: "11px", color: "#374151" }}>{item.variantTitle}</div>
+                              )}
+                              <div className="fo-prod-sku" style={{ fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
+                                {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
+                              </div>
                             </td>
                             <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
                               {item.vendor || "—"}
