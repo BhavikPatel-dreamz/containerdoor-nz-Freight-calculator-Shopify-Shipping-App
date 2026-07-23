@@ -13,11 +13,13 @@ export type FreightLineItem = {
   variantId: string;
   title?: string;
   sku?: string;
+  productId?: string;
   company: string;
   boxes: number;
   amount: number;
   letterSuffix: string;
   customerStatus: string;
+  paymentStatus?: string;
   trackingNumber: string;
   freightRef?: string;   // NEW
   eddDate: string;
@@ -57,6 +59,7 @@ type NoteItem = {
   time: string;
   text: string;
   isSystem?: boolean;
+  pushToMonday?: boolean;
 };
 
 
@@ -104,6 +107,30 @@ function getCustomerStatusStyle(status: string): { bg: string; text: string; lab
   }
 }
 
+function getPaymentStatusStyle(status: string): { bg: string; text: string; label: string } {
+  switch ((status || "").toLowerCase()) {
+    case "paid":
+    case "fully_paid":
+    case "authorized":
+    case "captured":
+    case "complete":
+      return { bg: "#dcfce7", text: "#15803d", label: "Paid" };
+    case "partial":
+    case "partially_paid":
+    case "partially_refunded":
+      return { bg: "#fef3c7", text: "#92400e", label: "Partial" };
+    case "pending":
+    case "pending_payment":
+    case "unpaid":
+    case "authorized_pending_capture":
+    case "outstanding":
+      return { bg: "#f3f4f6", text: "#6b7280", label: "Pending" };
+    case "overdue": return { bg: "#fee2e2", text: "#b91c1c", label: "Overdue" };
+    case "refunded": return { bg: "#f3f4f6", text: "#6b7280", label: "Refunded" };
+    default: return { bg: "#f3f4f6", text: "#6b7280", label: status || "—" };
+  }
+}
+
 // function formatSeconds(seconds: number): string {
 //   if (seconds <= 0) return "0m";
 //   const mins = Math.floor(seconds / 60);
@@ -127,26 +154,27 @@ function parseNotesString(raw: string): NoteItem[] {
   const text = String(raw ?? "").trim();
   if (!text) return [];
   const blocks = text.split(/\r?\n\r?\n/).filter(Boolean);
-  const allTagged = blocks.every((block) => /^\s*\[(internal|customer|system)[\]|]/i.test(block));
+  const allTagged = blocks.every((block) => /^\s*\[(internal|customer|system)(:monday)?[\]|]/i.test(block));
   if (!allTagged) {
     return [{ author: "SP", role: "internal", scheme: "internal", time: "", text }];
   }
   return blocks.map((block) => {
     const trimmed = block.trim();
-    // Format: [scheme|author|time] text
     const richMatch = trimmed.match(/^\[([^|]+)\|([^|]*)\|([^\]]*)\]\s*(.*)$/i);
     if (richMatch) {
-      const scheme = richMatch[1].toLowerCase();
+      const rawScheme = richMatch[1].toLowerCase();
+      const pushToMonday = rawScheme.endsWith(":monday");
+      const scheme = rawScheme.replace(":monday", "");
       return {
         author: richMatch[2] || (scheme === "system" ? "SY" : "SP"),
         role: scheme === "customer" ? "customer" : scheme === "system" ? "system" : "internal",
         scheme,
         time: richMatch[3] || "",
         text: richMatch[4].trim(),
+        pushToMonday,
       };
     }
-    // Legacy format: [scheme] text
-    const match = trimmed.match(/^\[(internal|customer|system)\]\s*(.*)$/i);
+    const match = trimmed.match(/^\[(internal|customer|system)(:monday)?\]\s*(.*)$/i);
     if (!match) return { author: "SP", role: "internal", scheme: "internal", time: "", text: trimmed };
     const scheme = match[1].toLowerCase();
     return {
@@ -154,13 +182,14 @@ function parseNotesString(raw: string): NoteItem[] {
       role: scheme === "customer" ? "customer" : scheme === "system" ? "system" : "internal",
       scheme,
       time: "",
-      text: match[2].trim(),
+      text: match[3].trim(),
+      pushToMonday: Boolean(match[2]),
     };
   });
 }
 
 function serializeNotes(notes: NoteItem[]): string {
-  return notes.map((note) => `[${note.scheme}|${note.author}|${note.time}] ${note.text}`).join("\n\n");
+  return notes.map((note) => `[${note.scheme}${note.pushToMonday ? ":monday" : ""}|${note.author}|${note.time}] ${note.text}`).join("\n\n");
 }
 
 function formatNoteDateTime(d = new Date()): string {
@@ -209,7 +238,6 @@ const IconPlus = () => (
 export default function FreightDashboard({
   orders,
   allOrders,
-  total,
   page,
   pageCount,
   shop,
@@ -239,6 +267,9 @@ export default function FreightDashboard({
   const [noteModal, setNoteModal] = useState(false);
   const [noteTab, setNoteTab] = useState("internal");
   const [noteText, setNoteText] = useState("");
+  const [sendToMonday, setSendToMonday] = useState(false); // NEW
+  const [sendToCin7, setSendToCin7] = useState(false);      // NEW
+  const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingEdd, setIsSavingEdd] = useState(false);
   const [notesFetching, setNotesFetching] = useState(false);
   const [isSavingTracking, setIsSavingTracking] = useState(false);
@@ -382,87 +413,87 @@ export default function FreightDashboard({
     return () => { cancelled = true; };
   }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
 
-// ── NEW: lightweight polling to pick up field changes pushed in via the
-// Monday webhook (EDD, tracking, status, carrier). Reuses the existing
-useEffect(() => {
-  if (!rows || rows.length === 0) return;
-  let cancelled = false;
+  // ── NEW: lightweight polling to pick up field changes pushed in via the
+  // Monday webhook (EDD, tracking, status, carrier). Reuses the existing
+  useEffect(() => {
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
 
-  const pollFieldUpdates = async () => {
-    try {
-      const results = await Promise.all(
-        rows.map(async (order) => {
-          try {
-            const res = await fetch(
-              `/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`
-            );
-            if (!res.ok) return null;
-            const json = await res.json();
-            return { orderId: order.shopifyOrderId, lineItems: json.lineItems ?? [] };
-          } catch {
-            return null;
-          }
-        })
-      );
-      if (cancelled) return;
+    const pollFieldUpdates = async () => {
+      try {
+        const results = await Promise.all(
+          rows.map(async (order) => {
+            try {
+              const res = await fetch(
+                `/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`
+              );
+              if (!res.ok) return null;
+              const json = await res.json();
+              return { orderId: order.shopifyOrderId, lineItems: json.lineItems ?? [] };
+            } catch {
+              return null;
+            }
+          })
+        );
+        if (cancelled) return;
 
-      const byOrder: Record<string, any[]> = {};
-      for (const r of results) {
-        if (r) byOrder[r.orderId] = r.lineItems;
+        const byOrder: Record<string, any[]> = {};
+        for (const r of results) {
+          if (r) byOrder[r.orderId] = r.lineItems;
+        }
+        if (Object.keys(byOrder).length === 0) return;
+
+        const applyLatest = (o: FreightOrderRow): FreightOrderRow => {
+          const updates = byOrder[o.shopifyOrderId];
+          if (!updates) return o;
+          return {
+            ...o,
+            lineItems: o.lineItems.map((li) => {
+              const match = updates.find((u: any) => u.variantId === li.variantId);
+              if (!match) return li;
+              return {
+                ...li,
+                eddDate: match.eddDate || li.eddDate,
+                originalEddDate: match.originalEddDate || li.originalEddDate,
+                trackingNumber: match.trackingNumber || li.trackingNumber,
+                freightRef: match.freightRef || li.freightRef,
+                customerStatus: match.customerStatus || li.customerStatus,
+                company: match.carrier || li.company,
+              };
+            }),
+          };
+        };
+
+        setRows((prev) => prev.map(applyLatest));
+        if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+
+        setDetailView((prev) => {
+          if (!prev) return prev;
+          const updates = byOrder[prev.order.shopifyOrderId];
+          const match = updates?.find((u: any) => u.variantId === prev.item.variantId);
+          if (!match) return prev;
+          return {
+            ...prev,
+            item: {
+              ...prev.item,
+              eddDate: match.eddDate || prev.item.eddDate,
+              originalEddDate: match.originalEddDate || prev.item.originalEddDate,
+              trackingNumber: match.trackingNumber || prev.item.trackingNumber,
+              freightRef: match.freightRef || prev.item.freightRef,
+              customerStatus: match.customerStatus || prev.item.customerStatus,
+              company: match.carrier || prev.item.company,
+            },
+          };
+        });
+      } catch (e) {
+        console.error("Failed to poll line item field updates", e);
       }
-      if (Object.keys(byOrder).length === 0) return;
+    };
 
-      const applyLatest = (o: FreightOrderRow): FreightOrderRow => {
-        const updates = byOrder[o.shopifyOrderId];
-        if (!updates) return o;
-        return {
-          ...o,
-          lineItems: o.lineItems.map((li) => {
-            const match = updates.find((u: any) => u.variantId === li.variantId);
-            if (!match) return li;
-            return {
-              ...li,
-              eddDate: match.eddDate || li.eddDate,
-              originalEddDate: match.originalEddDate || li.originalEddDate,
-              trackingNumber: match.trackingNumber || li.trackingNumber,
-              freightRef: match.freightRef || li.freightRef,
-              customerStatus: match.customerStatus || li.customerStatus,
-              company: match.carrier || li.company,
-            };
-          }),
-        };
-      };
+    const interval = setInterval(pollFieldUpdates, 15000); // every 15s
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [rows.map((o) => o.id).join(","), shop]);
 
-      setRows((prev) => prev.map(applyLatest));
-      if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
-
-      setDetailView((prev) => {
-        if (!prev) return prev;
-        const updates = byOrder[prev.order.shopifyOrderId];
-        const match = updates?.find((u: any) => u.variantId === prev.item.variantId);
-        if (!match) return prev;
-        return {
-          ...prev,
-          item: {
-            ...prev.item,
-            eddDate: match.eddDate || prev.item.eddDate,
-            originalEddDate: match.originalEddDate || prev.item.originalEddDate,
-            trackingNumber: match.trackingNumber || prev.item.trackingNumber,
-            freightRef: match.freightRef || prev.item.freightRef,
-            customerStatus: match.customerStatus || prev.item.customerStatus,
-            company: match.carrier || prev.item.company,
-          },
-        };
-      });
-    } catch (e) {
-      console.error("Failed to poll line item field updates", e);
-    }
-  };
-
-  const interval = setInterval(pollFieldUpdates, 15000); // every 15s
-  return () => { cancelled = true; clearInterval(interval); };
-}, [rows.map((o) => o.id).join(","), shop]);
-  
   const filteredOrders = (rows || []).filter((o) => {
     // Tab filter — keep orders that have at least one matching line item
     if (activeTab !== "all") {
@@ -510,8 +541,6 @@ useEffect(() => {
     { key: "complete", label: "Completed", count: completedCount, color: "#6b7280" },
   ];
 
-
-
   // ── EDD save ──────────────────────────────────────────────────────────────
   const handleEddSave = async () => {
     if (!eddModal || !eddForm.newEdd) { setEddError("Please select a date before saving"); return; }
@@ -533,6 +562,7 @@ useEffect(() => {
         body: JSON.stringify({
           shop, orderId: eddModal.order.shopifyOrderId, variantId: eddModal.item.variantId,
           data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) },
+          newNotes: [systemNote.text],
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
@@ -602,6 +632,7 @@ useEffect(() => {
             freightRef: newFreightRef,
             notes: serializeNotes(nextNotes),
           },
+          newNotes: notesToAdd.map((n) => n.text),
         }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
@@ -1013,69 +1044,69 @@ useEffect(() => {
         <div className="fo-body">
           {/* ── Stat cards ── */}
           {!detailView && (
-          <div className="fo-stats">
-            {[
-              { label: "Total line orders", value: totalLineItems, color: "#111827" },
-              { label: "Awaiting dispatch", value: awaitingCount, color: "#d97706" },
-              { label: "Dispatched today", value: dispatchedCount, color: "#2563eb" },
-              { label: "Pending notify", value: pendingNotifyCount, color: "#dc2626" },
-            ].map(({ label, value, color }) => (
-              <div className="fo-stat" key={label}>
-                <div className="fo-stat-label">{label}</div>
-                <div className="fo-stat-value" style={{ color }}>{value}</div>
-              </div>
-            ))}
-          </div>
+            <div className="fo-stats">
+              {[
+                { label: "Total line orders", value: totalLineItems, color: "#111827" },
+                { label: "Awaiting dispatch", value: awaitingCount, color: "#d97706" },
+                { label: "Dispatched today", value: dispatchedCount, color: "#2563eb" },
+                { label: "Pending notify", value: pendingNotifyCount, color: "#dc2626" },
+              ].map(({ label, value, color }) => (
+                <div className="fo-stat" key={label}>
+                  <div className="fo-stat-label">{label}</div>
+                  <div className="fo-stat-value" style={{ color }}>{value}</div>
+                </div>
+              ))}
+            </div>
           )}
 
           {/* ── Main card ── */}
           <div className="fo-card">
             {/* Tabs */}
             {!detailView && (
-            <div className="fo-tabs">
-              {TABS.map((tab) => (
-                <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setActiveTab(tab.key)}>
-                  {tab.label}
-                  <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
-                    {tab.key === "all" ? totalLineItems : tab.count}
-                  </span>
-                </button>
-              ))}
-            </div>
+              <div className="fo-tabs">
+                {TABS.map((tab) => (
+                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setActiveTab(tab.key)}>
+                    {tab.label}
+                    <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
+                      {tab.key === "all" ? totalLineItems : tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
             )}
 
             {/* Toolbar */}
             {!detailView && (
-            <div className="fo-toolbar">
-              <label className="fo-select-label">
-                <input type="checkbox" className="fo-checkbox"
-                  checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
-                  onChange={toggleSelectAll}
-                />
-                {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
-              </label>
-              <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                <select className="fo-status-select">
-                  <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
-                </select>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
-                  <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
-                    <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                      {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
-                    </button>
+              <div className="fo-toolbar">
+                <label className="fo-select-label">
+                  <input type="checkbox" className="fo-checkbox"
+                    checked={selected.size === filteredOrders.length && filteredOrders.length > 0}
+                    onChange={toggleSelectAll}
+                  />
+                  {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
+                </label>
+                <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
+                  <select className="fo-status-select">
+                    <option>All statuses</option><option>Paid</option><option>Pending</option><option>Authorized</option>
+                  </select>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
+                    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
+                      <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                        {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
+                      </button>
+                    </div>
                   </div>
+                  <button className="fo-tool-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
+                    Filter
+                  </button>
+                  <button className="fo-tool-btn">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
+                    Columns
+                  </button>
                 </div>
-                <button className="fo-tool-btn">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                  Filter
-                </button>
-                <button className="fo-tool-btn">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
-                  Columns
-                </button>
               </div>
-            </div>
             )}
             {syncNotification && (
               <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
@@ -1109,7 +1140,7 @@ useEffect(() => {
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); }}>
+                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                       Add note
                     </button>
@@ -1172,6 +1203,14 @@ useEffect(() => {
                           </span>
                         </span>
                       </div>
+                      <div className="fo-detail-row">
+                        <span className="fo-detail-label">Payment status</span>
+                        <span className="fo-detail-value">
+                          <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(detailView.item.paymentStatus || "").bg, color: getPaymentStatusStyle(detailView.item.paymentStatus || "").text }}>
+                            {getPaymentStatusStyle(detailView.item.paymentStatus || "").label || "—"}
+                          </span>
+                        </span>
+                      </div>
                     </div>
 
                     <div className="fo-detail-panel">
@@ -1225,7 +1264,7 @@ useEffect(() => {
                   <div className="fo-detail-right">
                     <div className="fo-notes-hdr">
                       Notes & Customer History
-                      <button className="fo-notes-add-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); }}>
+                      <button className="fo-notes-add-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}>
                         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                         Add note
                       </button>
@@ -1275,7 +1314,7 @@ useEffect(() => {
                     <tr>
                       <th><input type="checkbox" className="fo-checkbox" checked={selected.size === filteredOrders.length && filteredOrders.length > 0} onChange={toggleSelectAll} /></th>
                       <th>Line order #</th><th>Customer</th><th>Product / SKU</th><th>Qty</th>
-                      <th>EDD (current / orig)</th><th>Customer status</th><th>Carrier</th>
+                      <th>EDD (current / orig)</th><th>Customer status</th><th>Payment status</th><th>Carrier</th>
                       <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
                     </tr>
                   </thead>
@@ -1313,8 +1352,14 @@ useEffect(() => {
                               <div className="fo-cust-email">{order.email}</div>
                             </td>
                             <td className="fo-td">
-                              <div className="fo-prod-name">{item.title ?? <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>#{item.variantId}</span>}</div>
-                              {item.variantId && <div className="fo-prod-sku">VAR-{item.variantId.slice(-6)}</div>}
+                              <div className="fo-prod-name">
+                                {item.title ?? (item.productId ? `#${item.productId}` : <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#9ca3af" }}>#{item.variantId}</span>)}
+                              </div>
+                              {item.variantId && (
+                                <div className="fo-prod-sku">
+                                  VAR-{item.variantId}{item.sku ? ` / ${item.sku}` : ""}
+                                </div>
+                              )}
                             </td>
                             <td className="fo-td"><span className="fo-qty-cell">{item.boxes || 1}</span></td>
                             <td className="fo-td">
@@ -1345,6 +1390,16 @@ useEffect(() => {
                               </div>
                             </td>
                             <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
+                            <td className="fo-td">
+                              {(() => {
+                                const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
+                                return (
+                                  <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
+                                    {payLabel || "—"}
+                                  </span>
+                                );
+                              })()}
+                            </td>
                             <td className="fo-td">
                               {isFirstItem ? (
                                 <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", alignItems: "center" }}>
@@ -1473,8 +1528,8 @@ useEffect(() => {
                             <td className="fo-td">
                               <div className="fo-act-wrap">
                                 <div className="fo-act-row">
-                                  <button className="fo-icon-btn" title="View order" onClick={() => navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}><IconEye /></button>
-                                  <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); }}><IconChat /></button>
+                                  <button className="fo-icon-btn" title="View order" onClick={() => { setDetailView({ order, item }); setNotes([]); }}><IconEye /></button>
+                                  <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}><IconChat /></button>
                                 </div>
                                 <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
                               </div>
@@ -1708,24 +1763,43 @@ useEffect(() => {
                 style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
                 autoFocus />
             </div>
+            <div style={{ padding: "0 12px 12px", background: "#fff" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+                <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
+                Send this note to Monday.com (visible to Warehouse)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer", marginTop: "8px" }}>
+                <input type="checkbox" checked={sendToCin7} onChange={(e) => setSendToCin7(e.target.checked)} />
+                Send this note to Cin7 (Internal Comments)
+              </label>
+            </div>
             <div style={{ display: "flex", gap: "8px", padding: "12px", borderTop: "1px solid #e5e7eb", justifyContent: "flex-end" }}>
               <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280", cursor: "pointer" }}
                 onClick={() => { setNoteModal(false); setNoteModalTarget(null); }}>Cancel</button>
-              <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer" }}
+              <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: isSavingNote ? 0.8 : 1 }}
                 onClick={async () => {
-                  if (!noteText.trim() || !activeNoteTarget) return;
+                  if (!noteText.trim() || !activeNoteTarget || isSavingNote) return;
+                  setIsSavingNote(true);
                   const newNoteEntry: NoteItem = {
                     author: noteAuthor,
                     role: noteTab === "internal" ? "internal" : "customer",
                     scheme: noteTab,
                     time: formatNoteDateTime(),
                     text: noteText.trim(),
+                    pushToMonday: sendToMonday,
                   };
                   const nextNotes = [...notes, newNoteEntry];
                   try {
                     const res = await fetch("/api/order-status", {
                       method: "POST", headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ shop, orderId: activeNoteTarget.order.shopifyOrderId, variantId: activeNoteTarget.item.variantId, data: { notes: serializeNotes(nextNotes) } }),
+                      body: JSON.stringify({
+                        shop,
+                        orderId: activeNoteTarget.order.shopifyOrderId,
+                        variantId: activeNoteTarget.item.variantId,
+                        data: { notes: serializeNotes(nextNotes) },
+                        newNotes: [noteText.trim()],
+                        newCin7Notes: sendToCin7 ? [noteText.trim()] : [],   // NEW
+                      }),
                     });
                     if (!res.ok) {
                       const e = await res.json().catch(() => ({}));
@@ -1734,14 +1808,19 @@ useEffect(() => {
                     }
                     setNotes(nextNotes);
                     setNoteText("");
+                    setSendToMonday(false);
+                    setSendToCin7(false);
                     setNoteModal(false);
                     setNoteModalTarget(null);
                   } catch (error) {
                     console.error("Failed to save note", error);
+                  } finally {
+                    setIsSavingNote(false);
                   }
                 }}
+                disabled={isSavingNote}
               >
-                Save note
+                {isSavingNote ? "Saving…" : "Save note"}
               </button>
             </div>
           </div>

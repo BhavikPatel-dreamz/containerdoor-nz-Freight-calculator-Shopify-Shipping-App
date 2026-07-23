@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
   Link,
+  redirect,
   useActionData,
   useLoaderData,
   useNavigation,
@@ -19,7 +20,7 @@ import {
   serviceTypes,
   toMoney,
 } from "../lib/freight";
-import { deleteRate, bulkDeleteRates, exportRatesCsv, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
+import { deleteRate, bulkDeleteRates, bulkToggleActive, exportRatesCsv, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
 import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -29,6 +30,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const query = url.searchParams.get("q") || "";
   const companyParam = url.searchParams.get("company") || "";
   const serviceTypeParam = url.searchParams.get("serviceType") || "";
+  const activeParam = url.searchParams.get("active") || "";
 
   const company = carrierCompanies.includes(companyParam as (typeof carrierCompanies)[number])
     ? companyParam
@@ -41,6 +43,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     query,
     company: company as "" | (typeof carrierCompanies)[number],
     serviceType: serviceType as "" | (typeof serviceTypes)[number],
+    active: (activeParam === "true" || activeParam === "false") ? activeParam as "true" | "false" : "",
   });
 };
 
@@ -50,13 +53,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(formData.get("intent") || "save");
 
   if (intent === "delete") {
-    return deleteRate(session.shop, String(formData.get("id")));
+    await deleteRate(session.shop, String(formData.get("id")));
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
   }
 
   if (intent === "bulkDelete") {
-  const ids = formData.getAll("ids").map(String);
-  return bulkDeleteRates(session.shop, ids);
-}
+    const ids = formData.getAll("ids").map(String);
+    await bulkDeleteRates(session.shop, ids);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
+
+  if (intent === "bulkToggleActive") {
+    const ids = formData.getAll("ids").map(String);
+    const active = formData.get("active") === "true";
+    await bulkToggleActive(session.shop, ids, active);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
 
   if (intent === "export") {
   const csv = await exportRatesCsv(session.shop);
@@ -83,6 +98,7 @@ export default function RatesPage() {
 const isImporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "import";
 const isDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "delete";
 const isBulkDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkDelete";
+const isBulkToggling = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkToggleActive";
 
   useEffect(() => {
     if (actionData && "csv" in actionData && actionData.csv) {
@@ -98,6 +114,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
   const query = searchParams.get("q") || "";
   const selectedCompany = searchParams.get("company") || "";
   const selectedServiceType = searchParams.get("serviceType") || "";
+  const selectedActive = searchParams.get("active") || "";
 
   const buildPageLink = (nextPage: number) => {
     const params = new URLSearchParams();
@@ -105,6 +122,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
     if (query) params.set("q", query);
     if (selectedCompany) params.set("company", selectedCompany);
     if (selectedServiceType) params.set("serviceType", selectedServiceType);
+    if (selectedActive) params.set("active", selectedActive);
     return `/app/rates?${params.toString()}`;
   };
 
@@ -187,7 +205,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
         .search-form {
           display: grid;
           gap: 10px;
-          grid-template-columns: 2fr 1fr 1fr auto;
+          grid-template-columns: 2fr 1fr 1fr 1fr auto;
           flex: 1;
         }
         .search-form input,
@@ -299,15 +317,37 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
 
       <div className="top-row">
         {selectedIds.size > 0 ? (
-          <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
-            <input type="hidden" name="intent" value="bulkDelete" />
-            {[...selectedIds].map((id) => (
-              <input key={id} type="hidden" name="ids" value={id} />
-            ))}
-            <button className="top-btn" type="submit" style={{ color: "#c0392b", borderColor: "#c0392b" }}>
-             {isBulkDeleting ? "Deleting..." : `🗑 Delete selected (${selectedIds.size})`}
-            </button>
-          </Form>
+          <>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkDelete" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#c0392b", borderColor: "#c0392b" }}>
+               {isBulkDeleting ? "Deleting..." : `Delete selected (${selectedIds.size})`}
+              </button>
+            </Form>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkToggleActive" />
+              <input type="hidden" name="active" value="true" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#1e7e34", borderColor: "#1e7e34" }}>
+                {isBulkToggling ? "Updating..." : `Activate selected (${selectedIds.size})`}
+              </button>
+            </Form>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkToggleActive" />
+              <input type="hidden" name="active" value="false" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#e67e22", borderColor: "#e67e22" }}>
+                {isBulkToggling ? "Updating..." : `Deactivate selected (${selectedIds.size})`}
+              </button>
+            </Form>
+          </>
         ) : null}
         <button className="top-btn" type="button" onClick={() => setShowAddForm((value) => !value)}>
           + {showAddForm ? "Close add rate" : "Add rate"}
@@ -340,7 +380,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
         <div className="rates-head">
           <h2 className="rates-title">Rates list</h2>
           <p className="summary">
-            {total} active rates · page {page} of {pageCount}
+            {total} rates · page {page} of {pageCount}
           </p>
         </div>
 
@@ -362,6 +402,11 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
                   {serviceLabels[serviceType]}
                 </option>
               ))}
+            </select>
+            <select name="active" defaultValue={selectedActive}>
+              <option value="">All statuses</option>
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
             </select>
             <s-button type="submit">Search</s-button>
           </Form>
@@ -406,7 +451,7 @@ const isBulkDeleting = navigation.state === "submitting" && navigation.formData?
             <tbody>
               {rates.map((rate) => (
                 <InlineRateRow
-                  key={rate.id}
+                  key={`${rate.id}-${rate.active}-${rate.updatedAt}`}
                   rate={rate}
                   selected={selectedIds.has(rate.id)}
                   isDeleting={isDeleting}

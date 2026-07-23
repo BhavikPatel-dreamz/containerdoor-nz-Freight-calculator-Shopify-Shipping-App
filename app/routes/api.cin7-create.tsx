@@ -99,33 +99,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               phone
             }
             shippingLines(first: 5) {
-          nodes {
-            title
-            code
-            discountedPriceSet {
-              shopMoney {
+              nodes {
+                title
+                code
+                discountedPriceSet {
+                  presentmentMoney {
+                    amount
+                  }
+                }
+              }
+            }
+            totalPriceSet {
+              presentmentMoney {
+                amount
+                currencyCode
+              }
+            }
+            totalDiscountsSet {
+              presentmentMoney {
                 amount
               }
             }
-          }
-        }
-        totalDiscountsSet {
-          shopMoney {
-            amount
-          }
-        }
-        discountCodes
-        taxLines {
-          rate
-        }
-        taxesIncluded
+            discountCodes
+            taxLines {
+              rate
+            }
+            taxesIncluded
             lineItems(first: 50) {
               nodes {
                 sku
                 title
                 quantity
                 originalUnitPriceSet {
-                  shopMoney {
+                  presentmentMoney {
                     amount
                     currencyCode
                   }
@@ -162,7 +168,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         code: li.sku ?? "",
         name: li.title ?? "",
         qty: li.quantity ?? 1,
-        unitPrice: Number(li.originalUnitPriceSet?.shopMoney?.amount ?? 0),
+        unitPrice: Number(li.originalUnitPriceSet?.presentmentMoney?.amount ?? 0),
       }))
       .filter((li: { code: any; }) => li.code);
 
@@ -185,8 +191,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const shippingAddress = orderData.shippingAddress ?? {};
     const billingAddress = orderData.billingAddress ?? {};
     
-    // Extract currency from first line item or default to NZD
-    const currencyCode = (orderData.lineItems?.nodes?.[0]?.originalUnitPriceSet?.shopMoney?.currencyCode ?? "NZD");
+    // Extract currency from Shopify presentment money or default to NZD
+    const currencyCode = (orderData.lineItems?.nodes?.[0]?.originalUnitPriceSet?.presentmentMoney?.currencyCode ?? orderData.totalPriceSet?.presentmentMoney?.currencyCode ?? "NZD");
     
     // Extract carrier from first shipping line code (format: "service::CARRIER1,CARRIER2::boxes::...")
     const shippingLineCode = orderData.shippingLines?.nodes?.[0]?.code ?? "";
@@ -194,9 +200,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     
     // Extract phone from various sources
     const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
-    const freightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.shopMoney?.amount ?? 0);
+    const freightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.presentmentMoney?.amount ?? orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
     const freightDescription = orderData.shippingLines?.nodes?.[0]?.title ?? "";
-    const discountTotal = Number(orderData.totalDiscountsSet?.shopMoney?.amount ?? 0);
+    const discountTotal = Number(orderData.totalDiscountsSet?.presentmentMoney?.amount ?? 0);
     const discountDescription = orderData.discountCodes?.[0] ?? "";
     const taxRate = Number(orderData.taxLines?.[0]?.rate ?? 0) * 100;
     const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";

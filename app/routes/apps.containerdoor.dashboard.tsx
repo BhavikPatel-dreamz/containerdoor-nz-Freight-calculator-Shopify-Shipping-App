@@ -5,6 +5,7 @@ import { getReportUser} from "../lib/report-auth.server";
 import prisma from "../db.server";
 import { useState, useEffect } from "react";
 import FreightDashboard from "../components/FreightDashboard";
+import { freightServicePrefixes } from "../lib/freight";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -18,7 +19,6 @@ type ShopifyOrderNode = {
 };
 
 const PAGE_SIZE = 25;
-const FREIGHT_SERVICE_PREFIXES = ["standard_delivery::", "depot_delivery::", "customer_pickup::"];
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 // ─── Loader ───────────────────────────────────────────────────────────────────
@@ -237,7 +237,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Map: Map<string, boolean>) {
   const shippingLines = order.shippingLines?.nodes ?? [];
   const shippingLine = shippingLines.find((s) =>
-    FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
+    freightServicePrefixes.some((prefix) => s.code?.startsWith(prefix))
   );
   if (!shippingLine) return null;
   const parts = (shippingLine.code ?? "").split("::");

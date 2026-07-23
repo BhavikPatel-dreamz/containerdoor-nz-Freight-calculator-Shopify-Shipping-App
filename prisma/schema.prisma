@@ -89,6 +89,42 @@ model ShippingRate {
   @@index([shop, city, postalCode])
 }
 
+model OrderSnapshot {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  orderName       String   @default("")
+  email           String   @default("")
+  phone           String   @default("")
+  currencyCode    String   @default("NZD")
+  totalPrice      String   @default("0")
+  financialStatus String   @default("")
+  fulfillmentStatus String @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Shipping address
+  shippingFirstName String @default("")
+  shippingLastName  String @default("")
+  shippingAddress1  String @default("")
+  shippingCity      String @default("")
+  shippingProvince  String @default("")
+  shippingZip       String @default("")
+  shippingCountry   String @default("")
+
+  // Parsed freight info from shipping line code
+  carriers       String   @default("")
+  packageCount   String   @default("")
+  shippingTitle  String   @default("")
+  shippingCode   String   @default("")
+  totalFreight   Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Raw line items JSON (for detail page)
+  lineItemsJson  String   @default("[]")
+
+  @@unique([shop, orderId])
+  @@index([shop, createdAt])
+}
 
 model OrderOperationalData {
   id              String   @id @default(cuid())
@@ -125,6 +161,7 @@ model OrderLineItemOperationalData {
   carrier           String   @default("")
   customerStatus    String   @default("")
   customerStatusUpdatedAt DateTime?   // NEW
+  paymentStatus     String   @default("")
   warehouseStatus   String   @default("")
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")

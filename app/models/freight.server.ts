@@ -126,6 +126,7 @@ export async function listRates(
     query?: string;
     company?: CarrierCompany | "";
     serviceType?: ServiceType | "";
+    active?: "true" | "false" | "";
   },
 ) {
   const take = 100;
@@ -133,11 +134,13 @@ export async function listRates(
   const query = filters?.query?.trim();
   const company = filters?.company || "";
   const serviceType = filters?.serviceType || "";
+  const activeFilter = filters?.active ?? "";
   const where = {
     shop,
-    active: true,
     ...(company ? { company } : {}),
     ...(serviceType ? { serviceType } : {}),
+    ...(activeFilter === "true" ? { active: true } : {}),
+    ...(activeFilter === "false" ? { active: false } : {}),
     ...(query
       ? {
           OR: [
@@ -157,6 +160,9 @@ export async function listRates(
     }),
     prisma.shippingRate.count({ where }),
   ]);
+
+
+  console.log(`[DEBUG] listRates ${rates.length} shop:${shop} page:${page} query:${query} company:${company} serviceType:${serviceType} total:${total}`);
 
    return {
      rates: rates.map((rate) => ({
@@ -210,6 +216,15 @@ export async function bulkDeleteRates(shop: string, ids: string[]) {
     where: { id: { in: ids }, shop },
   });
   return { ok: true, message: `${result.count} rates deleted` };
+}
+
+export async function bulkToggleActive(shop: string, ids: string[], active: boolean) {
+  if (ids.length === 0) return { ok: true, message: "0 rates updated" };
+  const result = await prisma.shippingRate.updateMany({
+    where: { id: { in: ids }, shop },
+    data: { active },
+  });
+  return { ok: true, message: `${result.count} rates ${active ? "activated" : "deactivated"}` };
 }
 
 export async function exportRatesCsv(shop: string) {
@@ -274,7 +289,31 @@ export async function exportRatesCsv(shop: string) {
   return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
 }
 
+async function upsertWithRetry(id: string, data: any, retries: number): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await prisma.shippingRate.upsert({
+        where: { id },
+        update: data,
+        create: { ...data, id },
+      });
+      return;
+    } catch (err: any) {
+      const msg = err?.message ?? "";
+      const retriable = msg.includes("cache lookup failed") || msg.includes("Can't reach database") || msg.includes("P1001");
+      if (attempt < retries && retriable) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 export async function importRatesCsv(shop: string, csv: string) {
+  // Warm up the Neon connection pool before bulk ops
+  await prisma.$queryRaw`SELECT 1`;
+
   const [headerLine, ...lines] = csv.split(/\r?\n/).filter(Boolean);
   if (!headerLine) return { ok: false, message: "CSV is empty" };
 
@@ -296,10 +335,10 @@ export async function importRatesCsv(shop: string, csv: string) {
       city: row.city || "All",
       sector: row.sector || null,
       postalCode: row.postalCode || "*",
-      useWeightRange: normaliseBoolean(row.useWeightRange),
+      useWeightRange: row.useWeightRange ? normaliseBoolean(row.useWeightRange) : false,
       minWeightGrams: toNullableInt(row.minWeightGrams),
       maxWeightGrams: toNullableInt(row.maxWeightGrams),
-      useVolumeRange: normaliseBoolean(row.useVolumeRange),
+      useVolumeRange: row.useVolumeRange ? normaliseBoolean(row.useVolumeRange) : false,
       minVolumeCm3: toNullableInt(row.minVolumeCm3),
       maxVolumeCm3: toNullableInt(row.maxVolumeCm3),
       rate: parseDecimalStringFull(row.rate),
@@ -312,7 +351,7 @@ export async function importRatesCsv(shop: string, csv: string) {
       homeDeliveryFee: row.homeDeliveryFee ? parseDecimalStringFull(row.homeDeliveryFee) : null,
       residentialFee: parseDecimalStringFull(row.residentialFee ?? "0"),
       mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
-      active: row.active === "" ? true : normaliseBoolean(row.active),
+      active: row.active == null || row.active === "" ? true : normaliseBoolean(row.active),
     };
 
     if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
@@ -322,27 +361,41 @@ export async function importRatesCsv(shop: string, csv: string) {
 
   // Rows WITH id → upsert in parallel
   const rowsWithId = rowsToProcess.filter((r) => r.id);
-  // Rows WITHOUT id → single createMany
+  // Rows WITHOUT id → batch createMany in smaller chunks with delay
   const rowsWithoutId = rowsToProcess.filter((r) => !r.id);
 
   if (rowsWithoutId.length > 0) {
-    const result = await prisma.shippingRate.createMany({
-      data: rowsWithoutId.map((r) => r.data),
-      skipDuplicates: true,
-    });
-    created = result.count;
+    // Use very small chunks (100) and add delay between batches to prevent pooler timeout
+    const chunkSize = 100;
+    for (let i = 0; i < rowsWithoutId.length; i += chunkSize) {
+      const chunk = rowsWithoutId.slice(i, i + chunkSize);
+      try {
+        const result = await prisma.shippingRate.createMany({
+          data: chunk.map((r) => r.data),
+          skipDuplicates: true,
+        });
+        created += result.count;
+      } catch (error) {
+        console.error(`[importRatesCsv] Error on chunk ${Math.floor(i / chunkSize)}:`, error);
+        throw error;
+      }
+      // Add 100ms delay between batches to allow connection pooler to recover
+      if (i + chunkSize < rowsWithoutId.length) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
   }
 
   if (rowsWithId.length > 0) {
-    await Promise.all(
-      rowsWithId.map((r) =>
-        prisma.shippingRate.upsert({
-          where: { id: r.id },
-          update: r.data,
-          create: { ...r.data, id: r.id },
-        })
-      )
-    );
+    const BATCH = 5;
+    for (let i = 0; i < rowsWithId.length; i += BATCH) {
+      const batch = rowsWithId.slice(i, i + BATCH);
+      await Promise.all(
+        batch.map((r) =>
+          upsertWithRetry(r.id, r.data, 3)
+        )
+      );
+    }
     updated = rowsWithId.length;
   }
 

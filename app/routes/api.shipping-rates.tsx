@@ -140,36 +140,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 };
 
-// function useStaticRates() {
-//   const value = String(process.env.USE_STATIC_SHIPPING_RATES || "false").toLowerCase();
-//   return value !== "false" && value !== "0";
-// }
-
-// function buildStaticRates(currency: string) {
-//   return [
-//     {
-//       "service_name": "Standard Shipping bhavik",
-//       "service_code": "STD",
-//       "total_price": "1400",
-//       "description": "3-5 Business Days",
-//       "currency": "USD"
-//     },
-//     {
-//       service_name: "Depot delivery",
-//       service_code: "depot_delivery",
-//       description: "ContainerDoor static test rate",
-//       currency,
-//       total_price: "9800",
-//     },
-//     {
-//       service_name: "Customer pickup",
-//       service_code: "customer_pickup",
-//       description: "Pickup from warehouse",
-//       currency,
-//       total_price: "0",
-//     },
-//   ];
-// }
 
 async function getFreightPackages(
   shop: string,

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
 import {
   reactExtension,
@@ -100,8 +101,8 @@ function FreightStatusBlock() {
     (api as any)?.extension?.appUrl ??
     (api as any)?.appUrl ??
     // Use production Vercel deployment by default
-    // "https://dd-75.dynamicdreamz.com";
-    "https://containerdoor-nz-freight-calculator.vercel.app";
+    "https://dd-75.dynamicdreamz.com";
+    // "https://containerdoor-nz-freight-calculator.vercel.app";
 
   const [records, setRecords] = useState<LineItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -247,6 +248,27 @@ function recordToFormState(r: LineItemRecord): EditableState {
     notes: r.notes ?? "",
   };
 }
+const FIELD_LABELS: Partial<Record<keyof EditableState, string>> = {
+  customerStatus: "Customer status",
+  warehouseStatus: "Warehouse status",
+  dispatchStatus: "Dispatch status",
+  deliveryStatus: "Delivery status",
+  trackingNumber: "Tracking #",
+  eddDate: "EDD",
+  portArrivalDate: "Port arrival date",
+  inTransitDate: "In transit date",
+  supplierContainer: "Supplier / container",
+  depositPaid: "Deposit paid",
+  balanceDue: "Balance due",
+};
+
+function formatNoteDateTime(d = new Date()): string {
+  return `${d.toLocaleDateString("en-NZ", { day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function buildSystemNote(text: string): string {
+  return `[system|SY|${formatNoteDateTime()}] ${text}`;
+}
 
 function ItemCard({
   record,
@@ -293,6 +315,32 @@ function ItemCard({
     setSaving(true);
     setSaveError(null);
     try {
+      // Diff against the original record to find which tracked fields changed
+      const before = recordToFormState(record);
+      const changedFields: (keyof EditableState)[] = (Object.keys(FIELD_LABELS) as (keyof EditableState)[])
+        .filter((key) => (before[key] ?? "") !== (form[key] ?? ""));
+
+      // Build one separate system note per changed field
+      const systemNotes = changedFields.map((key) => {
+        const oldVal = before[key] || "—";
+        const newVal = form[key] || "—";
+        return buildSystemNote(`${FIELD_LABELS[key]} changed from "${oldVal}" to "${newVal}".`);
+      });
+
+      let notesToSend = form.notes;
+      if (systemNotes.length > 0) {
+        const appended = systemNotes.join("\n\n");
+        notesToSend = notesToSend ? `${notesToSend}\n\n${appended}` : appended;
+      }
+
+      const nextData = { ...form, notes: notesToSend };
+
+      // Plain-text summary (no [tag] prefixes) to also push into Shopify's native order timeline
+      // One separate plain-text note per changed field, so each shows individually in the Shopify timeline
+      const fieldNotes = changedFields.map(
+        (key) => `Updated via order block — ${FIELD_LABELS[key]}: "${before[key] || "—"}" → "${form[key] || "—"}".`
+      );
+
       const res = await fetch(`${appUrl}/api/order-status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -300,12 +348,13 @@ function ItemCard({
           shop,
           orderId,
           variantId: record.variantId,
-          data: form,
+          data: nextData,
+          newNotes: fieldNotes,
         }),
       });
       const json = await res.json();
       if (!json.ok) throw new Error(json.error ?? "Save failed");
-      onSaved(form);
+      onSaved(nextData);
       setIsEditing(false);
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));

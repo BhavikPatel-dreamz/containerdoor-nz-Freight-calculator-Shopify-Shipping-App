@@ -159,3 +159,104 @@ export function parseDecimalStringFull(value: string | undefined) {
   const parsed = Number.parseFloat(String(value ?? "0"));
   return Number.isFinite(parsed) ? String(parsed) : "0";
 }
+
+// ─── Shipping-line code helpers ──────────────────────────────────────────────
+
+export const freightServicePrefixes = [
+  "standard_delivery::",
+  "depot_delivery::",
+  "customer_pickup::",
+] as const;
+
+export function isFreightShippingCode(code?: string): boolean {
+  if (!code) return false;
+  return freightServicePrefixes.some((prefix) => code.startsWith(prefix));
+}
+
+export function extractCarrierFromShippingCode(code?: string): string {
+  if (!code) return "";
+  const parts = code.split("::");
+  if (parts.length < 2) return "";
+  const carriers = parts[1]?.split(",") ?? [];
+  return carriers[0]?.trim() ?? "";
+}
+
+export type FreightLineItem = {
+  variantId: string;
+  title?: string;
+  sku?: string;
+  company: string;
+  companyLabel: string;
+  boxes: number;
+};
+
+export type FreightBreakdown = {
+  carriers: string;
+  packageCount: string;
+  lineItems: FreightLineItem[];
+};
+
+/**
+ * Parse a shipping-line code into structured freight data.
+ *
+ * Code format:
+ *   serviceType::CARRIERS::Nboxes::::::variantId:COMPANYxBoxes|variantId:COMPANYxBoxes
+ */
+export function parseFreightCode(
+  code: string | undefined,
+  lineItems?: Array<{ variant_id?: number; title?: string; sku?: string }>,
+): FreightBreakdown | null {
+  if (!code) return null;
+  if (!isFreightShippingCode(code)) return null;
+
+  const segments = code.split("::");
+  const carriers = segments[1];
+  const packageCount = segments[2];
+  const lineItemsRaw = segments[4];
+  if (!carriers || !lineItemsRaw) return null;
+
+  const titleByVariant = new Map<string, string>();
+  const skuByVariant = new Map<string, string>();
+  for (const li of lineItems ?? []) {
+    if (li.variant_id != null) {
+      if (li.title) titleByVariant.set(String(li.variant_id), li.title);
+      if (li.sku) skuByVariant.set(String(li.variant_id), li.sku);
+    }
+  }
+
+  const items = lineItemsRaw.split("|").map((part) => {
+    const [variantId, rest] = part.split(":");
+    const [company, boxesStr] = (rest ?? "").split("x");
+    return {
+      variantId,
+      title: titleByVariant.get(variantId),
+      sku: skuByVariant.get(variantId) ?? "",
+      company: company ?? "",
+      companyLabel: companyLabels[company ?? ""] ?? company ?? "",
+      boxes: Number(boxesStr ?? 0),
+    };
+  });
+
+  return { carriers, packageCount, lineItems: items };
+}
+
+export function extractFreightProperties(
+  properties: Array<{ name?: string; value?: string }>,
+) {
+  const map = Object.fromEntries(
+    properties
+      .filter((p) => p.name)
+      .map((p) => [String(p.name), String(p.value ?? "")]),
+  );
+
+  return {
+    company: map.courier_company,
+    serviceType: map.freight_service_type,
+    boxes: map.number_of_boxes,
+    unitsPerBox: map.units_per_box,
+    weightGrams: map.weight_grams,
+    volumeCm3: map.volume_cm3,
+    hiabRequired: map.hiab_required,
+    shippingCharge: map.freight_charge,
+  };
+}
