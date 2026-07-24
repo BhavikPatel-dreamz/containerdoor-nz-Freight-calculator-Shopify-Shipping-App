@@ -355,6 +355,7 @@ export async function action({ request }: ActionFunctionArgs) {
       pushIfChanged("receivedDate", "receivedDate");
       pushIfChanged("depositPaid", "depositPaid");
       pushIfChanged("balanceDue", "balanceDue");
+      pushIfChanged("paymentStatus", "paymentStatus");
       pushIfChanged("notes", "notes");
       // Fire-and-forget — push to Shopify + Monday + Cin7
       pushLineItemToAllSystems(syncFields, "admin").catch((e) =>

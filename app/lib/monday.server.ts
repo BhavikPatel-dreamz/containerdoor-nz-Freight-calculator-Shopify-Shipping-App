@@ -613,6 +613,7 @@ export async function fetchMondayItem(itemId: string) {
     deliveryStatus: getText("deliveryStatus"),
     depositPaid: getText("depositPaid"),
     balanceDue: getText("balanceDue"),
+    paymentStatus: getText("paymentStatus"),
     sku: getText("sku"),
   };
 }
