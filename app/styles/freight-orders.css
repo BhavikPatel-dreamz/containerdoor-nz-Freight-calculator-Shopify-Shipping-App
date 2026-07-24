@@ -404,6 +404,12 @@
   white-space: nowrap;
 }
 
+.fo-td-product {
+  white-space: normal;
+  width: 220px;
+  max-width: 220px;
+}
+
 .fo-prod-name {
   font-size: 12px;
   font-weight: 500;
@@ -412,6 +418,7 @@
 }
 
 .fo-prod-sku {
+
   font-size: 11px;
   color: #3b82f6;
   font-weight: 500;
@@ -456,9 +463,9 @@
 
 .fo-cust-status {
   display: inline-block;
-  padding: 3px 10px;
+  padding: 3px 12px;
   border-radius: 10px;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
 }
@@ -521,6 +528,30 @@
   border-color: #dc2626;
   color: #dc2626;
 }
+
+.fo-sync-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.fo-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  border: none;
+  white-space: nowrap;
+}
+
+.fo-sync-pill.green { background: #dcfce7; color: #15803d; }
+.fo-sync-pill.amber { background: #fef3c7; color: #92400e; cursor: pointer; }
+.fo-sync-pill.red   { background: #fee2e2; color: #dc2626; cursor: pointer; }
 
 /* ── Actions ── */
 .fo-act-wrap {
