@@ -134,6 +134,11 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.balanceDue = newBalanceDue;
       }
 
+      const newPaymentStatus = (mondayData.paymentStatus ?? "").trim();
+      if (newPaymentStatus && newPaymentStatus !== (record.paymentStatus ?? "")) {
+        updates.paymentStatus = newPaymentStatus;
+      }
+
       // ── Pull Monday Updates (operational notes) inbound ──
       try {
         const mondayUpdates = await fetchMondayUpdates(itemId);

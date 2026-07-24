@@ -38,6 +38,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const q = (url.searchParams.get("q") || "").trim();
   const tab = url.searchParams.get("tab") || "all";
   const supplier = (url.searchParams.get("supplier") || "").trim();
+  const warehouseStatus = (url.searchParams.get("warehouseStatus") || "").trim();
+  const warehouseTag = (url.searchParams.get("warehouseTag") || "").trim();
+  const carrier = (url.searchParams.get("carrier") || "").trim();
+  const paymentStatus = (url.searchParams.get("paymentStatus") || "").trim();
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
   // Search predicate (shop + optional trigram search + supplier). Reused by rows
@@ -52,10 +56,27 @@ export async function loader({ request }: LoaderFunctionArgs) {
       OR lower(idx."customerName") LIKE ${like}
       OR lower(idx."email") LIKE ${like}
       OR lower(idx."sku") LIKE ${like}
+      OR lower(idx."productId") LIKE ${like}
+      OR lower(idx."variantId") LIKE ${like}
+      OR lower(ops."trackingNumber") LIKE ${like}
     )`);
   }
   if (supplier) {
     conds.push(Prisma.sql`idx."vendor" = ${supplier}`);
+  }
+  if (warehouseStatus) {
+    conds.push(Prisma.sql`lower(ops."warehouseStatus") = ${warehouseStatus.toLowerCase()}`);
+  }
+  if (warehouseTag) {
+    const tagLike = `%${warehouseTag.toLowerCase()}%`;
+    conds.push(Prisma.sql`lower(ops."warehouseTags") LIKE ${tagLike}`);
+  }
+  if (carrier) {
+    const carrierLike = `%${carrier.toLowerCase()}%`;
+    conds.push(Prisma.sql`(lower(idx."company") LIKE ${carrierLike} OR lower(idx."carriers") LIKE ${carrierLike})`);
+  }
+  if (paymentStatus) {
+    conds.push(Prisma.sql`lower(ops."paymentStatus") = ${paymentStatus.toLowerCase()}`);
   }
   const searchWhere = Prisma.join(conds, " AND ");
 
@@ -66,6 +87,30 @@ export async function loader({ request }: LoaderFunctionArgs) {
     ORDER BY idx."vendor" ASC
   `;
   const suppliers = supplierRows.map((r) => r.vendor);
+
+  // Distinct filter options for dropdowns.
+  const [warehouseStatusRows, warehouseTagRows, carrierRows] = await Promise.all([
+    prisma.$queryRaw<Array<{ warehouseStatus: string }>>`
+      SELECT DISTINCT lower(ops."warehouseStatus") AS "warehouseStatus"
+      FROM "OrderLineItemOperationalData" ops
+      WHERE ops."shop" = ${shop} AND ops."warehouseStatus" <> ''
+      ORDER BY lower(ops."warehouseStatus") ASC
+    `,
+    prisma.$queryRaw<Array<{ warehouseTags: string }>>`
+      SELECT DISTINCT trim(unnest(string_to_array(ops."warehouseTags", ','))) AS "warehouseTags"
+      FROM "OrderLineItemOperationalData" ops
+      WHERE ops."shop" = ${shop} AND ops."warehouseTags" <> ''
+      ORDER BY trim(unnest(string_to_array(ops."warehouseTags", ','))) ASC
+    `,
+    prisma.$queryRaw<Array<{ company: string }>>`
+      SELECT DISTINCT idx."company" FROM "OrderLineItemIndex" idx
+      WHERE idx."shop" = ${shop} AND idx."company" <> ''
+      ORDER BY idx."company" ASC
+    `,
+  ]);
+  const warehouseStatuses = warehouseStatusRows.map((r) => r.warehouseStatus);
+  const warehouseTags = warehouseTagRows.map((r) => r.warehouseTags).filter(Boolean);
+  const carriers = carrierRows.map((r) => r.company);
 
   // Global counts (search applied, tab NOT applied) — feeds tab pills + stat cards.
   const countRows = await prisma.$queryRaw<
@@ -191,19 +236,23 @@ export async function loader({ request }: LoaderFunctionArgs) {
     completedCount: c.completed,
   };
 
-  return { orders, counts, total, page, pageCount, shop, suppliers, supplier };
+  return { orders, counts, total, page, pageCount, shop, suppliers, supplier, warehouseStatuses, warehouseTags, carriers, activeFilters: { warehouseStatus, warehouseTag, carrier, paymentStatus } };
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function FreightOrdersPage() {
-  const { orders, counts, total, page, pageCount, shop, suppliers } = useLoaderData<typeof loader>();
+  const { orders, counts, total, page, pageCount, shop, suppliers, warehouseStatuses, warehouseTags, carriers, activeFilters } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
       orders={orders as any}
       counts={counts}
       suppliers={suppliers}
+      warehouseStatuses={warehouseStatuses}
+      warehouseTags={warehouseTags}
+      carriers={carriers}
+      activeFilters={activeFilters}
       total={total}
       page={page}
       pageCount={pageCount}

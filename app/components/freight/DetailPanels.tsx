@@ -66,6 +66,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailP
         <div className="fo-detail-row"><span className="fo-detail-label">Supplier / Container</span><span className="fo-detail-value">{item.supplierContainer || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Deposit paid</span><span className="fo-detail-value">{item.depositPaid || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{item.balanceDue || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Payment status</span><span className="fo-detail-value">{item.paymentStatus || "—"}</span></div>
       </div>
 
       {/* 3. Customer */}
