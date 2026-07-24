@@ -76,6 +76,11 @@ export default function FreightDashboard({
   const [isRefreshingCin7, setIsRefreshingCin7] = useState(false);
   const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
   const [allowStatusPoll] = useState(false);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [showColumnsMenu, setShowColumnsMenu] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const toggleColumn = (key: string) => setHiddenColumns((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   useEffect(() => {
     if (!initialDetailOrderId) return;
@@ -296,8 +301,20 @@ export default function FreightDashboard({
         }
         if (!search.trim()) return true;
         const q = search.toLowerCase();
-        return o.shopifyOrderName.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q) || o.email.toLowerCase().includes(q) || (o.city ?? "").toLowerCase().includes(q) || o.carriers.toLowerCase().includes(q);
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
       });
+
+  const filteredOrders = statusFilter
+    ? baseFilteredOrders
+        .map((o) => ({ ...o, lineItems: o.lineItems.filter((li) => (li.customerStatus || "").toLowerCase() === statusFilter) }))
+        .filter((o) => o.lineItems.length > 0)
+    : baseFilteredOrders;
 
   const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
   const toggleSelectAll = () => setSelected(selected.size === selectableIds.length && selectableIds.length > 0 ? new Set() : new Set(selectableIds));
@@ -813,6 +830,7 @@ export default function FreightDashboard({
                 cin7FixingId={cin7FixingId}
                 mondayFixingId={mondayFixingId}
                 creatingCin7OrderId={creatingCin7OrderId}
+                hiddenColumns={hiddenColumns}
                 navigate={navigate}
               />
             )}

@@ -22,6 +22,7 @@ type OrderTableProps = {
   cin7FixingId: string | null;
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
+  hiddenColumns?: Set<string>;
   navigate: (url: string) => void;
 };
 
@@ -42,6 +43,7 @@ export function OrderTable({
   cin7FixingId,
   mondayFixingId,
   creatingCin7OrderId,
+  hiddenColumns = new Set(),
   navigate,
 }: OrderTableProps) {
   return (
@@ -50,9 +52,16 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th><th>Supplier</th>
-            <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
-            <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
+            <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th>
+            {!hiddenColumns.has("supplier") && <th>Supplier</th>}
+            <th>EDD (current / orig)</th><th>Customer status</th>
+            {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
+            {!hiddenColumns.has("payment") && <th>Payment status</th>}
+            {!hiddenColumns.has("carrier") && <th>Carrier</th>}
+            {!hiddenColumns.has("tracking") && <th>Tracking #</th>}
+            {!hiddenColumns.has("freightRef") && <th>Freight ref</th>}
+            {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && <th>Sync</th>}
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -87,7 +96,7 @@ export function OrderTable({
                     <div className="fo-cust-name">{order.customerName}</div>
                     <div className="fo-cust-email">{order.email}</div>
                   </td>
-                  <td className="fo-td">
+                  <td className="fo-td fo-td-product">
                     <div className="fo-prod-name">
                       {item.title || "—"}
                       {/* {" "} */}
@@ -100,9 +109,11 @@ export function OrderTable({
                       {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
                     </span>
                   </td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                    {item.vendor || "—"}
-                  </td>
+                  {!hiddenColumns.has("supplier") && (
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                      {item.vendor || "—"}
+                    </td>
+                  )}
                   <td className="fo-td">
                     <div className="fo-edd-wrap">
                       {item.eddDate ? (
@@ -131,136 +142,130 @@ export function OrderTable({
                     </div>
                   </td>
                   <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>
-                  <td className="fo-td">
-                    {(() => {
-                      const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
-                      return (
-                        <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
-                          {payLabel || "—"}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="fo-td">
-                    <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
-                  </td>
-                  <td className="fo-td">
-                    {item.trackingNumber ? (
-                      <button
-                        className="fo-tracking-num"
-                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
-                        onClick={() => onOpenTracking(order, item)}
-                      >
-                        {item.trackingNumber}
-                      </button>
-                    ) : (
-                      <button className="fo-tracking-add"
-                        onClick={() => onOpenTracking(order, item)}>
-                        <IconPlus /> Add
-                      </button>
-                    )}
-                  </td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                    {item.freightRef || "—"}
-                  </td>
-                  <td className="fo-td">
-                    {(() => {
-                      const status = getCin7CellStatus(item);
-                      const cellKey = `${order.id}-${item.variantId}`;
-
-                      if (status === "match") {
-                        return <span className="fo-circle green">✓</span>;
-                      }
-                      if (status === "error") {
+                  {!hiddenColumns.has("warehouse") && <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>}
+                  {!hiddenColumns.has("payment") && (
+                    <td className="fo-td">
+                      {(() => {
+                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
                         return (
-                          <span
-                            className="fo-circle"
-                            title="Order is voided or duplicated in Cin7 — cannot sync"
-                            style={{ color: "#f59e0b", background: "#fffbeb", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: "13px" }}
-                          >
-                            ⚠️
+                          <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
+                            {payLabel || "—"}
                           </span>
                         );
-                      }
-                      if (status === "mismatch") {
-                        return (
-                          <button
-                            type="button"
-                            className="fo-circle"
-                            title={`Out of sync: ${(item.cin7Mismatches ?? []).join(", ")}. Click to update Cin7.`}
-                            onClick={() => onFixCin7(order, item)}
-                            disabled={cin7FixingId === cellKey}
-                            style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", cursor: cin7FixingId === cellKey ? "wait" : "pointer" }}
-                          >
-                            !
-                          </button>
-                        );
-                      }
-                      return (
+                      })()}
+                    </td>
+                  )}
+                  {!hiddenColumns.has("carrier") && (
+                    <td className="fo-td">
+                      <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
+                    </td>
+                  )}
+                  {!hiddenColumns.has("tracking") && (
+                    <td className="fo-td">
+                      {item.trackingNumber ? (
                         <button
-                          type="button"
-                          className="fo-circle"
-                          title="Create order in Cin7"
-                          onClick={() => onCreateCin7(order)}
-                          disabled={creatingCin7OrderId === order.id}
-                          style={{
-                            color: "#dc2626",
-                            background: "#fee2e2",
-                            border: "none",
-                            padding: 0,
-                            minWidth: "24px",
-                            minHeight: "24px",
-                            cursor: creatingCin7OrderId === order.id ? "wait" : "pointer",
-                          }}
+                          className="fo-tracking-num"
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+                          onClick={() => onOpenTracking(order, item)}
                         >
-                          ✕
+                          {item.trackingNumber}
                         </button>
-                      );
-                    })()}
-                  </td>
-                  <td className="fo-td">
-                    {(() => {
-                      const status = item.mondayStatus ?? "missing";
-                      const cellKey = `${order.id}-${item.variantId}-monday`;
-                      if (status === "match") return <span className="fo-circle green">✓</span>;
-                      if (status === "mismatch") {
-                        return (
-                          <button
-                            type="button"
-                            className="fo-circle"
-                            title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
-                            onClick={() => onSyncMonday(order, item)}
-                            disabled={mondayFixingId === cellKey}
-                            style={{ color: "#92400e", background: "#fef3c7", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
-                          >
-                            !
-                          </button>
-                        );
-                      }
-                      return (
-                        <button
-                          type="button"
-                          className="fo-circle"
-                          title="Create order in Monday"
-                          onClick={() => onSyncMonday(order, item)}
-                          disabled={mondayFixingId === cellKey}
-                          style={{ color: "#dc2626", background: "#fee2e2", border: "none", padding: 0, minWidth: "24px", minHeight: "24px", display: "inline-flex", alignItems: "center", justifyContent: "center", cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
-                        >
-                          ✕
+                      ) : (
+                        <button className="fo-tracking-add"
+                          onClick={() => onOpenTracking(order, item)}>
+                          <IconPlus /> Add
                         </button>
-                      );
-                    })()}
-                  </td>
+                      )}
+                    </td>
+                  )}
+                  {!hiddenColumns.has("freightRef") && (
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                      {item.freightRef || "—"}
+                    </td>
+                  )}
+                  {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && (
+                    <td className="fo-td">
+                      <div className="fo-sync-stack">
+                        {!hiddenColumns.has("cin7") && (() => {
+                          const status = getCin7CellStatus(item);
+                          const cellKey = `${order.id}-${item.variantId}`;
+
+                          if (status === "match") {
+                            return <span className="fo-sync-pill green">CIN7 ✓</span>;
+                          }
+                          if (status === "error") {
+                            return (
+                              <span className="fo-sync-pill amber" title="Order is voided or duplicated in Cin7 — cannot sync">
+                                CIN7 ⚠️
+                              </span>
+                            );
+                          }
+                          if (status === "mismatch") {
+                            return (
+                              <button
+                                type="button"
+                                className="fo-sync-pill amber"
+                                title={`Out of sync: ${(item.cin7Mismatches ?? []).join(", ")}. Click to update Cin7.`}
+                                onClick={() => onFixCin7(order, item)}
+                                disabled={cin7FixingId === cellKey}
+                                style={{ cursor: cin7FixingId === cellKey ? "wait" : "pointer" }}
+                              >
+                                CIN7 !
+                              </button>
+                            );
+                          }
+                          return (
+                            <button
+                              type="button"
+                              className="fo-sync-pill red"
+                              title="Create order in Cin7"
+                              onClick={() => onCreateCin7(order)}
+                              disabled={creatingCin7OrderId === order.id}
+                              style={{ cursor: creatingCin7OrderId === order.id ? "wait" : "pointer" }}
+                            >
+                              CIN7 ✕
+                            </button>
+                          );
+                        })()}
+
+                        {!hiddenColumns.has("monday") && (() => {
+                          const status = item.mondayStatus ?? "missing";
+                          const cellKey = `${order.id}-${item.variantId}-monday`;
+                          if (status === "match") return <span className="fo-sync-pill green">Monday ✓</span>;
+                          if (status === "mismatch") {
+                            return (
+                              <button
+                                type="button"
+                                className="fo-sync-pill amber"
+                                title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
+                                onClick={() => onSyncMonday(order, item)}
+                                disabled={mondayFixingId === cellKey}
+                                style={{ cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+                              >
+                                Monday !
+                              </button>
+                            );
+                          }
+                          return (
+                            <button
+                              type="button"
+                              className="fo-sync-pill red"
+                              title="Create order in Monday"
+                              onClick={() => onSyncMonday(order, item)}
+                              disabled={mondayFixingId === cellKey}
+                              style={{ cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+                            >
+                              Monday ✕
+                            </button>
+                          );
+                        })()}
+                      </div>
+                    </td>
+                  )}
                   <td className="fo-td">
-                    <div className="fo-act-wrap">
-                      <div className="fo-act-row">
-                        <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
-                        <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
-                      </div>
-                      <div className="fo-cust-status-row">
-                        <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
-                      </div>
+                    <div className="fo-act-row">
+                      <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
+                      <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
                     </div>
                   </td>
                 </tr>
