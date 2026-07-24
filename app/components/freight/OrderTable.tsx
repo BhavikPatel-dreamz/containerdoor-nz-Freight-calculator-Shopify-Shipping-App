@@ -253,14 +253,9 @@ export function OrderTable({
                     })()}
                   </td>
                   <td className="fo-td">
-                    <div className="fo-act-wrap">
-                      <div className="fo-act-row">
-                        <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
-                        <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
-                      </div>
-                      <div className="fo-cust-status-row">
-                        <span className={statusClass} style={{ background: stBg, color: stText }}>{stLabel.toUpperCase() || "NOT SET"}</span>
-                      </div>
+                    <div className="fo-act-row">
+                      <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
+                      <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
                     </div>
                   </td>
                 </tr>

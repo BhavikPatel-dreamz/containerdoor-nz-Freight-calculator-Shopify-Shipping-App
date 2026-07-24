@@ -244,20 +244,7 @@ export default function FreightDashboard({
   }, [rows.map((o) => o.id).join(","), shop]);
 
   const filteredOrders = serverDriven
-    ? (rows || []).filter((o) => {
-        // Server already applied tab + supplier filters. Apply the text
-        // search instantly client-side too, so results update as you type
-        // instead of waiting on the debounced server round-trip.
-        if (!search.trim()) return true;
-        const q = search.toLowerCase();
-        return (
-          o.shopifyOrderName.toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          o.email.toLowerCase().includes(q) ||
-          (o.city ?? "").toLowerCase().includes(q) ||
-          o.carriers.toLowerCase().includes(q)
-        );
-      })
+    ? (rows || [])
     : (rows || []).filter((o) => {
         if (activeTab !== "all") {
           const hasMatch = o.lineItems.some((li) => {
@@ -271,7 +258,13 @@ export default function FreightDashboard({
         }
         if (!search.trim()) return true;
         const q = search.toLowerCase();
-        return o.shopifyOrderName.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q) || o.email.toLowerCase().includes(q) || (o.city ?? "").toLowerCase().includes(q) || o.carriers.toLowerCase().includes(q);
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
       });
 
   const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
