@@ -22,6 +22,7 @@ type OrderTableProps = {
   cin7FixingId: string | null;
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
+  hiddenColumns?: Set<string>;
   navigate: (url: string) => void;
 };
 
@@ -42,6 +43,7 @@ export function OrderTable({
   cin7FixingId,
   mondayFixingId,
   creatingCin7OrderId,
+  hiddenColumns = new Set(),
   navigate,
 }: OrderTableProps) {
   return (
@@ -50,9 +52,17 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th><th>Supplier</th>
-            <th>EDD (current / orig)</th><th>Customer status</th><th>Warehouse</th><th>Payment status</th><th>Carrier</th>
-            <th>Tracking #</th><th>Freight ref</th><th>Cin7</th><th>Monday</th><th>Actions</th>
+            <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th>
+            {!hiddenColumns.has("supplier") && <th>Supplier</th>}
+            <th>EDD (current / orig)</th><th>Customer status</th>
+            {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
+            {!hiddenColumns.has("payment") && <th>Payment status</th>}
+            {!hiddenColumns.has("carrier") && <th>Carrier</th>}
+            {!hiddenColumns.has("tracking") && <th>Tracking #</th>}
+            {!hiddenColumns.has("freightRef") && <th>Freight ref</th>}
+            {!hiddenColumns.has("cin7") && <th>Cin7</th>}
+            {!hiddenColumns.has("monday") && <th>Monday</th>}
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -100,9 +110,11 @@ export function OrderTable({
                       {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}{item.variantId ? ` · VAR ${item.variantId}` : ""}
                     </div>
                   </td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                    {item.vendor || "—"}
-                  </td>
+                  {!hiddenColumns.has("supplier") && (
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                      {item.vendor || "—"}
+                    </td>
+                  )}
                   <td className="fo-td">
                     <div className="fo-edd-wrap">
                       {item.eddDate ? (
@@ -131,39 +143,48 @@ export function OrderTable({
                     </div>
                   </td>
                   <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>
-                  <td className="fo-td">
-                    {(() => {
-                      const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
-                      return (
-                        <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
-                          {payLabel || "—"}
-                        </span>
-                      );
-                    })()}
-                  </td>
-                  <td className="fo-td">
-                    <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
-                  </td>
-                  <td className="fo-td">
-                    {item.trackingNumber ? (
-                      <button
-                        className="fo-tracking-num"
-                        style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
-                        onClick={() => onOpenTracking(order, item)}
-                      >
-                        {item.trackingNumber}
-                      </button>
-                    ) : (
-                      <button className="fo-tracking-add"
-                        onClick={() => onOpenTracking(order, item)}>
-                        <IconPlus /> Add
-                      </button>
-                    )}
-                  </td>
-                  <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
-                    {item.freightRef || "—"}
-                  </td>
+                  {!hiddenColumns.has("warehouse") && <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>}
+                  {!hiddenColumns.has("payment") && (
+                    <td className="fo-td">
+                      {(() => {
+                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
+                        return (
+                          <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
+                            {payLabel || "—"}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  )}
+                  {!hiddenColumns.has("carrier") && (
+                    <td className="fo-td">
+                      <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
+                    </td>
+                  )}
+                  {!hiddenColumns.has("tracking") && (
+                    <td className="fo-td">
+                      {item.trackingNumber ? (
+                        <button
+                          className="fo-tracking-num"
+                          style={{ background: "none", border: "none", padding: 0, cursor: "pointer", font: "inherit" }}
+                          onClick={() => onOpenTracking(order, item)}
+                        >
+                          {item.trackingNumber}
+                        </button>
+                      ) : (
+                        <button className="fo-tracking-add"
+                          onClick={() => onOpenTracking(order, item)}>
+                          <IconPlus /> Add
+                        </button>
+                      )}
+                    </td>
+                  )}
+                  {!hiddenColumns.has("freightRef") && (
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                      {item.freightRef || "—"}
+                    </td>
+                  )}
+                  {!hiddenColumns.has("cin7") && (
                   <td className="fo-td">
                     {(() => {
                       const status = getCin7CellStatus(item);
@@ -219,6 +240,8 @@ export function OrderTable({
                       );
                     })()}
                   </td>
+                  )}
+                  {!hiddenColumns.has("monday") && (
                   <td className="fo-td">
                     {(() => {
                       const status = item.mondayStatus ?? "missing";
@@ -252,6 +275,7 @@ export function OrderTable({
                       );
                     })()}
                   </td>
+                  )}
                   <td className="fo-td">
                     <div className="fo-act-row">
                       <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>

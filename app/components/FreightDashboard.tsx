@@ -72,6 +72,11 @@ export default function FreightDashboard({
   const [isRefreshingCin7, setIsRefreshingCin7] = useState(false);
   const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
   const [allowStatusPoll] = useState(false);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [showColumnsMenu, setShowColumnsMenu] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const toggleColumn = (key: string) => setHiddenColumns((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
 
   useEffect(() => {
     if (!initialDetailOrderId) return;
@@ -243,7 +248,7 @@ export default function FreightDashboard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [rows.map((o) => o.id).join(","), shop]);
 
-  const filteredOrders = serverDriven
+  const baseFilteredOrders = serverDriven
     ? (rows || [])
     : (rows || []).filter((o) => {
         if (activeTab !== "all") {
@@ -266,6 +271,12 @@ export default function FreightDashboard({
           o.carriers.toLowerCase().includes(q)
         );
       });
+
+  const filteredOrders = statusFilter
+    ? baseFilteredOrders
+        .map((o) => ({ ...o, lineItems: o.lineItems.filter((li) => (li.customerStatus || "").toLowerCase() === statusFilter) }))
+        .filter((o) => o.lineItems.length > 0)
+    : baseFilteredOrders;
 
   const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
   const toggleSelectAll = () => setSelected(selected.size === selectableIds.length && selectableIds.length > 0 ? new Set() : new Set(selectableIds));
@@ -637,14 +648,48 @@ export default function FreightDashboard({
                       </button>
                     </div>
                   </div>
-                  <button className="fo-tool-btn">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                    Filter
-                  </button>
-                  <button className="fo-tool-btn">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
-                    Columns
-                  </button>
+                  <div style={{ position: "relative" }}>
+                    <button className="fo-tool-btn" onClick={() => { setShowFilterMenu((v) => !v); setShowColumnsMenu(false); }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
+                      Filter{statusFilter ? " (1)" : ""}
+                    </button>
+                    {showFilterMenu && (
+                      <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 20, background: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "8px", minWidth: "180px" }}>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: "#6b7280", padding: "4px 8px" }}>Customer status</div>
+                        {["", "confirmed", "dispatched", "delivered", "cancelled", "pending"].map((s) => (
+                          <label key={s || "all"} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 8px", fontSize: "13px", cursor: "pointer" }}>
+                            <input type="radio" name="statusFilter" checked={statusFilter === s} onChange={() => { setStatusFilter(s); setShowFilterMenu(false); }} />
+                            {s ? s.charAt(0).toUpperCase() + s.slice(1) : "All statuses"}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ position: "relative" }}>
+                    <button className="fo-tool-btn" onClick={() => { setShowColumnsMenu((v) => !v); setShowFilterMenu(false); }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
+                      Columns
+                    </button>
+                    {showColumnsMenu && (
+                      <div style={{ position: "absolute", top: "calc(100% + 4px)", right: 0, zIndex: 20, background: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "8px", minWidth: "180px" }}>
+                        {[
+                          { key: "supplier", label: "Supplier" },
+                          { key: "warehouse", label: "Warehouse" },
+                          { key: "payment", label: "Payment status" },
+                          { key: "carrier", label: "Carrier" },
+                          { key: "tracking", label: "Tracking #" },
+                          { key: "freightRef", label: "Freight ref" },
+                          { key: "cin7", label: "Cin7" },
+                          { key: "monday", label: "Monday" },
+                        ].map(({ key, label }) => (
+                          <label key={key} style={{ display: "flex", alignItems: "center", gap: "8px", padding: "6px 8px", fontSize: "13px", cursor: "pointer" }}>
+                            <input type="checkbox" checked={!hiddenColumns.has(key)} onChange={() => toggleColumn(key)} />
+                            {label}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -728,6 +773,7 @@ export default function FreightDashboard({
                 cin7FixingId={cin7FixingId}
                 mondayFixingId={mondayFixingId}
                 creatingCin7OrderId={creatingCin7OrderId}
+                hiddenColumns={hiddenColumns}
                 navigate={navigate}
               />
             )}
