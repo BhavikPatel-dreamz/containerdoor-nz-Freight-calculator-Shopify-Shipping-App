@@ -29,7 +29,7 @@ export function NotesPanel({ notes, notesFetching, onAddNote }: NotesPanelProps)
         ) : notes.length === 0 ? (
           <div style={{ color: "#9ca3af", fontSize: "13px", textAlign: "center", marginTop: "40px" }}>No notes yet for this line item.</div>
         ) : null}
-        {[...notes].reverse().map((note, i) => (
+        {notes.map((note, i) => (
           <div className="fo-note-item" key={i}>
             <div className="fo-note-avatar" style={{ background: note.role === "customer" ? "#16a34a" : note.role === "system" ? "#6b7280" : "#2563eb" }}>
               {note.author.slice(0, 2).toUpperCase()}
