@@ -44,7 +44,7 @@ export function parseNotesString(raw: string): NoteItem[] {
   if (!allTagged) {
     return [{ author: "SP", role: "internal", scheme: "internal", time: "", text }];
   }
-  return blocks.map((block) => {
+  return blocks.reverse().map((block) => {
     const trimmed = block.trim();
     const richMatch = trimmed.match(/^\[([^|]+)\|([^|]*)\|([^\]]*)\]\s*(.*)$/i);
     if (richMatch) {
@@ -75,7 +75,7 @@ export function parseNotesString(raw: string): NoteItem[] {
 }
 
 export function serializeNotes(notes: NoteItem[]): string {
-  return notes.map((note) => `[${note.scheme}${note.pushToMonday ? ":monday" : ""}|${note.author}|${note.time}] ${note.text}`).join("\n\n");
+  return [...notes].reverse().map((note) => `[${note.scheme}${note.pushToMonday ? ":monday" : ""}|${note.author}|${note.time}] ${note.text}`).join("\n\n");
 }
 
 export function formatNoteDateTime(d = new Date()): string {

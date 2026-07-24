@@ -141,6 +141,7 @@ model OrderOperationalData {
   orderId         String
   customerStatus  String   @default("")
   warehouseStatus String   @default("")
+  warehouseTags   String   @default("")
   dispatchStatus  String   @default("")
   trackingNumber  String   @default("")
   deliveryStatus  String   @default("")
@@ -150,6 +151,7 @@ model OrderOperationalData {
   notes               String   @default("")
   eddDate             String   @default("")
   supplierContainer   String   @default("")
+  receivedDate        String   @default("")
   portArrivalDate     String   @default("")
   inTransitDate       String   @default("")
   cin7SalesOrderId    String   @default("")
@@ -174,6 +176,7 @@ model OrderLineItemOperationalData {
   customerStatusUpdatedAt DateTime?   // NEW
   paymentStatus     String   @default("")
   warehouseStatus   String   @default("")
+  warehouseTags     String   @default("")
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
@@ -190,6 +193,7 @@ model OrderLineItemOperationalData {
   notesPushedMondayItemId String? // NEW
   notesPulledUpdateIds    String   @default("")
   supplierContainer String   @default("")
+  receivedDate      String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
   cin7SalesOrderId  String   @default("")
