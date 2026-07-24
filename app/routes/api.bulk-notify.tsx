@@ -21,11 +21,37 @@ export async function action({ request }: ActionFunctionArgs) {
       body?: string;
       recipients?: Array<{ email: string; name: string; orderName: string; orderId: string; variantId: string }>;
       filters?: Record<string, any>; // snapshot of active filters at time of send
+      performedBy?: string;
     };
 
     if (!body.subject || !body.body || !body.recipients?.length) {
       return Response.json({ ok: false, error: "Missing subject, body, or recipients" }, { status: 400 });
     }
+
+    const recipientsWithSnapshots = await Promise.all(body.recipients.map(async (r) => {
+      const ops = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId: r.orderId, variantId: r.variantId } },
+        select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true },
+      });
+
+      return {
+        ...r,
+        orderData: {
+          subject: body.subject,
+          body: body.body,
+          recipient: r.email,
+          orderId: r.orderId,
+          orderName: r.orderName,
+          supplier: ops?.supplierContainer ?? "",
+          edd: ops?.eddDate ?? "",
+          carrier: ops?.carrier ?? "",
+          trackingNumber: ops?.trackingNumber ?? "",
+          warehouseStatus: ops?.warehouseStatus ?? "",
+          variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking"],
+          filters: body.filters ?? {},
+        },
+      };
+    }));
 
     const job = await prisma.$transaction(async (tx) => {
       const j = await tx.bulkEmailJob.create({
@@ -34,18 +60,20 @@ export async function action({ request }: ActionFunctionArgs) {
           subject: body.subject!,
           body: body.body!,
           filters: body.filters ?? undefined,
+          sentBy: body.performedBy || "admin",
           totalRecipients: body.recipients!.length,
         },
       });
 
       await tx.bulkEmailRecipient.createMany({
-        data: body.recipients!.map((r) => ({
+        data: recipientsWithSnapshots.map((r) => ({
           jobId: j.id,
           email: r.email,
           name: r.name,
           orderName: r.orderName,
           orderId: r.orderId,
           variantId: r.variantId,
+          orderData: r.orderData,
         })),
       });
 

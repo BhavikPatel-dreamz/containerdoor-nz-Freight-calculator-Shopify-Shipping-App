@@ -328,9 +328,15 @@ enum BulkEmailJobStatus {
 
 enum BulkEmailRecipientStatus {
   PENDING
+  PROCESSING
   SENT
   FAILED
   CANCELLED
+}
+
+enum BulkActionAuditStatus {
+  SUCCESS
+  FAILED
 }
 
 model BulkEmailJob {
@@ -339,6 +345,7 @@ model BulkEmailJob {
   subject       String
   body          String               // raw template with {name}, {order}, {link} placeholders
   filters       Json?                // snapshot of filters used to select recipients
+  sentBy        String?              // admin user who initiated the job
   totalRecipients Int                @default(0)
   sentCount     Int                  @default(0)
   failedCount   Int                  @default(0)
@@ -350,6 +357,7 @@ model BulkEmailJob {
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
   recipients    BulkEmailRecipient[]
+  communications CommunicationLog[]
 
   @@index([shop, status, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Asc)])
@@ -363,6 +371,7 @@ model BulkEmailRecipient {
   orderName     String
   orderId       String
   variantId     String
+  orderData     Json?                     // snapshot of line-item data at send time
   status        BulkEmailRecipientStatus  @default(PENDING)
   error         String?                   // per-recipient error
   sentAt        DateTime?
@@ -371,4 +380,46 @@ model BulkEmailRecipient {
   job BulkEmailJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId, status])
+}
+
+// ─── Communication Log ────────────────────────────────────────────────────────
+
+model CommunicationLog {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  jobId           String?  // links to BulkEmailJob if from bulk notify
+  channel         String   @default("email") // email | sms | whatsapp (future)
+  subject         String
+  body            String
+  recipientEmail  String
+  recipientName   String
+  sentBy          String   // admin user who triggered it
+  deliveryStatus  String   @default("sent")  // sent | failed | pending
+  providerMessageId String?
+  sentAt          DateTime
+  createdAt       DateTime @default(now())
+
+  job BulkEmailJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([shop, orderId])
+  @@index([jobId])
+}
+
+model BulkActionAudit {
+  id            String                @id @default(cuid())
+  shop          String
+  user          String
+  action        String
+  status        BulkActionAuditStatus
+  orderId       String
+  variantId     String
+  changedFields Json
+  oldValues     Json?
+  newValues     Json?
+  error         String?
+  createdAt     DateTime              @default(now())
+
+  @@index([shop, orderId])
+  @@index([shop, createdAt])
 }
