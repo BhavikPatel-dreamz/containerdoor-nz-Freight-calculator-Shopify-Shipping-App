@@ -99,15 +99,15 @@ export function OrderTable({
                   <td className="fo-td fo-td-product">
                     <div className="fo-prod-name">
                       {item.title || "—"}
-                      {" "}
-                      <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span>
+                      {/* {" "} */}
+                      {/* <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span> */}
                     </div>
                     {item.variantTitle && (
-                      <div style={{ fontSize: "11px", color: "#374151" }}>{item.variantTitle}</div>
+                      <span style={{ display: "block", fontSize: "11px", color: "#374151" }}>{item.variantTitle}</span>
                     )}
-                    <div className="fo-prod-sku" style={{ fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
-                      {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}{item.variantId ? ` · VAR ${item.variantId}` : ""}
-                    </div>
+                    <span className="fo-prod-sku" style={{ display: "block", fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
+                      {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
+                    </span>
                   </td>
                   {!hiddenColumns.has("supplier") && (
                     <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>

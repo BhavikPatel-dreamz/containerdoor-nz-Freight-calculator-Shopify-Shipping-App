@@ -341,7 +341,8 @@
 .fo-td {
   padding: 13px 12px;
   white-space: nowrap;
-  text-align: center;
+  text-align: left;
+  vertical-align: top;
 }
 
 .fo-td:first-child {

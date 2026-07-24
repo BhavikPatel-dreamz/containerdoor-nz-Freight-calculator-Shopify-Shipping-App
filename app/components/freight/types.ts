@@ -80,6 +80,10 @@ export type FreightDashboardProps = {
   allOrders?: FreightOrderRow[];
   counts?: DashboardCounts;
   suppliers?: string[];
+  warehouseStatuses?: string[];
+  warehouseTags?: string[];
+  carriers?: string[];
+  activeFilters?: { warehouseStatus?: string; warehouseTag?: string; carrier?: string; paymentStatus?: string };
   total: number;
   page: number;
   pageCount: number;
