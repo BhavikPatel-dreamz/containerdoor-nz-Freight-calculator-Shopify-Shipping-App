@@ -330,18 +330,26 @@ export async function action({ request }: ActionFunctionArgs) {
         orderId,
         variantId,
       };
-      if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && updateData.eddDate !== (existing?.eddDate ?? "")) {
-        syncFields.eddDate = updateData.eddDate;
-      }
-      if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && updateData.trackingNumber !== (existing?.trackingNumber ?? "")) {
-        syncFields.trackingNumber = updateData.trackingNumber;
-      }
-      if (Object.prototype.hasOwnProperty.call(updateData, "dispatchStatus") && updateData.dispatchStatus !== (existing?.dispatchStatus ?? "")) {
-        syncFields.dispatchStatus = updateData.dispatchStatus;
-      }
-      if (Object.prototype.hasOwnProperty.call(updateData, "customerStatus") && updateData.customerStatus !== (existing?.customerStatus ?? "")) {
-        syncFields.customerStatus = updateData.customerStatus;
-      }
+      const pushIfChanged = (key: string, dbField: string) => {
+        if (
+          Object.prototype.hasOwnProperty.call(updateData, key) &&
+          updateData[key] !== (existing as any)?.[dbField]
+        ) {
+          (syncFields as any)[key] = updateData[key];
+        }
+      };
+      pushIfChanged("eddDate", "eddDate");
+      pushIfChanged("trackingNumber", "trackingNumber");
+      pushIfChanged("dispatchStatus", "dispatchStatus");
+      pushIfChanged("customerStatus", "customerStatus");
+      pushIfChanged("warehouseStatus", "warehouseStatus");
+      pushIfChanged("deliveryStatus", "deliveryStatus");
+      pushIfChanged("portArrivalDate", "portArrivalDate");
+      pushIfChanged("inTransitDate", "inTransitDate");
+      pushIfChanged("supplierContainer", "supplierContainer");
+      pushIfChanged("depositPaid", "depositPaid");
+      pushIfChanged("balanceDue", "balanceDue");
+      pushIfChanged("notes", "notes");
       // Fire-and-forget — push to Shopify + Monday + Cin7
       pushLineItemToAllSystems(syncFields, "admin").catch((e) =>
         console.error("[api.order-status] Sync to other systems failed", e),

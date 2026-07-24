@@ -4,16 +4,16 @@ import { unauthenticated } from "../shopify.server";
 // ─── Metafield namespace for operational data ────────────────────────────────
 const OPS_NAMESPACE = "containerdoor_ops";
 
-// ─── Push EDD back to Shopify as order metafield ─────────────────────────────
+// ─── Generic: push a single metafield to an order ────────────────────────────
 
-export async function pushEddToShopify(
+async function pushMetafield(
   shop: string,
   orderId: string,
-  variantId: string,
-  eddDate: string,
+  key: string,
+  value: string,
+  metafieldType = "single_line_text_field",
 ) {
-  if (!eddDate) return;
-
+  if (!value && value !== "0") return; // allow "0" but skip empty strings
   try {
     const { admin } = await unauthenticated.admin(shop);
     const response = await admin.graphql(
@@ -29,150 +29,81 @@ export async function pushEddToShopify(
             {
               ownerId: `gid://shopify/Order/${orderId}`,
               namespace: OPS_NAMESPACE,
-              key: `edd_${variantId}`,
-              type: "single_line_text_field",
-              value: eddDate,
+              key,
+              type: metafieldType,
+              value,
             },
           ],
         },
       },
     );
-
     const json = await response.json();
     const errors = json?.data?.metafieldsSet?.userErrors ?? [];
     if (errors.length) {
-      console.error(`[ShopifySync] EDD metafield errors for order ${orderId} variant ${variantId}:`, errors);
+      console.error(`[ShopifySync] metafield ${key} errors for order ${orderId}:`, errors);
     }
   } catch (error) {
-    console.error(`[ShopifySync] Failed to push EDD for order ${orderId} variant ${variantId}:`, error);
+    console.error(`[ShopifySync] Failed to push ${key} for order ${orderId}:`, error);
   }
 }
 
-// ─── Push tracking number back to Shopify as order metafield ─────────────────
+// ─── Per-variant metafield keys ──────────────────────────────────────────────
 
-export async function pushTrackingToShopify(
-  shop: string,
-  orderId: string,
-  variantId: string,
-  trackingNumber: string,
-) {
-  if (!trackingNumber) return;
-
-  try {
-    const { admin } = await unauthenticated.admin(shop);
-    const response = await admin.graphql(
-      `#graphql
-      mutation SetOpsMetafield($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          metafields: [
-            {
-              ownerId: `gid://shopify/Order/${orderId}`,
-              namespace: OPS_NAMESPACE,
-              key: `tracking_${variantId}`,
-              type: "single_line_text_field",
-              value: trackingNumber,
-            },
-          ],
-        },
-      },
-    );
-
-    const json = await response.json();
-    const errors = json?.data?.metafieldsSet?.userErrors ?? [];
-    if (errors.length) {
-      console.error(`[ShopifySync] Tracking metafield errors for order ${orderId} variant ${variantId}:`, errors);
-    }
-  } catch (error) {
-    console.error(`[ShopifySync] Failed to push tracking for order ${orderId} variant ${variantId}:`, error);
-  }
+function variantKey(prefix: string, variantId: string) {
+  return `${prefix}_${variantId}`;
 }
 
-// ─── Push dispatch status back to Shopify as order metafield ─────────────────
+// ─── Individual push helpers (kept for callers that only need one field) ────
 
-export async function pushDispatchStatusToShopify(
-  shop: string,
-  orderId: string,
-  variantId: string,
-  dispatchStatus: string,
-) {
-  try {
-    const { admin } = await unauthenticated.admin(shop);
-    const response = await admin.graphql(
-      `#graphql
-      mutation SetOpsMetafield($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          metafields: [
-            {
-              ownerId: `gid://shopify/Order/${orderId}`,
-              namespace: OPS_NAMESPACE,
-              key: `dispatch_${variantId}`,
-              type: "single_line_text_field",
-              value: dispatchStatus,
-            },
-          ],
-        },
-      },
-    );
-
-    const json = await response.json();
-    const errors = json?.data?.metafieldsSet?.userErrors ?? [];
-    if (errors.length) {
-      console.error(`[ShopifySync] Dispatch status metafield errors for order ${orderId}:`, errors);
-    }
-  } catch (error) {
-    console.error(`[ShopifySync] Failed to push dispatch status for order ${orderId}:`, error);
-  }
+export async function pushEddToShopify(shop: string, orderId: string, variantId: string, eddDate: string) {
+  await pushMetafield(shop, orderId, variantKey("edd", variantId), eddDate);
 }
 
-// ─── Push customer-facing status back to Shopify as order metafield ──────────
+export async function pushTrackingToShopify(shop: string, orderId: string, variantId: string, trackingNumber: string) {
+  await pushMetafield(shop, orderId, variantKey("tracking", variantId), trackingNumber);
+}
 
-export async function pushCustomerStatusToShopify(
-  shop: string,
-  orderId: string,
-  customerStatus: string,
-) {
-  try {
-    const { admin } = await unauthenticated.admin(shop);
-    const response = await admin.graphql(
-      `#graphql
-      mutation SetOpsMetafield($metafields: [MetafieldsSetInput!]!) {
-        metafieldsSet(metafields: $metafields) {
-          userErrors { field message }
-        }
-      }`,
-      {
-        variables: {
-          metafields: [
-            {
-              ownerId: `gid://shopify/Order/${orderId}`,
-              namespace: OPS_NAMESPACE,
-              key: "customer_status",
-              type: "single_line_text_field",
-              value: customerStatus,
-            },
-          ],
-        },
-      },
-    );
+export async function pushDispatchStatusToShopify(shop: string, orderId: string, variantId: string, dispatchStatus: string) {
+  await pushMetafield(shop, orderId, variantKey("dispatch", variantId), dispatchStatus);
+}
 
-    const json = await response.json();
-    const errors = json?.data?.metafieldsSet?.userErrors ?? [];
-    if (errors.length) {
-      console.error(`[ShopifySync] Customer status metafield errors for order ${orderId}:`, errors);
-    }
-  } catch (error) {
-    console.error(`[ShopifySync] Failed to push customer status for order ${orderId}:`, error);
-  }
+export async function pushWarehouseStatusToShopify(shop: string, orderId: string, variantId: string, warehouseStatus: string) {
+  await pushMetafield(shop, orderId, variantKey("warehouse", variantId), warehouseStatus);
+}
+
+export async function pushDeliveryStatusToShopify(shop: string, orderId: string, variantId: string, deliveryStatus: string) {
+  await pushMetafield(shop, orderId, variantKey("delivery", variantId), deliveryStatus);
+}
+
+export async function pushPortArrivalToShopify(shop: string, orderId: string, variantId: string, portArrivalDate: string) {
+  await pushMetafield(shop, orderId, variantKey("port_arrival", variantId), portArrivalDate);
+}
+
+export async function pushInTransitToShopify(shop: string, orderId: string, variantId: string, inTransitDate: string) {
+  await pushMetafield(shop, orderId, variantKey("in_transit", variantId), inTransitDate);
+}
+
+export async function pushSupplierContainerToShopify(shop: string, orderId: string, variantId: string, supplierContainer: string) {
+  await pushMetafield(shop, orderId, variantKey("supplier_container", variantId), supplierContainer);
+}
+
+export async function pushDepositPaidToShopify(shop: string, orderId: string, variantId: string, depositPaid: string) {
+  await pushMetafield(shop, orderId, variantKey("deposit_paid", variantId), depositPaid);
+}
+
+export async function pushBalanceDueToShopify(shop: string, orderId: string, variantId: string, balanceDue: string) {
+  await pushMetafield(shop, orderId, variantKey("balance_due", variantId), balanceDue);
+}
+
+export async function pushNotesToShopify(shop: string, orderId: string, variantId: string, notes: string) {
+  if (!notes) return;
+  await pushMetafield(shop, orderId, variantKey("notes", variantId), notes);
+}
+
+// ─── Order-level: customer status ───────────────────────────────────────────
+
+export async function pushCustomerStatusToShopify(shop: string, orderId: string, variantId: string, customerStatus: string) {
+  await pushMetafield(shop, orderId, variantKey("customer", variantId), customerStatus);
 }
 
 // ─── Middleware: sync changed fields back to Shopify ─────────────────────────
@@ -187,6 +118,14 @@ export interface OperationalDataChanges {
   trackingNumber?: string;
   dispatchStatus?: string;
   customerStatus?: string;
+  warehouseStatus?: string;
+  deliveryStatus?: string;
+  portArrivalDate?: string;
+  inTransitDate?: string;
+  supplierContainer?: string;
+  depositPaid?: string;
+  balanceDue?: string;
+  notes?: string;
 }
 
 export async function syncChangesToShopify(changes: OperationalDataChanges) {
@@ -201,13 +140,37 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
     if (changes.trackingNumber !== undefined) {
       await pushTrackingToShopify(shop, orderId, variantId, changes.trackingNumber);
     }
+    if (changes.customerStatus !== undefined) {
+      await pushCustomerStatusToShopify(shop, orderId, variantId, changes.customerStatus);
+    }
     if (changes.dispatchStatus !== undefined) {
       await pushDispatchStatusToShopify(shop, orderId, variantId, changes.dispatchStatus);
     }
+    if (changes.warehouseStatus !== undefined) {
+      await pushWarehouseStatusToShopify(shop, orderId, variantId, changes.warehouseStatus);
+    }
+    if (changes.deliveryStatus !== undefined) {
+      await pushDeliveryStatusToShopify(shop, orderId, variantId, changes.deliveryStatus);
+    }
+    if (changes.portArrivalDate !== undefined) {
+      await pushPortArrivalToShopify(shop, orderId, variantId, changes.portArrivalDate);
+    }
+    if (changes.inTransitDate !== undefined) {
+      await pushInTransitToShopify(shop, orderId, variantId, changes.inTransitDate);
+    }
+    if (changes.supplierContainer !== undefined) {
+      await pushSupplierContainerToShopify(shop, orderId, variantId, changes.supplierContainer);
+    }
+    if (changes.depositPaid !== undefined) {
+      await pushDepositPaidToShopify(shop, orderId, variantId, changes.depositPaid);
+    }
+    if (changes.balanceDue !== undefined) {
+      await pushBalanceDueToShopify(shop, orderId, variantId, changes.balanceDue);
+    }
+    if (changes.notes !== undefined) {
+      await pushNotesToShopify(shop, orderId, variantId, changes.notes);
+    }
   }
 
-  // Order-level fields
-  if (changes.customerStatus !== undefined) {
-    await pushCustomerStatusToShopify(shop, orderId, changes.customerStatus);
-  }
+  // Order-level fields (none — all fields are now per-variant)
 }
