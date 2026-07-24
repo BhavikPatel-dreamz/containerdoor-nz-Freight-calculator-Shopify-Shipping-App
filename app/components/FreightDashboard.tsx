@@ -582,7 +582,20 @@ export default function FreightDashboard({
   // Server-driven: rows are already searched/filtered by the loader → render as-is.
   // Legacy consumers: filter client-side (tab has a match + text search).
   const filteredOrders = serverDriven
-    ? (rows || [])
+    ? (rows || []).filter((o) => {
+        // Server already applied tab + supplier filters. Apply the text
+        // search instantly client-side too, so results update as you type
+        // instead of waiting on the debounced server round-trip.
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
+      })
     : (rows || []).filter((o) => {
         if (activeTab !== "all") {
           const hasMatch = o.lineItems.some((li) => {
@@ -1721,7 +1734,7 @@ export default function FreightDashboard({
                                <button className="fo-icon-btn" title="View order" onClick={() => { navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`); }}><IconEye /></button>
                               <button className="fo-icon-btn" title="Notes" onClick={() => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}><IconChat /></button>
                               </div>
-</td>
+                             </td>
                           </tr>
                         );
                       });

@@ -46,7 +46,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
   if (q) {
     const like = `%${q.toLowerCase()}%`;
-    conds.push(Prisma.sql`idx."searchText" LIKE ${like}`);
+    conds.push(Prisma.sql`(
+      idx."searchText" LIKE ${like}
+      OR lower(idx."orderName") LIKE ${like}
+      OR lower(idx."customerName") LIKE ${like}
+      OR lower(idx."email") LIKE ${like}
+      OR lower(idx."sku") LIKE ${like}
+    )`);
   }
   if (supplier) {
     conds.push(Prisma.sql`idx."vendor" = ${supplier}`);
