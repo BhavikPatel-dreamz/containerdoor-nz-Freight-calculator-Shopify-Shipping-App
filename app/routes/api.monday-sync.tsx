@@ -43,6 +43,7 @@ export async function action({ request }: ActionFunctionArgs) {
     variantId,
     paymentStatus: existing.paymentStatus ?? "",
     warehouseStatus: existing.warehouseStatus ?? "",
+    warehouseTags: existing.warehouseTags ?? "",
     dispatchStatus: existing.dispatchStatus ?? "",
     deliveryStatus: existing.deliveryStatus ?? "",
     depositPaid: existing.depositPaid ?? "",
@@ -135,6 +136,13 @@ export async function action({ request }: ActionFunctionArgs) {
   const mondayTracking = mondayData?.trackingNumber ?? "";
   const mondayEdd = mondayData?.eddDate ?? "";
   const mondayOriginalEdd = mondayData?.originalEddDate ?? "";
+  const mondayWarehouseStatus = mondayData?.warehouseStatus ?? "";
+  const mondayWarehouseTags = mondayData?.warehouseTags ?? "";
+  const mondayDispatchStatus = mondayData?.dispatchStatus ?? "";
+  const mondayDeliveryStatus = mondayData?.deliveryStatus ?? "";
+  const mondayDepositPaid = mondayData?.depositPaid ?? "";
+  const mondayBalanceDue = mondayData?.balanceDue ?? "";
+  const mondayPaymentStatus = mondayData?.paymentStatus ?? "";
 
   const updated = await prisma.orderLineItemOperationalData.update({
     where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -143,6 +151,13 @@ export async function action({ request }: ActionFunctionArgs) {
       ...(mondayTracking ? { trackingNumber: mondayTracking } : {}),
       ...(mondayEdd ? { eddDate: mondayEdd } : {}),
       ...(mondayOriginalEdd ? { originalEddDate: mondayOriginalEdd } : {}),
+      ...(mondayWarehouseStatus ? { warehouseStatus: mondayWarehouseStatus } : {}),
+      ...(mondayWarehouseTags !== undefined ? { warehouseTags: mondayWarehouseTags } : {}),
+      ...(mondayDispatchStatus ? { dispatchStatus: mondayDispatchStatus } : {}),
+      ...(mondayDeliveryStatus ? { deliveryStatus: mondayDeliveryStatus } : {}),
+      ...(mondayDepositPaid ? { depositPaid: mondayDepositPaid } : {}),
+      ...(mondayBalanceDue ? { balanceDue: mondayBalanceDue } : {}),
+      ...(mondayPaymentStatus ? { paymentStatus: mondayPaymentStatus } : {}),
     },
   });
   console.log("[Monday][Sync] DB updated with Monday data:", updated);

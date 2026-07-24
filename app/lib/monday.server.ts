@@ -71,6 +71,7 @@ type MondayRow = {
   orderId: string;
   variantId: string;
   warehouseStatus: string;
+  warehouseTags: string;
   dispatchStatus: string;
   deliveryStatus: string;
   depositPaid: string;
@@ -146,6 +147,7 @@ const FIELD_DEFS: Record<
       },
     }),
   },
+  warehouseTags: { title: "Warehouse Tags", type: "text" },
   dispatchStatus: {
     title: "Dispatch Status",
     type: "status",
@@ -377,6 +379,8 @@ async function buildColumnValues(row: MondayRow) {
     ) {
       const statusVal = val as string;
       if (statusVal) values[colId] = { label: statusVal };
+    } else if (key === "warehouseTags") {
+      if (val !== "" && val != null) values[colId] = val;
     } else if (key === "email") {
       if (val) values[colId] = { email: val, text: val };
     } else if (key === "productTitle" || key === "boxes") {
@@ -597,13 +601,20 @@ export async function fetchMondayItem(itemId: string) {
 
   return {
     customerStatus: getText("customerStatus"),
-    statusChangedAt: getChangedAt("customerStatus"), // unchanged from before
+    statusChangedAt: getChangedAt("customerStatus"),
     eddDate: getText("eddDate"),
-    eddDateChangedAt: getChangedAt("eddDate"), // NEW
+    eddDateChangedAt: getChangedAt("eddDate"),
     originalEddDate: getText("originalEddDate"),
     trackingNumber: getText("trackingNumber"),
-    trackingNumberChangedAt, // NEW — from activity log, not column value
-    sku: getText("sku"), // NEW
+    trackingNumberChangedAt,
+    warehouseStatus: getText("warehouseStatus"),
+    warehouseTags: getText("warehouseTags"),
+    dispatchStatus: getText("dispatchStatus"),
+    deliveryStatus: getText("deliveryStatus"),
+    depositPaid: getText("depositPaid"),
+    balanceDue: getText("balanceDue"),
+    paymentStatus: getText("paymentStatus"),
+    sku: getText("sku"),
   };
 }
 

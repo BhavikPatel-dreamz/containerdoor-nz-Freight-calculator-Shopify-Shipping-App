@@ -39,12 +39,15 @@ export interface LineItemSyncFields {
   dispatchStatus?: string;
   carrier?: string;
   warehouseStatus?: string;
+  warehouseTags?: string;
   deliveryStatus?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
   supplierContainer?: string;
+  receivedDate?: string;
   depositPaid?: string;
   balanceDue?: string;
+  paymentStatus?: string;
   notes?: string;
 }
 
@@ -86,10 +89,12 @@ export async function pushLineItemToAllSystems(
         ...(fields.dispatchStatus !== undefined ? { dispatchStatus: fields.dispatchStatus } : {}),
         ...(fields.customerStatus !== undefined ? { customerStatus: fields.customerStatus } : {}),
         ...(fields.warehouseStatus !== undefined ? { warehouseStatus: fields.warehouseStatus } : {}),
+        ...(fields.warehouseTags !== undefined ? { warehouseTags: fields.warehouseTags } : {}),
         ...(fields.deliveryStatus !== undefined ? { deliveryStatus: fields.deliveryStatus } : {}),
         ...(fields.portArrivalDate !== undefined ? { portArrivalDate: fields.portArrivalDate } : {}),
         ...(fields.inTransitDate !== undefined ? { inTransitDate: fields.inTransitDate } : {}),
         ...(fields.supplierContainer !== undefined ? { supplierContainer: fields.supplierContainer } : {}),
+        ...(fields.receivedDate !== undefined ? { receivedDate: fields.receivedDate } : {}),
         ...(fields.depositPaid !== undefined ? { depositPaid: fields.depositPaid } : {}),
         ...(fields.balanceDue !== undefined ? { balanceDue: fields.balanceDue } : {}),
         ...(fields.notes !== undefined ? { notes: fields.notes } : {}),
@@ -118,11 +123,12 @@ export async function pushLineItemToAllSystems(
           sku: "",
           boxes: "",
           customerStatus: fields.customerStatus ?? record.customerStatus ?? "",
-          paymentStatus: record.paymentStatus ?? "",
+          paymentStatus: fields.paymentStatus ?? record.paymentStatus ?? "",
           shop,
           orderId,
           variantId,
           warehouseStatus: record.warehouseStatus ?? "",
+          warehouseTags: record.warehouseTags ?? "",
           dispatchStatus: fields.dispatchStatus ?? record.dispatchStatus ?? "",
           deliveryStatus: record.deliveryStatus ?? "",
           depositPaid: record.depositPaid ?? "",

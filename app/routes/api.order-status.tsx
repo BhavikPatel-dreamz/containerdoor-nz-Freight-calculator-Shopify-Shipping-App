@@ -78,6 +78,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         customerStatus: true,
         paymentStatus: true,
         warehouseStatus: true,
+        warehouseTags: true,
         deliveryStatus: true,
         dispatchStatus: true,
         trackingNumber: true,
@@ -85,6 +86,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         eddDate: true,
         originalEddDate: true,
         supplierContainer: true,
+        receivedDate: true,
         portArrivalDate: true,
         inTransitDate: true,
         depositPaid: true,
@@ -207,6 +209,7 @@ const EDITABLE_FIELDS = [
   "customerStatus",
   "paymentStatus",
   "warehouseStatus",
+  "warehouseTags",
   "dispatchStatus",
   "deliveryStatus",
   "trackingNumber",
@@ -215,6 +218,7 @@ const EDITABLE_FIELDS = [
   "eddDate",
   "originalEddDate",
   "supplierContainer",
+  "receivedDate",
   "portArrivalDate",
   "inTransitDate",
   "depositPaid",
@@ -343,12 +347,15 @@ export async function action({ request }: ActionFunctionArgs) {
       pushIfChanged("dispatchStatus", "dispatchStatus");
       pushIfChanged("customerStatus", "customerStatus");
       pushIfChanged("warehouseStatus", "warehouseStatus");
+      pushIfChanged("warehouseTags", "warehouseTags");
       pushIfChanged("deliveryStatus", "deliveryStatus");
       pushIfChanged("portArrivalDate", "portArrivalDate");
       pushIfChanged("inTransitDate", "inTransitDate");
       pushIfChanged("supplierContainer", "supplierContainer");
+      pushIfChanged("receivedDate", "receivedDate");
       pushIfChanged("depositPaid", "depositPaid");
       pushIfChanged("balanceDue", "balanceDue");
+      pushIfChanged("paymentStatus", "paymentStatus");
       pushIfChanged("notes", "notes");
       // Fire-and-forget — push to Shopify + Monday + Cin7
       pushLineItemToAllSystems(syncFields, "admin").catch((e) =>
@@ -420,6 +427,7 @@ export async function action({ request }: ActionFunctionArgs) {
         orderId,
         variantId,
         warehouseStatus: updated.warehouseStatus ?? "",
+        warehouseTags: updated.warehouseTags ?? "",
         dispatchStatus: updated.dispatchStatus ?? "",
         deliveryStatus: updated.deliveryStatus ?? "",
         depositPaid: updated.depositPaid ?? "",
