@@ -56,9 +56,14 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailP
           </button>
         </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Warehouse status</span><span className="fo-detail-value">{item.warehouseStatus || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Warehouse tags</span><span className="fo-detail-value">{item.warehouseTags || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Received</span><span className="fo-detail-value">{item.receivedDate ? new Date(item.receivedDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Dispatch status</span><span className="fo-detail-value">{item.dispatchStatus || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Delivery status</span><span className="fo-detail-value">{item.deliveryStatus || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">PO #</span><span className="fo-detail-value">{item.poNumber || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Port arrival</span><span className="fo-detail-value">{item.portArrivalDate ? new Date(item.portArrivalDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">In transit date</span><span className="fo-detail-value">{item.inTransitDate ? new Date(item.inTransitDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Supplier / Container</span><span className="fo-detail-value">{item.supplierContainer || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Deposit paid</span><span className="fo-detail-value">{item.depositPaid || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{item.balanceDue || "—"}</span></div>
       </div>

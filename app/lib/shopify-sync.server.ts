@@ -87,6 +87,14 @@ export async function pushSupplierContainerToShopify(shop: string, orderId: stri
   await pushMetafield(shop, orderId, variantKey("supplier_container", variantId), supplierContainer);
 }
 
+export async function pushWarehouseTagsToShopify(shop: string, orderId: string, variantId: string, warehouseTags: string) {
+  await pushMetafield(shop, orderId, variantKey("warehouse_tags", variantId), warehouseTags);
+}
+
+export async function pushReceivedDateToShopify(shop: string, orderId: string, variantId: string, receivedDate: string) {
+  await pushMetafield(shop, orderId, variantKey("received_date", variantId), receivedDate);
+}
+
 export async function pushDepositPaidToShopify(shop: string, orderId: string, variantId: string, depositPaid: string) {
   await pushMetafield(shop, orderId, variantKey("deposit_paid", variantId), depositPaid);
 }
@@ -119,10 +127,12 @@ export interface OperationalDataChanges {
   dispatchStatus?: string;
   customerStatus?: string;
   warehouseStatus?: string;
+  warehouseTags?: string;
   deliveryStatus?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
   supplierContainer?: string;
+  receivedDate?: string;
   depositPaid?: string;
   balanceDue?: string;
   notes?: string;
@@ -149,6 +159,9 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
     if (changes.warehouseStatus !== undefined) {
       await pushWarehouseStatusToShopify(shop, orderId, variantId, changes.warehouseStatus);
     }
+    if (changes.warehouseTags !== undefined) {
+      await pushWarehouseTagsToShopify(shop, orderId, variantId, changes.warehouseTags);
+    }
     if (changes.deliveryStatus !== undefined) {
       await pushDeliveryStatusToShopify(shop, orderId, variantId, changes.deliveryStatus);
     }
@@ -160,6 +173,9 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
     }
     if (changes.supplierContainer !== undefined) {
       await pushSupplierContainerToShopify(shop, orderId, variantId, changes.supplierContainer);
+    }
+    if (changes.receivedDate !== undefined) {
+      await pushReceivedDateToShopify(shop, orderId, variantId, changes.receivedDate);
     }
     if (changes.depositPaid !== undefined) {
       await pushDepositPaidToShopify(shop, orderId, variantId, changes.depositPaid);
