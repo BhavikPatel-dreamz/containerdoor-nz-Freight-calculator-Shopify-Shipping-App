@@ -155,6 +155,40 @@ export default function FreightDashboard({
 
   const [showFilters, setShowFilters] = useState(false);
 
+  // Staging state: dropdowns write here, Apply commits to URL params.
+  const [stagedFilters, setStagedFilters] = useState({
+    supplier: searchParams.get("supplier") ?? "",
+    warehouseStatus: searchParams.get("warehouseStatus") ?? "",
+    warehouseTag: searchParams.get("warehouseTag") ?? "",
+    carrier: searchParams.get("carrier") ?? "",
+    paymentStatus: searchParams.get("paymentStatus") ?? "",
+  });
+  // Keep staging state in sync when URL params change externally (e.g. back/forward).
+  useEffect(() => {
+    setStagedFilters({
+      supplier: searchParams.get("supplier") ?? "",
+      warehouseStatus: searchParams.get("warehouseStatus") ?? "",
+      warehouseTag: searchParams.get("warehouseTag") ?? "",
+      carrier: searchParams.get("carrier") ?? "",
+      paymentStatus: searchParams.get("paymentStatus") ?? "",
+    });
+  }, [searchParams]);
+
+  const applyFilters = () => {
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      const set = (k: string, v: string) => { if (v) np.set(k, v); else np.delete(k); };
+      set("supplier", stagedFilters.supplier);
+      set("warehouseStatus", stagedFilters.warehouseStatus);
+      set("warehouseTag", stagedFilters.warehouseTag);
+      set("carrier", stagedFilters.carrier);
+      set("paymentStatus", stagedFilters.paymentStatus);
+      np.set("page", "1");
+      return np;
+    });
+    setShowFilters(false);
+  };
+
   const [bulkEddModal, setBulkEddModal] = useState(false);
   const [bulkEddForm, setBulkEddForm] = useState({ newEdd: "", notifyCustomer: false });
   const [bulkEddError, setBulkEddError] = useState("");
@@ -707,35 +741,35 @@ export default function FreightDashboard({
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
-                  <select className="fo-status-select" value={searchParams.get("supplier") ?? ""} onChange={(e) => setFilterParam("supplier", e.target.value)}>
+                  <select className="fo-status-select" value={stagedFilters.supplier} onChange={(e) => setStagedFilters((p) => ({ ...p, supplier: e.target.value }))}>
                     <option value="">All suppliers</option>
                     {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
-                  <select className="fo-status-select" value={searchParams.get("warehouseStatus") ?? ""} onChange={(e) => setFilterParam("warehouseStatus", e.target.value)}>
+                  <select className="fo-status-select" value={stagedFilters.warehouseStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseStatus: e.target.value }))}>
                     <option value="">All</option>
                     {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse tag</label>
-                  <select className="fo-status-select" value={searchParams.get("warehouseTag") ?? ""} onChange={(e) => setFilterParam("warehouseTag", e.target.value)}>
+                  <select className="fo-status-select" value={stagedFilters.warehouseTag} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseTag: e.target.value }))}>
                     <option value="">All</option>
                     {warehouseTags.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
-                  <select className="fo-status-select" value={searchParams.get("carrier") ?? ""} onChange={(e) => setFilterParam("carrier", e.target.value)}>
+                  <select className="fo-status-select" value={stagedFilters.carrier} onChange={(e) => setStagedFilters((p) => ({ ...p, carrier: e.target.value }))}>
                     <option value="">All carriers</option>
                     {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
-                  <select className="fo-status-select" value={searchParams.get("paymentStatus") ?? ""} onChange={(e) => setFilterParam("paymentStatus", e.target.value)}>
+                  <select className="fo-status-select" value={stagedFilters.paymentStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, paymentStatus: e.target.value }))}>
                     <option value="">All</option>
                     <option value="Pending">Pending</option>
                     <option value="Paid">Paid</option>
@@ -743,6 +777,9 @@ export default function FreightDashboard({
                     <option value="Overdue">Overdue</option>
                   </select>
                 </div>
+                <button className="fo-tool-btn" onClick={applyFilters} style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb", height: "30px" }}>
+                  Apply filters
+                </button>
                 {hasActiveFilters && (
                   <button className="fo-tool-btn" onClick={() => { clearAllFilters(); setShowFilters(false); }} style={{ color: "#dc2626", borderColor: "#fecaca" }}>
                     Clear all
