@@ -38,6 +38,14 @@ export interface LineItemSyncFields {
   customerStatus?: string;
   dispatchStatus?: string;
   carrier?: string;
+  warehouseStatus?: string;
+  deliveryStatus?: string;
+  portArrivalDate?: string;
+  inTransitDate?: string;
+  supplierContainer?: string;
+  depositPaid?: string;
+  balanceDue?: string;
+  notes?: string;
 }
 
 export interface OrderSyncFields {
@@ -77,6 +85,14 @@ export async function pushLineItemToAllSystems(
         ...(fields.trackingNumber !== undefined ? { trackingNumber: fields.trackingNumber } : {}),
         ...(fields.dispatchStatus !== undefined ? { dispatchStatus: fields.dispatchStatus } : {}),
         ...(fields.customerStatus !== undefined ? { customerStatus: fields.customerStatus } : {}),
+        ...(fields.warehouseStatus !== undefined ? { warehouseStatus: fields.warehouseStatus } : {}),
+        ...(fields.deliveryStatus !== undefined ? { deliveryStatus: fields.deliveryStatus } : {}),
+        ...(fields.portArrivalDate !== undefined ? { portArrivalDate: fields.portArrivalDate } : {}),
+        ...(fields.inTransitDate !== undefined ? { inTransitDate: fields.inTransitDate } : {}),
+        ...(fields.supplierContainer !== undefined ? { supplierContainer: fields.supplierContainer } : {}),
+        ...(fields.depositPaid !== undefined ? { depositPaid: fields.depositPaid } : {}),
+        ...(fields.balanceDue !== undefined ? { balanceDue: fields.balanceDue } : {}),
+        ...(fields.notes !== undefined ? { notes: fields.notes } : {}),
       });
       log("shopify", true);
     } catch (e: any) {
