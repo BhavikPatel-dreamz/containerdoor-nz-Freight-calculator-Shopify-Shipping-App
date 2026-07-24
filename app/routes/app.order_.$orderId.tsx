@@ -45,7 +45,7 @@ export default function FreightOrderDetailPage() {
       navbarRight={<div className="fo-avatar">SP</div>}
       initialDetailOrderId={row.shopifyOrderId}
       initialDetailVariantId={variantId}
-      detailBackHref="/app/freight-orders"
+      detailBackHref="/app"
     />
   );
 }
