@@ -387,10 +387,10 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
 type OpsEditModalProps = {
   order: FreightOrderRow;
   item: FreightLineItem;
-  form: { warehouseStatus: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string };
+  form: { warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string };
   error: string;
   isSaving: boolean;
-  setForm: React.Dispatch<React.SetStateAction<{ warehouseStatus: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string }>>;
+  setForm: React.Dispatch<React.SetStateAction<{ warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string }>>;
   onClose: () => void;
   onSave: () => void;
 };
@@ -416,17 +416,41 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
               <input id="ops-warehouse" className="fo-input" placeholder="e.g. Picking" value={form.warehouseStatus} onChange={(e) => setForm((p) => ({ ...p, warehouseStatus: e.target.value }))} />
             </div>
             <div>
-              <label className="fo-field-label" htmlFor="ops-dispatch">Dispatch status</label>
-              <input id="ops-dispatch" className="fo-input" placeholder="e.g. Scheduled" value={form.dispatchStatus} onChange={(e) => setForm((p) => ({ ...p, dispatchStatus: e.target.value }))} />
+              <label className="fo-field-label" htmlFor="ops-received">Received</label>
+              <input id="ops-received" type="date" className="fo-input" value={form.receivedDate} onChange={(e) => setForm((p) => ({ ...p, receivedDate: e.target.value }))} />
             </div>
           </div>
           <div>
-            <label className="fo-field-label" htmlFor="ops-delivery">Delivery status</label>
-            <input id="ops-delivery" className="fo-input" placeholder="e.g. In transit" value={form.deliveryStatus} onChange={(e) => setForm((p) => ({ ...p, deliveryStatus: e.target.value }))} />
+            <label className="fo-field-label" htmlFor="ops-warehouse-tags">Warehouse tags</label>
+            <input id="ops-warehouse-tags" className="fo-input" placeholder="e.g. Fragile, Oversized" value={form.warehouseTags} onChange={(e) => setForm((p) => ({ ...p, warehouseTags: e.target.value }))} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div>
+              <label className="fo-field-label" htmlFor="ops-dispatch">Dispatch status</label>
+              <input id="ops-dispatch" className="fo-input" placeholder="e.g. Scheduled" value={form.dispatchStatus} onChange={(e) => setForm((p) => ({ ...p, dispatchStatus: e.target.value }))} />
+            </div>
+            <div>
+              <label className="fo-field-label" htmlFor="ops-delivery">Delivery status</label>
+              <input id="ops-delivery" className="fo-input" placeholder="e.g. In transit" value={form.deliveryStatus} onChange={(e) => setForm((p) => ({ ...p, deliveryStatus: e.target.value }))} />
+            </div>
           </div>
           <div>
             <label className="fo-field-label" htmlFor="ops-po">PO #</label>
             <input id="ops-po" className="fo-input" placeholder="Purchase order number" value={form.poNumber} onChange={(e) => setForm((p) => ({ ...p, poNumber: e.target.value }))} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+            <div>
+              <label className="fo-field-label" htmlFor="ops-port-arrival">Port arrival</label>
+              <input id="ops-port-arrival" type="date" className="fo-input" value={form.portArrivalDate} onChange={(e) => setForm((p) => ({ ...p, portArrivalDate: e.target.value }))} />
+            </div>
+            <div>
+              <label className="fo-field-label" htmlFor="ops-in-transit">In transit date</label>
+              <input id="ops-in-transit" type="date" className="fo-input" value={form.inTransitDate} onChange={(e) => setForm((p) => ({ ...p, inTransitDate: e.target.value }))} />
+            </div>
+          </div>
+          <div>
+            <label className="fo-field-label" htmlFor="ops-supplier">Supplier / Container</label>
+            <input id="ops-supplier" className="fo-input" placeholder="e.g. Supplier / CONT123" value={form.supplierContainer} onChange={(e) => setForm((p) => ({ ...p, supplierContainer: e.target.value }))} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <div>

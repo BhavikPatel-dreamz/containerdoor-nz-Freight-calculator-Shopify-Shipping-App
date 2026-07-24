@@ -19,11 +19,16 @@ export type FreightLineItem = {
   eddDate: string;
   originalEddDate: string;
   warehouseStatus?: string;
+  warehouseTags?: string;
   dispatchStatus?: string;
   deliveryStatus?: string;
   depositPaid?: string;
   balanceDue?: string;
   poNumber?: string;
+  supplierContainer?: string;
+  receivedDate?: string;
+  portArrivalDate?: string;
+  inTransitDate?: string;
   cin7Exists?: boolean;
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];

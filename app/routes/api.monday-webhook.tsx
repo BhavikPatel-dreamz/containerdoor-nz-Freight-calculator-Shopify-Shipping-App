@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { fetchMondayItem } from "../lib/monday.server";
+import { fetchMondayItem, fetchMondayUpdates } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -103,6 +103,63 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.trackingNumberUpdatedAt = new Date();
       }
 
+      // ── Pull operational fields inbound from Monday ──
+      const newWarehouseStatus = (mondayData.warehouseStatus ?? "").trim();
+      if (newWarehouseStatus && newWarehouseStatus !== record.warehouseStatus) {
+        updates.warehouseStatus = newWarehouseStatus;
+      }
+
+      const newWarehouseTags = (mondayData.warehouseTags ?? "").trim();
+      if (newWarehouseTags !== undefined && newWarehouseTags !== (record.warehouseTags ?? "")) {
+        updates.warehouseTags = newWarehouseTags;
+      }
+
+      const newDispatchStatus = (mondayData.dispatchStatus ?? "").trim();
+      if (newDispatchStatus && newDispatchStatus !== record.dispatchStatus) {
+        updates.dispatchStatus = newDispatchStatus;
+      }
+
+      const newDeliveryStatus = (mondayData.deliveryStatus ?? "").trim();
+      if (newDeliveryStatus && newDeliveryStatus !== record.deliveryStatus) {
+        updates.deliveryStatus = newDeliveryStatus;
+      }
+
+      const newDepositPaid = (mondayData.depositPaid ?? "").trim();
+      if (newDepositPaid && newDepositPaid !== record.depositPaid) {
+        updates.depositPaid = newDepositPaid;
+      }
+
+      const newBalanceDue = (mondayData.balanceDue ?? "").trim();
+      if (newBalanceDue && newBalanceDue !== record.balanceDue) {
+        updates.balanceDue = newBalanceDue;
+      }
+
+      // ── Pull Monday Updates (operational notes) inbound ──
+      try {
+        const mondayUpdates = await fetchMondayUpdates(itemId);
+        const alreadyPulled = new Set(
+          String(record.notesPulledUpdateIds ?? "").split(",").filter(Boolean),
+        );
+        const newUpdates = mondayUpdates.filter((u) => !alreadyPulled.has(u.id));
+
+        if (newUpdates.length > 0) {
+          const newNotesBlocks = newUpdates.map((u) => {
+            const date = u.createdAt
+              ? new Date(u.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) + " " + new Date(u.createdAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })
+              : "";
+            return `[internal|${u.creatorName}|${date}] ${u.body}`;
+          });
+          const existingNotes = String(record.notes ?? "").trim();
+          const mergedNotes = [...newNotesBlocks, existingNotes].filter(Boolean).join("\n\n");
+          updates.notes = mergedNotes;
+
+          const nextPulledIds = [...alreadyPulled, ...newUpdates.map((u) => u.id)].join(",");
+          updates.notesPulledUpdateIds = nextPulledIds;
+        }
+      } catch (e) {
+        console.error("[Monday][Webhook] Failed to pull updates/notes:", e);
+      }
+
       if (Object.keys(updates).length > 0) {
         await prisma.orderLineItemOperationalData.update({
           where: { id: record.id },
@@ -122,6 +179,9 @@ export async function action({ request }: ActionFunctionArgs) {
             ...(updates.eddDate !== undefined ? { eddDate: updates.eddDate } : {}),
             ...(updates.trackingNumber !== undefined ? { trackingNumber: updates.trackingNumber } : {}),
             ...(updates.customerStatus !== undefined ? { customerStatus: updates.customerStatus } : {}),
+            ...(updates.warehouseStatus !== undefined ? { warehouseStatus: updates.warehouseStatus } : {}),
+            ...(updates.dispatchStatus !== undefined ? { dispatchStatus: updates.dispatchStatus } : {}),
+            ...(updates.deliveryStatus !== undefined ? { deliveryStatus: updates.deliveryStatus } : {}),
           },
           "monday",
         ).catch((e) =>

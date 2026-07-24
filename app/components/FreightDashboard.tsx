@@ -59,7 +59,7 @@ export default function FreightDashboard({
   const [editDispatchModal, setEditDispatchModal] = useState(false);
   const [editOpsModal, setEditOpsModal] = useState(false);
   const [editDispatchForm, setEditDispatchForm] = useState({ eddDate: "", carrier: "", trackingNumber: "", freightRef: "" });
-  const [editOpsForm, setEditOpsForm] = useState({ warehouseStatus: "", dispatchStatus: "", deliveryStatus: "", poNumber: "", depositPaid: "", balanceDue: "" });
+  const [editOpsForm, setEditOpsForm] = useState({ warehouseStatus: "", warehouseTags: "", dispatchStatus: "", deliveryStatus: "", poNumber: "", depositPaid: "", balanceDue: "", supplierContainer: "", receivedDate: "", portArrivalDate: "", inTransitDate: "" });
   const [isSavingDispatch, setIsSavingDispatch] = useState(false);
   const [isSavingOps, setIsSavingOps] = useState(false);
   const [editDispatchError, setEditDispatchError] = useState("");
@@ -415,7 +415,7 @@ export default function FreightDashboard({
   // ── Operational save ──
   const handleOpsEdit = () => {
     if (!detailView) return;
-    setEditOpsForm({ warehouseStatus: detailView.item.warehouseStatus || "", dispatchStatus: detailView.item.dispatchStatus || "", deliveryStatus: detailView.item.deliveryStatus || "", poNumber: detailView.item.poNumber || "", depositPaid: detailView.item.depositPaid || "", balanceDue: detailView.item.balanceDue || "" });
+    setEditOpsForm({ warehouseStatus: detailView.item.warehouseStatus || "", warehouseTags: detailView.item.warehouseTags || "", dispatchStatus: detailView.item.dispatchStatus || "", deliveryStatus: detailView.item.deliveryStatus || "", poNumber: detailView.item.poNumber || "", depositPaid: detailView.item.depositPaid || "", balanceDue: detailView.item.balanceDue || "", supplierContainer: detailView.item.supplierContainer || "", receivedDate: detailView.item.receivedDate || "", portArrivalDate: detailView.item.portArrivalDate || "", inTransitDate: detailView.item.inTransitDate || "" });
     setEditOpsError(""); setEditOpsModal(true);
   };
   const handleOpsSave = async () => {
@@ -424,18 +424,23 @@ export default function FreightDashboard({
     try {
       const data: Record<string, string> = {};
       if (editOpsForm.warehouseStatus !== (detailView.item.warehouseStatus || "")) data.warehouseStatus = editOpsForm.warehouseStatus;
+      if (editOpsForm.warehouseTags !== (detailView.item.warehouseTags || "")) data.warehouseTags = editOpsForm.warehouseTags;
       if (editOpsForm.dispatchStatus !== (detailView.item.dispatchStatus || "")) data.dispatchStatus = editOpsForm.dispatchStatus;
       if (editOpsForm.deliveryStatus !== (detailView.item.deliveryStatus || "")) data.deliveryStatus = editOpsForm.deliveryStatus;
       if (editOpsForm.poNumber !== (detailView.item.poNumber || "")) data.poNumber = editOpsForm.poNumber;
       if (editOpsForm.depositPaid !== (detailView.item.depositPaid || "")) data.depositPaid = editOpsForm.depositPaid;
       if (editOpsForm.balanceDue !== (detailView.item.balanceDue || "")) data.balanceDue = editOpsForm.balanceDue;
+      if (editOpsForm.supplierContainer !== (detailView.item.supplierContainer || "")) data.supplierContainer = editOpsForm.supplierContainer;
+      if (editOpsForm.receivedDate !== (detailView.item.receivedDate || "")) data.receivedDate = editOpsForm.receivedDate;
+      if (editOpsForm.portArrivalDate !== (detailView.item.portArrivalDate || "")) data.portArrivalDate = editOpsForm.portArrivalDate;
+      if (editOpsForm.inTransitDate !== (detailView.item.inTransitDate || "")) data.inTransitDate = editOpsForm.inTransitDate;
       if (Object.keys(data).length === 0) { setEditOpsModal(false); return; }
       const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
-      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue }) };
+      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, warehouseTags: data.warehouseTags ?? li.warehouseTags, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
       setRows((prev) => prev.map(apply));
       if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, warehouseStatus: data.warehouseStatus ?? prev.item.warehouseStatus, dispatchStatus: data.dispatchStatus ?? prev.item.dispatchStatus, deliveryStatus: data.deliveryStatus ?? prev.item.deliveryStatus, poNumber: data.poNumber ?? prev.item.poNumber, depositPaid: data.depositPaid ?? prev.item.depositPaid, balanceDue: data.balanceDue ?? prev.item.balanceDue } } : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, warehouseStatus: data.warehouseStatus ?? prev.item.warehouseStatus, warehouseTags: data.warehouseTags ?? prev.item.warehouseTags, dispatchStatus: data.dispatchStatus ?? prev.item.dispatchStatus, deliveryStatus: data.deliveryStatus ?? prev.item.deliveryStatus, poNumber: data.poNumber ?? prev.item.poNumber, depositPaid: data.depositPaid ?? prev.item.depositPaid, balanceDue: data.balanceDue ?? prev.item.balanceDue, supplierContainer: data.supplierContainer ?? prev.item.supplierContainer, receivedDate: data.receivedDate ?? prev.item.receivedDate, portArrivalDate: data.portArrivalDate ?? prev.item.portArrivalDate, inTransitDate: data.inTransitDate ?? prev.item.inTransitDate } } : prev);
       setEditOpsModal(false); setSyncNotification("Operational data updated & synced"); window.setTimeout(() => setSyncNotification(null), 4500);
     } catch (e) { setEditOpsError(e instanceof Error ? e.message : "Failed to save"); } finally { setIsSavingOps(false); }
   };
