@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { ActionFunctionArgs } from "react-router";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { getEmailProvider, getFromEmail } from "../lib/email-providers.server";
+import { createCommunicationLog } from "../lib/communication-log.server";
+import { authenticate } from "../shopify.server";
 
 // ─── Cron Worker — process pending bulk email jobs ────────────────────────────
 // Hit via POST /api/bulk-notify/process
@@ -16,6 +18,38 @@ function verifyCronSecret(request: Request): boolean {
   if (!secret) return false;
   const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
   return authHeader === `Bearer ${secret}` || authHeader === secret;
+}
+
+type ClaimedRecipient = {
+  id: string;
+  jobId: string;
+  email: string;
+  name: string;
+  orderName: string;
+  orderId: string;
+  variantId: string;
+  orderData: any;
+};
+
+function renderTemplate(template: string, recipient: ClaimedRecipient, appUrl: string) {
+  const od = (recipient.orderData ?? {}) as Record<string, string>;
+  return template
+    .replace(/\{name\}/g, recipient.name)
+    .replace(/\{order\}/g, recipient.orderName)
+    .replace(/\{link\}/g, `${appUrl}/app/order/${recipient.orderId}?variantId=${recipient.variantId}`)
+    .replace(/\{supplier\}/g, od.supplier || "")
+    .replace(/\{edd\}/g, od.edd || "")
+    .replace(/\{carrier\}/g, od.carrier || "")
+    .replace(/\{tracking\}/g, od.trackingNumber || "");
+}
+
+function toHtml(text: string) {
+  const escaped = text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const linked = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
+  return linked.replace(/\r?\n/g, "<br>");
 }
 
 // ─── POST — process next batch, cancel, retry, or resume ────────────────────
@@ -146,32 +180,55 @@ async function processNextBatch() {
           where: { id: stuck.id },
           data: { status: "FAILED", error: `Stuck — no progress for ${STUCK_TIMEOUT_MS / 60000} min`, completedAt: new Date() },
         });
+        await prisma.bulkEmailRecipient.updateMany({
+          where: { jobId: stuck.id, status: "PENDING" },
+          data: { status: "FAILED", error: "Job stuck with no progress" },
+        });
       }
     }
 
     // ── Step 2: Find next job (oldest PENDING, or resume PROCESSING) ──
-    const job = await prisma.bulkEmailJob.findFirst({
-      where: { status: { in: ["PENDING", "PROCESSING"] } },
-      orderBy: { createdAt: "asc" },
-      include: {
-        recipients: {
-          where: { status: "PENDING" },
-          orderBy: { createdAt: "asc" },
-          take: BATCH_SIZE,
-        },
-      },
-    });
+    const claimRows = await prisma.$queryRawUnsafe<ClaimedRecipient[]>(`
+      WITH next_job AS (
+        SELECT "id"
+        FROM "BulkEmailJob"
+        WHERE "status" IN ('PENDING', 'PROCESSING')
+        ORDER BY "createdAt" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      ),
+      mark_job AS (
+        UPDATE "BulkEmailJob"
+        SET "status" = 'PROCESSING',
+            "startedAt" = COALESCE("startedAt", NOW()),
+            "provider" = $1,
+            "updatedAt" = NOW()
+        WHERE "id" IN (SELECT "id" FROM next_job)
+        RETURNING "id"
+      ),
+      claim_recipients AS (
+        SELECT "id"
+        FROM "BulkEmailRecipient"
+        WHERE "jobId" IN (SELECT "id" FROM next_job)
+          AND "status" = 'PENDING'
+        ORDER BY "createdAt" ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "BulkEmailRecipient"
+      SET "status" = 'PROCESSING'
+      WHERE "id" IN (SELECT "id" FROM claim_recipients)
+      RETURNING "id", "jobId", "email", "name", "orderName", "orderId", "variantId", "orderData"
+    `, provider.name, BATCH_SIZE);
+
+    const jobId = claimRows[0]?.jobId;
+    const job = jobId
+      ? await prisma.bulkEmailJob.findUnique({ where: { id: jobId } })
+      : null;
 
     if (!job) {
+      await finalizeDrainedJobs();
       return Response.json({ ok: true, message: "No pending jobs" });
-    }
-
-    // Mark as processing if it was pending
-    if (job.status === "PENDING") {
-      await prisma.bulkEmailJob.update({
-        where: { id: job.id },
-        data: { status: "PROCESSING", startedAt: new Date(), provider: provider.name },
-      });
     }
 
     const appUrl = process.env.APP_URL || "https://containerdoor-nz-freight-calculator.vercel.app";
@@ -180,30 +237,42 @@ async function processNextBatch() {
     let sent = 0;
     let failed = 0;
 
-    for (const r of job.recipients) {
+    for (const r of claimRows) {
       try {
-        const personalizedBody = job.body
-          .replace(/\{name\}/g, r.name)
-          .replace(/\{order\}/g, r.orderName)
-          .replace(/\{link\}/g, `${appUrl}/app/order/${r.orderId}?variantId=${r.variantId}`);
-
-        const personalizedSubject = job.subject
-          .replace(/\{name\}/g, r.name)
-          .replace(/\{order\}/g, r.orderName);
+        const personalizedBody = renderTemplate(job.body, r, appUrl);
+        const personalizedSubject = renderTemplate(job.subject, r, appUrl);
 
         const result = await provider.send({
           from: fromEmail,
           to: r.email,
           subject: personalizedSubject,
           text: personalizedBody,
+          html: toHtml(personalizedBody),
         });
 
         if (!result.success) throw new Error(result.error || "Send failed");
 
         await prisma.bulkEmailRecipient.update({
           where: { id: r.id },
-          data: { status: "SENT", sentAt: new Date() },
+          data: { status: "SENT", sentAt: new Date(), error: null },
         });
+
+        // Create CommunicationLog entry
+        await createCommunicationLog({
+          shop: job.shop,
+          orderId: r.orderId,
+          jobId: job.id,
+          channel: "email",
+          subject: personalizedSubject,
+          body: personalizedBody,
+          recipientEmail: r.email,
+          recipientName: r.name,
+          sentBy: job.sentBy ?? "system",
+          deliveryStatus: "sent",
+          providerMessageId: result.id,
+          sentAt: new Date(),
+        }).catch((e: any) => console.error("[BulkNotifyWorker] CommunicationLog create failed", e));
+
         sent++;
       } catch (e: any) {
         failed++;
@@ -256,20 +325,42 @@ async function processNextBatch() {
   }
 }
 
+async function finalizeDrainedJobs() {
+  const activeJobs = await prisma.bulkEmailJob.findMany({
+    where: { status: { in: ["PENDING", "PROCESSING"] } },
+    select: { id: true },
+    take: 10,
+  });
+
+  for (const activeJob of activeJobs) {
+    const remaining = await prisma.bulkEmailRecipient.count({
+      where: { jobId: activeJob.id, status: "PENDING" },
+    });
+    if (remaining === 0) {
+      await prisma.bulkEmailJob.update({
+        where: { id: activeJob.id },
+        data: { status: "COMPLETED", completedAt: new Date() },
+      });
+    }
+  }
+}
+
 // ─── GET — check job status / list jobs ──────────────────────────────────────
 
-export async function loader({ request }: ActionFunctionArgs) {
+export async function loader({ request }: LoaderFunctionArgs) {
+  const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const jobId = url.searchParams.get("jobId");
   const shop = url.searchParams.get("shop");
 
-  // Single job status: allow unauthenticated (read-only)
+  // Single job status: admin-authenticated because recipients contain customer data.
   if (jobId) {
     const job = await prisma.bulkEmailJob.findUnique({
       where: { id: jobId },
       include: { recipients: { orderBy: { createdAt: "asc" } } },
     });
     if (!job) return Response.json({ ok: false, error: "Job not found" }, { status: 404 });
+    if (job.shop !== session.shop) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
 
     const [queuePosition, activeCount] = await Promise.all([
       job.status === "PENDING"
@@ -283,6 +374,7 @@ export async function loader({ request }: ActionFunctionArgs) {
 
   // List recent jobs + active count for a shop
   if (shop) {
+    if (shop !== session.shop) return Response.json({ ok: false, error: "Not found" }, { status: 404 });
     const [jobs, activeCount] = await Promise.all([
       prisma.bulkEmailJob.findMany({
         where: { shop },
