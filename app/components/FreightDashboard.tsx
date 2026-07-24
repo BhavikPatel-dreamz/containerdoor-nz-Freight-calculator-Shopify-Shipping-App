@@ -14,7 +14,8 @@ import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
 import { OrderTable } from "./freight/OrderTable";
-import { TrackingModal, EddModal, BulkEddModal, NoteModal, DispatchEditModal, OpsEditModal, BulkNotifyModal } from "./freight/Modals";
+import { TrackingModal, EddModal, BulkEddModal, NoteModal, DispatchEditModal, OpsEditModal, BulkNotifyModal, BulkUpdateModal } from "./freight/Modals";
+import type { BulkUpdatePayload } from "./freight/Modals";
 
 const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
 
@@ -50,6 +51,7 @@ export default function FreightDashboard({
   const [eddModal, setEddModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [noteModalTarget, setNoteModalTarget] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [communications, setCommunications] = useState<any[]>([]);
   const [noteModal, setNoteModal] = useState(false);
   const [noteTab, setNoteTab] = useState("internal");
   const [noteText, setNoteText] = useState("");
@@ -203,6 +205,9 @@ export default function FreightDashboard({
   const [bulkNotifyShowPreview, setBulkNotifyShowPreview] = useState(false);
   const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
 
+  const [bulkUpdateModal, setBulkUpdateModal] = useState(false);
+  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+
   const activeNoteTarget = detailView ?? noteModalTarget;
 
   // ── Fetch notes whenever a modal that shows notes opens ──
@@ -217,6 +222,7 @@ export default function FreightDashboard({
         const json = await res.json();
         const line = (json.lineItems ?? []).find((item: any) => item.variantId === target.item.variantId);
         setNotes(parseNotesString(line?.notes ?? ""));
+        setCommunications(json.communications ?? []);
       } catch (e) { console.error("Failed to load notes", e); } finally { setNotesFetching(false); }
     };
     fetchNotes();
@@ -446,12 +452,13 @@ export default function FreightDashboard({
     if (notifyRecipients.length === 0) { setBulkNotifyError("No recipients with valid email addresses"); return; }
     setBulkNotifyError(""); setIsSendingNotify(true); setBulkNotifyJobStatus(null);
     try {
-      const res = await fetch("/api/bulk-notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject: bulkNotifyForm.subject, body: bulkNotifyForm.body, recipients: notifyRecipients }) });
+      const res = await fetch("/api/bulk-notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject: bulkNotifyForm.subject, body: bulkNotifyForm.body, recipients: notifyRecipients, filters: activeFilters, performedBy: noteAuthor }) });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok || !payload.ok) throw new Error(payload.error || `API error: ${res.status}`);
       const jobId = payload.jobId as string;
       setBulkNotifyJobStatus({ jobId, total: payload.total, sent: 0, failed: 0, remaining: payload.total, status: "PENDING", queuePosition: payload.queuePosition ?? 0, activeCount: payload.activeCount ?? 1 });
       setBackgroundJobId(jobId); // track independently of modal
+      window.localStorage.setItem("bulkNotifyJobId", jobId);
       startBackgroundPoll(jobId);
     } catch (e) { setBulkNotifyError(e instanceof Error ? e.message : "Failed to queue"); } finally { setIsSendingNotify(false); }
   };
@@ -470,6 +477,7 @@ export default function FreightDashboard({
           } else {
             // Terminal state — show toast even if modal is closed
             setBackgroundJobId(null);
+            window.localStorage.removeItem("bulkNotifyJobId");
             if (j.status === "FAILED") {
               setSyncNotification(`❌ Bulk email failed: ${j.sentCount} sent, ${j.failedCount} failed`);
             } else if (j.status === "CANCELLED") {
@@ -483,6 +491,65 @@ export default function FreightDashboard({
       } catch { window.setTimeout(poll, 5000); }
     };
     poll();
+  };
+
+  useEffect(() => {
+    const jobId = window.localStorage.getItem("bulkNotifyJobId");
+    if (!jobId || backgroundJobId) return;
+    setBackgroundJobId(jobId);
+    startBackgroundPoll(jobId);
+  }, []);
+
+  // ── Bulk update (payment status, supplier, notes, optional notify) ──
+  const handleBulkUpdate = async (payload: BulkUpdatePayload) => {
+    if (selectedTargets.length === 0) return;
+    setIsBulkUpdating(true);
+    try {
+      const items = selectedTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+      const res = await fetch("/api/bulk-actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items, actions: payload, performedBy: noteAuthor, filters: activeFilters }),
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || `API error: ${res.status}`);
+      const { summary, notifyJobId, notifyRecipients } = result;
+      const msgs: string[] = [];
+      if (summary.succeeded > 0) msgs.push(`${summary.succeeded} updated`);
+      if (summary.failed > 0) msgs.push(`${summary.failed} failed`);
+      if (summary.failed > 0 && Array.isArray(result.results)) {
+        const failedItems = result.results.filter((r: any) => !r.success).slice(0, 3).map((r: any) => `${r.orderId}/${r.variantId}`);
+        if (failedItems.length) msgs.push(`failed: ${failedItems.join(", ")}`);
+      }
+      if (notifyJobId) msgs.push(`📧 ${notifyRecipients} email${notifyRecipients !== 1 ? "s" : ""} queued`);
+      setSyncNotification(msgs.join(" · ") || "Bulk update complete");
+      window.setTimeout(() => setSyncNotification(null), 5000);
+      if (notifyJobId) { setBackgroundJobId(notifyJobId); window.localStorage.setItem("bulkNotifyJobId", notifyJobId); startBackgroundPoll(notifyJobId); }
+      setSelected(new Set());
+      setBulkUpdateModal(false);
+      // Optimistic update: apply changes to local state
+      if (result.ok && Array.isArray(result.results)) {
+        const succeededSet = new Set(result.results.filter((r: any) => r.success).map((r: any) => `${r.orderId}:${r.variantId}`));
+        const applyUpdates = (o: FreightOrderRow): FreightOrderRow => ({
+          ...o,
+          lineItems: o.lineItems.map((li) => {
+            if (!succeededSet.has(`${o.shopifyOrderId}:${li.variantId}`)) return li;
+            return {
+              ...li,
+              paymentStatus: payload.paymentStatus !== undefined ? payload.paymentStatus : li.paymentStatus,
+              supplierContainer: payload.supplier !== undefined ? payload.supplier : li.supplierContainer,
+            };
+          }),
+        });
+        setRows((prev = []) => prev.map(applyUpdates));
+        if (allRows) setAllRows((prev) => (prev ? prev.map(applyUpdates) : prev));
+      }
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Bulk update failed");
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    } finally {
+      setIsBulkUpdating(false);
+    }
   };
 
   // ── Tracking save ──
@@ -772,6 +839,10 @@ export default function FreightDashboard({
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
                       Notify customers ({selected.size})
                     </button>
+                    <button className="fo-tool-btn" style={{ background: "#7c3aed", color: "#fff", borderColor: "#7c3aed" }} onClick={() => setBulkUpdateModal(true)}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
+                      Bulk update ({selected.size})
+                    </button>
                     {backgroundJobId && (
                       <span style={{ fontSize: "11px", color: "#059669", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px", padding: "0 8px" }}>
                         <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#059669", animation: "fo-pulse 1.5s ease-in-out infinite" }} />
@@ -909,7 +980,7 @@ export default function FreightDashboard({
 
                 <div className="fo-detail-content">
                   <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} />
-                  <NotesPanel notes={notes} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }} />
+                  <NotesPanel notes={notes} communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }} />
                 </div>
               </div>
             ) : filteredOrders.length === 0 ? (
@@ -995,6 +1066,9 @@ export default function FreightDashboard({
       )}
       {editOpsModal && detailView && (
         <OpsEditModal order={detailView.order} item={detailView.item} form={editOpsForm} error={editOpsError} isSaving={isSavingOps} setForm={setEditOpsForm} onClose={() => { setEditOpsModal(false); setEditOpsError(""); }} onSave={handleOpsSave} />
+      )}
+      {bulkUpdateModal && (
+        <BulkUpdateModal open={bulkUpdateModal} onOpenChange={setBulkUpdateModal} onApply={handleBulkUpdate} isSaving={isBulkUpdating} selectedCount={selectedTargets.length} />
       )}
     </>
   );

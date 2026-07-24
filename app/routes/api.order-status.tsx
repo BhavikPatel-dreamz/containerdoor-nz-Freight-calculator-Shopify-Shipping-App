@@ -5,6 +5,7 @@ import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
+import { getCommunicationLogForOrder } from "../lib/communication-log.server";
 
 // Debug logging helper
 const debug = (namespace: string, message: string, data?: any) => {
@@ -195,7 +196,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lineItems = lineItems.filter((r) => r.productTitle !== "");
     }
 
-    return Response.json({ ok: true, lineItems }, { headers: CORS_HEADERS });
+    // ── Fetch communication logs for this order ──
+    let communications: Awaited<ReturnType<typeof getCommunicationLogForOrder>> = [];
+    try {
+      communications = await getCommunicationLogForOrder(shop || "", orderId);
+    } catch (e) {
+      console.error("[api.order-status] CommunicationLog fetch failed", e);
+    }
+
+    return Response.json({ ok: true, lineItems, communications }, { headers: CORS_HEADERS });
   } catch (err) {
     console.error("[api.order-status] DB error", err);
     return Response.json({ ok: false, error: String(err) }, { status: 500, headers: CORS_HEADERS });

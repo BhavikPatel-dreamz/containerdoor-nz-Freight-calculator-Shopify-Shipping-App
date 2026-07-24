@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { FreightOrderRow, FreightLineItem, NoteItem } from "./types";
+import { useState } from "react";
+import type { FreightOrderRow, FreightLineItem } from "./types";
 import { getRefPrefix } from "./helpers";
 
 // ─── Tracking Modal ──────────────────────────────────────────────────────────
@@ -93,6 +94,178 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
           <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: isSavingTracking ? "wait" : "pointer" }}
             onClick={onSave} disabled={isSavingTracking}>
             {isSavingTracking ? "Saving..." : "Save & sync"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BulkUpdateModal — bulk update payment status, supplier, notes + optional notify
+// ═══════════════════════════════════════════════════════════════════════════════
+
+export interface BulkUpdatePayload {
+  paymentStatus?: string;
+  supplier?: string;
+  note?: string;
+  notify?: { subject: string; body: string };
+}
+
+interface BulkUpdateModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onApply: (payload: BulkUpdatePayload) => void;
+  isSaving: boolean;
+  selectedCount: number;
+}
+
+export function BulkUpdateModal({
+  onOpenChange,
+  onApply,
+  isSaving,
+  selectedCount,
+}: BulkUpdateModalProps) {
+  const [enablePayment, setEnablePayment] = useState(false);
+  const [enableSupplier, setEnableSupplier] = useState(false);
+  const [enableNote, setEnableNote] = useState(false);
+  const [enableNotify, setEnableNotify] = useState(false);
+
+  const [paymentStatus, setPaymentStatus] = useState("");
+  const [supplier, setSupplier] = useState("");
+  const [noteText, setNoteText] = useState("");
+  const [notifySubject, setNotifySubject] = useState("");
+  const [notifyBody, setNotifyBody] = useState("");
+
+  const hasAction = enablePayment || enableSupplier || enableNote || enableNotify;
+
+  function reset() {
+    setEnablePayment(false);
+    setEnableSupplier(false);
+    setEnableNote(false);
+    setEnableNotify(false);
+    setPaymentStatus("");
+    setSupplier("");
+    setNoteText("");
+    setNotifySubject("");
+    setNotifyBody("");
+  }
+
+  function handleApply() {
+    const payload: BulkUpdatePayload = {};
+    if (enablePayment) payload.paymentStatus = paymentStatus;
+    if (enableSupplier) payload.supplier = supplier;
+    if (enableNote && noteText.trim()) payload.note = noteText.trim();
+    if (enableNotify && notifySubject.trim() && notifyBody.trim()) {
+      payload.notify = { subject: notifySubject.trim(), body: notifyBody.trim() };
+    }
+    if (Object.keys(payload).length === 0) return;
+    onApply(payload);
+  }
+
+  return (
+    <div className="fo-overlay" onClick={(e) => { if (e.target === e.currentTarget) { reset(); onOpenChange(false); } }}>
+      <div className="fo-modal" style={{ width: "560px", maxWidth: "95vw", maxHeight: "90vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
+        <div className="fo-modal-hdr" style={{ borderBottom: "1px solid #e5e7eb", padding: "16px 20px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            <span style={{ fontSize: "18px" }}>✏️</span>
+            <div>
+              <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
+                Bulk Update
+              </span>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
+                {selectedCount} line item{selectedCount !== 1 ? "s" : ""} selected
+              </div>
+            </div>
+          </div>
+          <button className="fo-modal-close" onClick={() => { reset(); onOpenChange(false); }}>✕</button>
+        </div>
+
+        <div className="fo-modal-body" style={{ display: "flex", flexDirection: "column", gap: 16, padding: "18px 20px" }}>
+          {/* Payment Status */}
+          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+              <input type="checkbox" className="fo-checkbox" checked={enablePayment} onChange={(e) => setEnablePayment(e.target.checked)} />
+              Update payment status
+            </label>
+            {enablePayment && (
+              <div style={{ marginLeft: 24, marginTop: 8 }}>
+                <label className="fo-field-label" htmlFor="bulk-ps">Payment status</label>
+                <select id="bulk-ps" className="fo-input" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value)}>
+                  <option value="">— clear —</option>
+                  <option value="Paid">Paid</option>
+                  <option value="Partial">Partial</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Overdue">Overdue</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Supplier */}
+          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+              <input type="checkbox" className="fo-checkbox" checked={enableSupplier} onChange={(e) => setEnableSupplier(e.target.checked)} />
+              Update supplier
+            </label>
+            {enableSupplier && (
+              <div style={{ marginLeft: 24, marginTop: 8 }}>
+                <label className="fo-field-label" htmlFor="bulk-sup">Supplier</label>
+                <select id="bulk-sup" className="fo-input" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
+                  <option value="">— clear —</option>
+                  <option value="Castle">Castle</option>
+                  <option value="NZ Post">NZ Post</option>
+                  <option value="TGE">TGE</option>
+                  <option value="Mainfreight">Mainfreight</option>
+                  <option value="Fliway">Fliway</option>
+                  <option value="M2H">M2H</option>
+                  <option value="Direct">Direct</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* Note */}
+          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+              <input type="checkbox" className="fo-checkbox" checked={enableNote} onChange={(e) => setEnableNote(e.target.checked)} />
+              Add internal note
+            </label>
+            {enableNote && (
+              <div style={{ marginLeft: 24, marginTop: 8 }}>
+                <label className="fo-field-label" htmlFor="bulk-note">Note</label>
+                <textarea id="bulk-note" className="fo-input" rows={3} value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder="e.g. Payment confirmed by CS, synced to Monday" style={{ resize: "vertical" }} />
+              </div>
+            )}
+          </div>
+
+          {/* Notify */}
+          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
+              <input type="checkbox" className="fo-checkbox" checked={enableNotify} onChange={(e) => setEnableNotify(e.target.checked)} />
+              Send email notification to customers
+            </label>
+            {enableNotify && (
+              <div style={{ marginLeft: 24, marginTop: 8 }}>
+                <label className="fo-field-label" htmlFor="bulk-subject">Subject</label>
+                <input id="bulk-subject" className="fo-input" value={notifySubject} onChange={(e) => setNotifySubject(e.target.value)} placeholder="Order {order} status update" />
+                <div style={{ marginTop: 8 }}>
+                  <label className="fo-field-label" htmlFor="bulk-body">Body</label>
+                  <textarea id="bulk-body" className="fo-input" rows={4} value={notifyBody} onChange={(e) => setNotifyBody(e.target.value)} placeholder={"Hi {name},\n\nYour order {order} has been updated."} style={{ resize: "vertical" }} />
+                </div>
+                <p style={{ marginTop: 6, fontSize: "11px", color: "#6b7280" }}>
+                  Variables: {"{name}"} {"{order}"} {"{link}"} {"{supplier}"} {"{edd}"} {"{carrier}"} {"{tracking}"}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="fo-modal-ftr" style={{ padding: "12px 20px" }}>
+          <button className="fo-btn-ghost" onClick={() => { reset(); onOpenChange(false); }}>Cancel</button>
+          <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: !hasAction || isSaving ? "#d1d5db" : "#7c3aed", color: "#fff", border: "none", cursor: !hasAction || isSaving ? "not-allowed" : "pointer" }}
+            onClick={handleApply} disabled={!hasAction || isSaving}>
+            {isSaving ? "Applying..." : "Apply changes"}
           </button>
         </div>
       </div>
