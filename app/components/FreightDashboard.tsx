@@ -857,7 +857,7 @@ export default function FreightDashboard({
                 selectableIds={selectableIds}
                 toggleSelectAll={toggleSelectAll}
                 toggleSelect={toggleSelect}
-                onOpenDetail={(order, item) => navigate(`/app/freight-orders/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}
+                onOpenDetail={(order, item) => navigate(`/app/order/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}
                 onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}
                 onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}
                 onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}

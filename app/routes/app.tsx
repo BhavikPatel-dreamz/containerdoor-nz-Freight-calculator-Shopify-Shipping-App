@@ -33,10 +33,10 @@ export default function App() {
         }
       `}</style>
       <s-app-nav>
-        <s-link href="/app">Dashboard</s-link>
+        <s-link href="/app">Freight Orders</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/rates">Rates</s-link>
-        <s-link href="/app/freight-orders">Freight Orders</s-link>
+        <s-link href="/app/operations">Operations Summary</s-link>
       </s-app-nav>
       <div className="app-shell">
         <Outlet />
