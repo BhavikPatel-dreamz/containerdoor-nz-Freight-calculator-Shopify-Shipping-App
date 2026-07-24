@@ -140,10 +140,10 @@ export async function action({ request }: ActionFunctionArgs) {
         const alreadyPulled = new Set(
           String(record.notesPulledUpdateIds ?? "").split(",").filter(Boolean),
         );
-        const newUpdates = mondayUpdates.filter((u) => !alreadyPulled.has(u.id));
+        const newUpdates = mondayUpdates.filter((u: { id: string }) => !alreadyPulled.has(u.id));
 
         if (newUpdates.length > 0) {
-          const newNotesBlocks = newUpdates.map((u) => {
+          const newNotesBlocks = newUpdates.map((u: { creatorName: string; createdAt: string; body: string }) => {
             const date = u.createdAt
               ? new Date(u.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short" }) + " " + new Date(u.createdAt).toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })
               : "";
@@ -153,7 +153,7 @@ export async function action({ request }: ActionFunctionArgs) {
           const mergedNotes = [...newNotesBlocks, existingNotes].filter(Boolean).join("\n\n");
           updates.notes = mergedNotes;
 
-          const nextPulledIds = [...alreadyPulled, ...newUpdates.map((u) => u.id)].join(",");
+          const nextPulledIds = [...alreadyPulled, ...newUpdates.map((u: { id: string }) => u.id)].join(",");
           updates.notesPulledUpdateIds = nextPulledIds;
         }
       } catch (e) {
