@@ -270,7 +270,7 @@ export default function FreightDashboard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [rows.map((o) => o.id).join(","), shop]);
 
-  const filteredOrders = serverDriven
+  const baseFilteredOrders = serverDriven
     ? (rows || []).filter((o) => {
         if (!search.trim()) return true;
         const q = search.toLowerCase();
