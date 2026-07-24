@@ -23,6 +23,10 @@ export default function FreightDashboard({
   allOrders,
   counts,
   suppliers = [],
+  warehouseStatuses = [],
+  warehouseTags = [],
+  carriers = [],
+  activeFilters = {},
   page,
   pageCount,
   shop,
@@ -119,14 +123,32 @@ export default function FreightDashboard({
     });
   };
 
-  const activeSupplier = searchParams.get("supplier") ?? "";
-  const setSupplier = (v: string) =>
+  const setFilterParam = (key: string, v: string) =>
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
-      if (v) np.set("supplier", v); else np.delete("supplier");
+      if (v) np.set(key, v); else np.delete(key);
       np.set("page", "1");
       return np;
     });
+  const clearAllFilters = () =>
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("supplier");
+      np.delete("warehouseStatus");
+      np.delete("warehouseTag");
+      np.delete("carrier");
+      np.delete("paymentStatus");
+      np.set("page", "1");
+      return np;
+    });
+
+  const hasActiveFilters = Boolean(
+    searchParams.get("supplier") || searchParams.get("warehouseStatus") ||
+    searchParams.get("warehouseTag") || searchParams.get("carrier") ||
+    searchParams.get("paymentStatus")
+  );
+
+  const [showFilters, setShowFilters] = useState(false);
 
   const [bulkEddModal, setBulkEddModal] = useState(false);
   const [bulkEddForm, setBulkEddForm] = useState({ newEdd: "", notifyCustomer: false });
@@ -245,9 +267,6 @@ export default function FreightDashboard({
 
   const filteredOrders = serverDriven
     ? (rows || []).filter((o) => {
-        // Server already applied tab + supplier filters. Apply the text
-        // search instantly client-side too, so results update as you type
-        // instead of waiting on the debounced server round-trip.
         if (!search.trim()) return true;
         const q = search.toLowerCase();
         return (
@@ -255,7 +274,13 @@ export default function FreightDashboard({
           o.customerName.toLowerCase().includes(q) ||
           o.email.toLowerCase().includes(q) ||
           (o.city ?? "").toLowerCase().includes(q) ||
-          o.carriers.toLowerCase().includes(q)
+          o.carriers.toLowerCase().includes(q) ||
+          o.lineItems.some((li) =>
+            (li.sku || "").toLowerCase().includes(q) ||
+            (li.productId || "").toLowerCase().includes(q) ||
+            (li.variantId || "").toLowerCase().includes(q) ||
+            (li.trackingNumber || "").toLowerCase().includes(q)
+          )
         );
       })
     : (rows || []).filter((o) => {
@@ -584,7 +609,7 @@ export default function FreightDashboard({
                   <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                 </svg>
               </span>
-              <input className="fo-nav-search" placeholder="Search by order #, customer, carrier…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           </div>
           <div className="fo-nav-right">{navbarRight}</div>
@@ -636,29 +661,76 @@ export default function FreightDashboard({
                   </button>
                 )}
                 <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                  {serverDriven && (
-                    <select className="fo-status-select" value={activeSupplier} onChange={(e) => setSupplier(e.target.value)} title="Filter by supplier (Shopify Vendor)">
-                      <option value="">All suppliers</option>
-                      {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
-                    </select>
-                  )}
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "6px" }}>
-                    <div style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: "8px" }}>
-                      <button className="fo-tool-btn" onClick={handleRefreshStatuses} disabled={(isRefreshingCin7 || isRefreshingMonday) || (allRows ?? rows).length === 0}>
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
-                        {(isRefreshingCin7 || isRefreshingMonday) ? "Checking statuses..." : "Refresh status"}
-                      </button>
-                    </div>
-                  </div>
-                  <button className="fo-tool-btn">
+                  <button className="fo-tool-btn" onClick={() => setShowFilters(!showFilters)} style={hasActiveFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}>
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                    Filter
-                  </button>
-                  <button className="fo-tool-btn">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><rect x="14" y="14" width="7" height="7" /></svg>
-                    Columns
+                    Filters{hasActiveFilters ? " \u2022" : ""}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Filter Panel */}
+            {showFilters && !detailView && (
+              <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", background: "#f9fafb", display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
+                  <select className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) setTab("all");
+                    else if (v === "confirmed") setTab("awaiting");
+                    else if (v === "dispatched") setTab("dispatch");
+                    else if (v === "delivered") setTab("complete");
+                  }}>
+                    <option value="">All statuses</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="pending">Pending</option>
+                    <option value="dispatched">Dispatched</option>
+                    <option value="delivered">Delivered</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
+                  <select className="fo-status-select" value={searchParams.get("supplier") ?? ""} onChange={(e) => setFilterParam("supplier", e.target.value)}>
+                    <option value="">All suppliers</option>
+                    {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
+                  <select className="fo-status-select" value={searchParams.get("warehouseStatus") ?? ""} onChange={(e) => setFilterParam("warehouseStatus", e.target.value)}>
+                    <option value="">All</option>
+                    {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse tag</label>
+                  <select className="fo-status-select" value={searchParams.get("warehouseTag") ?? ""} onChange={(e) => setFilterParam("warehouseTag", e.target.value)}>
+                    <option value="">All</option>
+                    {warehouseTags.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
+                  <select className="fo-status-select" value={searchParams.get("carrier") ?? ""} onChange={(e) => setFilterParam("carrier", e.target.value)}>
+                    <option value="">All carriers</option>
+                    {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
+                  <select className="fo-status-select" value={searchParams.get("paymentStatus") ?? ""} onChange={(e) => setFilterParam("paymentStatus", e.target.value)}>
+                    <option value="">All</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Paid">Paid</option>
+                    <option value="Partial">Partial</option>
+                    <option value="Overdue">Overdue</option>
+                  </select>
+                </div>
+                {hasActiveFilters && (
+                  <button className="fo-tool-btn" onClick={() => { clearAllFilters(); setShowFilters(false); }} style={{ color: "#dc2626", borderColor: "#fecaca" }}>
+                    Clear all
+                  </button>
+                )}
               </div>
             )}
 
