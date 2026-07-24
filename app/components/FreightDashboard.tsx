@@ -14,7 +14,7 @@ import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
 import { OrderTable } from "./freight/OrderTable";
-import { TrackingModal, EddModal, BulkEddModal, NoteModal, DispatchEditModal, OpsEditModal } from "./freight/Modals";
+import { TrackingModal, EddModal, BulkEddModal, NoteModal, DispatchEditModal, OpsEditModal, BulkNotifyModal } from "./freight/Modals";
 
 const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
 
@@ -194,6 +194,14 @@ export default function FreightDashboard({
   const [bulkEddError, setBulkEddError] = useState("");
   const [isBulkSavingEdd, setIsBulkSavingEdd] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+
+  const [bulkNotifyModal, setBulkNotifyModal] = useState(false);
+  const [bulkNotifyForm, setBulkNotifyForm] = useState({ subject: "", body: "" });
+  const [bulkNotifyError, setBulkNotifyError] = useState("");
+  const [isSendingNotify, setIsSendingNotify] = useState(false);
+  const [bulkNotifyJobStatus, setBulkNotifyJobStatus] = useState<{ jobId: string; total: number; sent: number; failed: number; remaining: number; status: string; queuePosition?: number; activeCount?: number } | null>(null);
+  const [bulkNotifyShowPreview, setBulkNotifyShowPreview] = useState(false);
+  const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -426,6 +434,55 @@ export default function FreightDashboard({
       window.setTimeout(() => setSyncNotification(null), 4500);
       setSelected(new Set()); setBulkEddModal(false); setBulkEddForm({ newEdd: "", notifyCustomer: false });
     } finally { setIsBulkSavingEdd(false); setBulkProgress(null); }
+  };
+
+  // ── Bulk notify customers ──
+  const notifyRecipients = selectedTargets
+    .map((t) => ({ email: t.order.email, name: t.order.customerName, orderName: t.order.shopifyOrderName, orderId: t.order.shopifyOrderId, variantId: t.item.variantId }))
+    .filter((r) => r.email && r.email !== "—");
+
+  const handleBulkNotifySend = async () => {
+    if (!bulkNotifyForm.subject.trim() || !bulkNotifyForm.body.trim()) { setBulkNotifyError("Subject and message are required"); return; }
+    if (notifyRecipients.length === 0) { setBulkNotifyError("No recipients with valid email addresses"); return; }
+    setBulkNotifyError(""); setIsSendingNotify(true); setBulkNotifyJobStatus(null);
+    try {
+      const res = await fetch("/api/bulk-notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject: bulkNotifyForm.subject, body: bulkNotifyForm.body, recipients: notifyRecipients }) });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) throw new Error(payload.error || `API error: ${res.status}`);
+      const jobId = payload.jobId as string;
+      setBulkNotifyJobStatus({ jobId, total: payload.total, sent: 0, failed: 0, remaining: payload.total, status: "PENDING", queuePosition: payload.queuePosition ?? 0, activeCount: payload.activeCount ?? 1 });
+      setBackgroundJobId(jobId); // track independently of modal
+      startBackgroundPoll(jobId);
+    } catch (e) { setBulkNotifyError(e instanceof Error ? e.message : "Failed to queue"); } finally { setIsSendingNotify(false); }
+  };
+
+  // Polling lives here (parent) so it survives modal close
+  const startBackgroundPoll = (jobId: string) => {
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/bulk-notify/process?jobId=${jobId}`);
+        const data = await res.json().catch(() => (null));
+        if (data?.ok && data.job) {
+          const j = data.job;
+          setBulkNotifyJobStatus({ jobId: j.id, total: j.totalRecipients, sent: j.sentCount, failed: j.failedCount, remaining: j.totalRecipients - j.sentCount - j.failedCount, status: j.status, queuePosition: data.queuePosition, activeCount: data.activeCount });
+          if (j.status === "PROCESSING" || j.status === "PENDING") {
+            window.setTimeout(poll, 3000);
+          } else {
+            // Terminal state — show toast even if modal is closed
+            setBackgroundJobId(null);
+            if (j.status === "FAILED") {
+              setSyncNotification(`❌ Bulk email failed: ${j.sentCount} sent, ${j.failedCount} failed`);
+            } else if (j.status === "CANCELLED") {
+              setSyncNotification(`🚫 Bulk email cancelled: ${j.sentCount} sent before cancellation`);
+            } else {
+              setSyncNotification(`📧 Bulk emails: ${j.sentCount} sent${j.failedCount ? `, ${j.failedCount} failed` : ""}`);
+            }
+            window.setTimeout(() => setSyncNotification(null), 8000);
+          }
+        }
+      } catch { window.setTimeout(poll, 5000); }
+    };
+    poll();
   };
 
   // ── Tracking save ──
@@ -707,9 +764,21 @@ export default function FreightDashboard({
                   {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
                 </label>
                 {selected.size > 0 && (
-                  <button className="fo-tool-btn" style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb" }} onClick={() => { setBulkEddError(""); setBulkEddForm({ newEdd: "", notifyCustomer: false }); setBulkEddModal(true); }}>
-                    <IconCalendar /> Bulk update EDD ({selected.size})
-                  </button>
+                  <>
+                    <button className="fo-tool-btn" style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb" }} onClick={() => { setBulkEddError(""); setBulkEddForm({ newEdd: "", notifyCustomer: false }); setBulkEddModal(true); }}>
+                      <IconCalendar /> Bulk update EDD ({selected.size})
+                    </button>
+                    <button className="fo-tool-btn" style={{ background: "#059669", color: "#fff", borderColor: "#059669" }} onClick={() => { setBulkNotifyError(""); setBulkNotifyForm({ subject: "", body: "" }); setBulkNotifyShowPreview(false); setBulkNotifyModal(true); }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
+                      Notify customers ({selected.size})
+                    </button>
+                    {backgroundJobId && (
+                      <span style={{ fontSize: "11px", color: "#059669", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px", padding: "0 8px" }}>
+                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#059669", animation: "fo-pulse 1.5s ease-in-out infinite" }} />
+                        Sending…
+                      </span>
+                    )}
+                  </>
                 )}
                 <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
                   <button className="fo-tool-btn" onClick={() => setShowFilters(!showFilters)} style={hasActiveFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}>
@@ -903,6 +972,9 @@ export default function FreightDashboard({
       )}
       {bulkEddModal && (
         <BulkEddModal selectedCount={selectedTargets.length} bulkEddForm={bulkEddForm} bulkEddError={bulkEddError} isBulkSavingEdd={isBulkSavingEdd} bulkProgress={bulkProgress} setBulkEddForm={setBulkEddForm} setBulkEddModal={setBulkEddModal} setBulkEddError={setBulkEddError} onSave={handleBulkEddSave} />
+      )}
+      {bulkNotifyModal && (
+        <BulkNotifyModal selectedCount={notifyRecipients.length} recipients={notifyRecipients} form={bulkNotifyForm} error={bulkNotifyError} isSending={isSendingNotify} jobStatus={bulkNotifyJobStatus} setForm={setBulkNotifyForm} setError={setBulkNotifyError} onClose={() => { setBulkNotifyModal(false); setBulkNotifyJobStatus(null); setBulkNotifyForm({ subject: "", body: "" }); setSelected(new Set()); }} onSend={handleBulkNotifySend} onPreview={() => setBulkNotifyShowPreview(true)} showPreview={bulkNotifyShowPreview} setShowPreview={setBulkNotifyShowPreview} />
       )}
       {noteModal && activeNoteTarget && (
         <NoteModal target={activeNoteTarget} noteTab={noteTab} noteText={noteText} sendToMonday={sendToMonday} sendToCin7={sendToCin7} isSavingNote={isSavingNote} noteAuthor={noteAuthor} setNoteTab={setNoteTab} setNoteText={setNoteText} setSendToMonday={setSendToMonday} setSendToCin7={setSendToCin7} setNoteModal={setNoteModal} setNoteModalTarget={setNoteModalTarget}

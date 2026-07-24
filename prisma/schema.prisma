@@ -315,3 +315,60 @@ enum CarrierMode {
   AIR
   ROAD
 }
+
+// ─── Bulk Email Queue ─────────────────────────────────────────────────────────
+
+enum BulkEmailJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum BulkEmailRecipientStatus {
+  PENDING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+model BulkEmailJob {
+  id            String               @id @default(cuid())
+  shop          String
+  subject       String
+  body          String               // raw template with {name}, {order}, {link} placeholders
+  filters       Json?                // snapshot of filters used to select recipients
+  totalRecipients Int                @default(0)
+  sentCount     Int                  @default(0)
+  failedCount   Int                  @default(0)
+  status        BulkEmailJobStatus   @default(PENDING)
+  error         String?              // top-level error if job-level failure
+  provider      String?              // email provider used (resend, ses, smtp, etc.)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  recipients    BulkEmailRecipient[]
+
+  @@index([shop, status, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Asc)])
+}
+
+model BulkEmailRecipient {
+  id            String                    @id @default(cuid())
+  jobId         String
+  email         String
+  name          String
+  orderName     String
+  orderId       String
+  variantId     String
+  status        BulkEmailRecipientStatus  @default(PENDING)
+  error         String?                   // per-recipient error
+  sentAt        DateTime?
+  createdAt     DateTime                  @default(now())
+
+  job BulkEmailJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+}
