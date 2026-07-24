@@ -90,10 +90,196 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
         </div>
         <div className="fo-modal-ftr" style={{ padding: "12px 20px" }}>
           <button className="fo-btn-ghost" onClick={close}>Cancel</button>
-          <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#111827", color: "#fff", border: "none", cursor: "pointer" }}
+          <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: isSavingTracking ? "wait" : "pointer" }}
             onClick={onSave} disabled={isSavingTracking}>
-            {isSavingTracking ? "Saving..." : "Save & mark dispatched"}
+            {isSavingTracking ? "Saving..." : "Save & sync"}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Bulk Notify Customers Modal ──────────────────────────────────────────────
+
+type BulkNotifyModalProps = {
+  selectedCount: number;
+  recipients: Array<{ email: string; name: string; orderName: string; orderId: string; variantId: string }>;
+  form: { subject: string; body: string };
+  error: string;
+  isSending: boolean;
+  jobStatus: { jobId: string; total: number; sent: number; failed: number; remaining: number; status: string; queuePosition?: number; activeCount?: number } | null;
+  setForm: React.Dispatch<React.SetStateAction<{ subject: string; body: string }>>;
+  setError: (v: string) => void;
+  onClose: () => void;
+  onSend: () => void;
+  onPreview: () => void;
+  showPreview: boolean;
+  setShowPreview: (v: boolean) => void;
+};
+
+export function BulkNotifyModal({ selectedCount, recipients, form, error, isSending, jobStatus, setForm, setError, onClose, onSend, onPreview, showPreview, setShowPreview }: BulkNotifyModalProps) {
+  const close = () => { if (!isSending) { onClose(); setError(""); } };
+  const insertLink = () => {
+    const url = prompt("Enter URL:");
+    if (url) {
+      const text = window.getSelection()?.toString() || "click here";
+      setForm((p) => ({ ...p, body: p.body + ` [${text}](${url}) ` }));
+    }
+  };
+
+  const pct = jobStatus && jobStatus.total > 0 ? Math.round(((jobStatus.sent + jobStatus.failed) / jobStatus.total) * 100) : 0;
+  const isTerminal = jobStatus?.status === "COMPLETED" || jobStatus?.status === "FAILED" || jobStatus?.status === "CANCELLED";
+
+  return (
+    <div className="fo-overlay" onClick={close}>
+      <div style={{ background: "#fff", borderRadius: "10px", width: "640px", maxWidth: "95vw", maxHeight: "90vh", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
+          <div>
+            <span style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>📧 Notify customers — {selectedCount} recipient{selectedCount === 1 ? "" : "s"}</span>
+            <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>Sends a custom email to each selected customer</div>
+          </div>
+          <button className="fo-modal-close" onClick={close}>✕</button>
+        </div>
+
+        {/* Tabs — hide when job is running or done */}
+        {!jobStatus && (
+          <div style={{ display: "flex", gap: "0", borderBottom: "1px solid #e5e7eb" }}>
+            {(["compose", "recipients", "preview"] as const).map((tab) => (
+              <button key={tab} onClick={() => { if (tab === "preview") { onPreview(); } setShowPreview(tab === "preview"); }}
+                style={{ flex: 1, padding: "8px 0", fontSize: "12px", fontWeight: 600, textTransform: "capitalize", border: "none", borderBottom: (showPreview ? tab === "preview" : tab === "compose") ? "2px solid #2563eb" : "2px solid transparent", background: "none", color: (showPreview ? tab === "preview" : tab === "compose") ? "#2563eb" : "#6b7280", cursor: "pointer" }}>
+                {tab}
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>
+          {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px", marginBottom: "12px" }}>{error}</div>}
+
+          {/* ── Compose / Preview tabs ── */}
+          {!jobStatus && !showPreview && (
+            <>
+              <div style={{ marginBottom: "12px" }}>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "4px" }}>Subject</label>
+                <input value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
+                  placeholder="e.g. Delivery update for your order"
+                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "13px", outline: "none" }} />
+              </div>
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: 700, color: "#374151" }}>Message</label>
+                  <button onClick={insertLink} style={{ fontSize: "11px", color: "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>+ Insert link</button>
+                </div>
+                <textarea value={form.body} onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
+                  placeholder={`Hi {name},\n\nYour order {order} has an update…\n\nUse {name}, {order}, {link} as placeholders.`}
+                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "13px", outline: "none", fontFamily: "inherit", resize: "vertical", minHeight: "160px", lineHeight: 1.5 }} />
+                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>
+                  Placeholders: {"{name}"} = customer name, {"{order}"} = order #, {"{link}"} = order detail link
+                </div>
+              </div>
+            </>
+          )}
+
+          {!jobStatus && showPreview && (
+            <div>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "8px" }}>Email preview</div>
+              {recipients.length > 0 && (
+                <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "16px", background: "#fafafa", fontSize: "13px" }}>
+                  <div style={{ marginBottom: "8px" }}><strong>To:</strong> {recipients[0].email}</div>
+                  <div style={{ marginBottom: "8px" }}><strong>Subject:</strong> {form.subject || "(no subject)"}</div>
+                  <hr style={{ border: "none", borderTop: "1px solid #e5e7eb", margin: "8px 0" }} />
+                  <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{form.body
+                    .replace(/\{name\}/g, recipients[0].name)
+                    .replace(/\{order\}/g, recipients[0].orderName)
+                    .replace(/\{link\}/g, `/app/order/${recipients[0].orderId}?variantId=${recipients[0].variantId}`)
+                  }</div>
+                </div>
+              )}
+              <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "8px" }}>
+                Showing preview for {recipients[0]?.name || "—"}. Each recipient sees their own personalized values.
+              </div>
+            </div>
+          )}
+
+          {/* ── Recipients list ── */}
+          {!jobStatus && !showPreview && (
+            <div style={{ marginTop: "14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "6px" }}>Recipients ({recipients.length})</div>
+              <div style={{ maxHeight: "120px", overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "12px" }}>
+                {recipients.map((r, i) => (
+                  <div key={i} style={{ padding: "6px 10px", borderBottom: i < recipients.length - 1 ? "1px solid #f3f4f6" : "none", display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#111827" }}>{r.name || "—"}</span>
+                    <span style={{ color: "#6b7280" }}>{r.email || "no email"}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ── Job progress view ── */}
+          {jobStatus && (
+            <div>
+              {/* Progress bar */}
+              {jobStatus.status === "PROCESSING" && (
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
+                    <span>{jobStatus.sent} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
+                    <span>{pct}%</span>
+                  </div>
+                  <div style={{ height: "6px", background: "#e5e7eb", borderRadius: "3px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: "#2563eb", borderRadius: "3px", transition: "width 0.5s ease" }} />
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>{jobStatus.remaining} remaining</div>
+                </div>
+              )}
+
+              {/* Status text */}
+              <div style={{ padding: "12px 16px", borderRadius: "8px", background: jobStatus.status === "COMPLETED" ? "#ecfdf5" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#fef2f2" : "#eff6ff", border: `1px solid ${jobStatus.status === "COMPLETED" ? "#a7f3d0" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#fecaca" : "#bfdbfe"}`, fontSize: "13px", color: jobStatus.status === "COMPLETED" ? "#065f46" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#991b1b" : "#1e40af" }}>
+                {jobStatus.status === "PENDING" && jobStatus.queuePosition != null && jobStatus.queuePosition > 0 && (
+                  <span>⏳ Queued — position {jobStatus.queuePosition + 1} in line</span>
+                )}
+                {jobStatus.status === "PENDING" && (!jobStatus.queuePosition || jobStatus.queuePosition === 0) && (
+                  <span>⏳ Starting…</span>
+                )}
+                {jobStatus.status === "PROCESSING" && (
+                  <span>📤 Sending — {jobStatus.sent} of {jobStatus.total} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
+                )}
+                {jobStatus.status === "COMPLETED" && (
+                  <span>✅ Done — {jobStatus.sent} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
+                )}
+                {jobStatus.status === "FAILED" && (
+                  <span>❌ Failed — {jobStatus.sent} sent, {jobStatus.failed} failed</span>
+                )}
+                {jobStatus.status === "CANCELLED" && (
+                  <span>🚫 Cancelled — {jobStatus.sent} sent before cancellation</span>
+                )}
+              </div>
+
+              {/* Active jobs count */}
+              {jobStatus.activeCount != null && jobStatus.activeCount > 1 && (
+                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "8px" }}>
+                  {jobStatus.activeCount - 1} other job{jobStatus.activeCount - 1 === 1 ? "" : "s"} in queue
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Footer ── */}
+        <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: "12px", color: "#6b7280" }}>
+            {isSending && !jobStatus && "Queuing…"}
+          </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button className="fo-btn-ghost" onClick={close}>{isTerminal ? "Close" : "Cancel"}</button>
+            {!jobStatus && (
+              <button onClick={onSend} disabled={isSending || !form.subject.trim() || !form.body.trim()}
+                style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: (!form.subject.trim() || !form.body.trim()) ? "#d1d5db" : "#2563eb", color: "#fff", border: "none", cursor: isSending ? "wait" : "pointer" }}>
+                {isSending ? "Queuing…" : `Send to ${selectedCount} customer${selectedCount === 1 ? "" : "s"}`}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
