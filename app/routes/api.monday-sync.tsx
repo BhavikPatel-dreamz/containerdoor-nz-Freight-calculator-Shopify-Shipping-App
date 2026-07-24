@@ -142,6 +142,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const mondayDeliveryStatus = mondayData?.deliveryStatus ?? "";
   const mondayDepositPaid = mondayData?.depositPaid ?? "";
   const mondayBalanceDue = mondayData?.balanceDue ?? "";
+  const mondayPaymentStatus = mondayData?.paymentStatus ?? "";
 
   const updated = await prisma.orderLineItemOperationalData.update({
     where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -156,6 +157,7 @@ export async function action({ request }: ActionFunctionArgs) {
       ...(mondayDeliveryStatus ? { deliveryStatus: mondayDeliveryStatus } : {}),
       ...(mondayDepositPaid ? { depositPaid: mondayDepositPaid } : {}),
       ...(mondayBalanceDue ? { balanceDue: mondayBalanceDue } : {}),
+      ...(mondayPaymentStatus ? { paymentStatus: mondayPaymentStatus } : {}),
     },
   });
   console.log("[Monday][Sync] DB updated with Monday data:", updated);

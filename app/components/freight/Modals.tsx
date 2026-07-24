@@ -387,10 +387,10 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
 type OpsEditModalProps = {
   order: FreightOrderRow;
   item: FreightLineItem;
-  form: { warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string };
+  form: { warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; paymentStatus: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string };
   error: string;
   isSaving: boolean;
-  setForm: React.Dispatch<React.SetStateAction<{ warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string }>>;
+  setForm: React.Dispatch<React.SetStateAction<{ warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; paymentStatus: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string }>>;
   onClose: () => void;
   onSave: () => void;
 };
@@ -461,6 +461,16 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
               <label className="fo-field-label" htmlFor="ops-balance">Balance due</label>
               <input id="ops-balance" className="fo-input" placeholder="$0.00" value={form.balanceDue} onChange={(e) => setForm((p) => ({ ...p, balanceDue: e.target.value }))} />
             </div>
+          </div>
+          <div>
+            <label className="fo-field-label" htmlFor="ops-payment-status">Payment status</label>
+            <select id="ops-payment-status" className="fo-input" value={form.paymentStatus} onChange={(e) => setForm((p) => ({ ...p, paymentStatus: e.target.value }))}>
+              <option value="">—</option>
+              <option value="Pending">Pending</option>
+              <option value="Paid">Paid</option>
+              <option value="Partial">Partial</option>
+              <option value="Overdue">Overdue</option>
+            </select>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 14px", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "12px", color: "#166534" }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>

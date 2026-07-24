@@ -47,6 +47,7 @@ export interface LineItemSyncFields {
   receivedDate?: string;
   depositPaid?: string;
   balanceDue?: string;
+  paymentStatus?: string;
   notes?: string;
 }
 
@@ -122,7 +123,7 @@ export async function pushLineItemToAllSystems(
           sku: "",
           boxes: "",
           customerStatus: fields.customerStatus ?? record.customerStatus ?? "",
-          paymentStatus: record.paymentStatus ?? "",
+          paymentStatus: fields.paymentStatus ?? record.paymentStatus ?? "",
           shop,
           orderId,
           variantId,
