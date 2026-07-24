@@ -325,7 +325,7 @@
 }
 
 .fo-table td {
-  padding: 0;
+  padding: 8px;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
 }

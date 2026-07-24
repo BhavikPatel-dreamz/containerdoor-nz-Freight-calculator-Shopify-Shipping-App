@@ -97,7 +97,7 @@ export function OrderTable({
                       <div style={{ fontSize: "11px", color: "#374151" }}>{item.variantTitle}</div>
                     )}
                     <div className="fo-prod-sku" style={{ fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
-                      {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
+                      {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}{item.variantId ? ` · VAR ${item.variantId}` : ""}
                     </div>
                   </td>
                   <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
