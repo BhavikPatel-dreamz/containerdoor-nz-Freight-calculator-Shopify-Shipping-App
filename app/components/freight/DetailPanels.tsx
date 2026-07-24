@@ -2,7 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { companyLabels } from "../../lib/freight";
-import { getCustomerStatusStyle, getPaymentStatusStyle, getCin7CellStatus } from "./helpers";
+import { getCustomerStatusStyle, getPaymentStatusStyle } from "./helpers";
 import { IconPencil } from "./icons";
 
 type DetailPanelsProps = {
@@ -12,38 +12,18 @@ type DetailPanelsProps = {
   onEditOps: () => void;
 };
 
+const editBtnStyle = { background: "none", border: "1px solid #e5e7eb", borderRadius: "4px", padding: "3px 6px", cursor: "pointer", color: "#6b7280", display: "flex" as const, alignItems: "center", gap: "4px", fontSize: "11px", transition: "all 0.15s" };
+const editBtnHover = { borderColor: "#2563eb", color: "#2563eb" };
+const editBtnLeave = { borderColor: "#e5e7eb", color: "#6b7280" };
+
 export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailPanelsProps) {
   return (
     <div className="fo-detail-left">
-      {/* Customer */}
-      <div className="fo-detail-panel">
-        <div className="fo-detail-panel-hdr">Customer</div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Name</span><span className="fo-detail-value">{order.customerName || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Email</span><span className="fo-detail-value"><a href={`mailto:${order.email}`} style={{ color: "#2563eb", textDecoration: "none", fontSize: "12px" }}>{order.email || "—"}</a></span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Phone</span><span className="fo-detail-value">{order.phone || "—"}</span></div>
-        <div className="fo-detail-row">
-          <span className="fo-detail-label">Customer status</span>
-          <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getCustomerStatusStyle(item.customerStatus).bg, color: getCustomerStatusStyle(item.customerStatus).text }}>
-              {getCustomerStatusStyle(item.customerStatus).label || "—"}
-            </span>
-          </span>
-        </div>
-        <div className="fo-detail-row">
-          <span className="fo-detail-label">Payment status</span>
-          <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
-              {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
-            </span>
-          </span>
-        </div>
-      </div>
-
-      {/* Dispatch & Freight — editable */}
+      {/* 1. Dispatch & Freight — editable */}
       <div className="fo-detail-panel">
         <div className="fo-detail-panel-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>Dispatch &amp; Freight</span>
-          <button onClick={onEditDispatch} title="Edit Dispatch & Freight" style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: "4px", padding: "3px 6px", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", transition: "all 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.color = "#2563eb"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.color = "#6b7280"; }}>
+          <button onClick={onEditDispatch} title="Edit Dispatch & Freight" style={editBtnStyle} onMouseEnter={(e) => { Object.assign(e.currentTarget.style, editBtnHover); }} onMouseLeave={(e) => { Object.assign(e.currentTarget.style, editBtnLeave); }}>
             <IconPencil /> Edit
           </button>
         </div>
@@ -67,11 +47,11 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailP
         <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
       </div>
 
-      {/* Operational — editable */}
+      {/* 2. Operational — editable */}
       <div className="fo-detail-panel">
         <div className="fo-detail-panel-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>Operational</span>
-          <button onClick={onEditOps} title="Edit Operational" style={{ background: "none", border: "1px solid #e5e7eb", borderRadius: "4px", padding: "3px 6px", cursor: "pointer", color: "#6b7280", display: "flex", alignItems: "center", gap: "4px", fontSize: "11px", transition: "all 0.15s" }} onMouseEnter={(e) => { e.currentTarget.style.borderColor = "#2563eb"; e.currentTarget.style.color = "#2563eb"; }} onMouseLeave={(e) => { e.currentTarget.style.borderColor = "#e5e7eb"; e.currentTarget.style.color = "#6b7280"; }}>
+          <button onClick={onEditOps} title="Edit Operational" style={editBtnStyle} onMouseEnter={(e) => { Object.assign(e.currentTarget.style, editBtnHover); }} onMouseLeave={(e) => { Object.assign(e.currentTarget.style, editBtnLeave); }}>
             <IconPencil /> Edit
           </button>
         </div>
@@ -83,9 +63,33 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailP
         <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{item.balanceDue || "—"}</span></div>
       </div>
 
-      {/* Combined: Order Details & Sync */}
-      <div className="fo-detail-panel" style={{ opacity: 0.85 }}>
-        <div className="fo-detail-panel-hdr" style={{ fontSize: "12px", color: "#374151" }}>Order Details &amp; Sync</div>
+      {/* 3. Customer */}
+      <div className="fo-detail-panel">
+        <div className="fo-detail-panel-hdr">Customer</div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Name</span><span className="fo-detail-value">{order.customerName || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Email</span><span className="fo-detail-value"><a href={`mailto:${order.email}`} style={{ color: "#2563eb", textDecoration: "none", fontSize: "12px" }}>{order.email || "—"}</a></span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Phone</span><span className="fo-detail-value">{order.phone || "—"}</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Customer status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getCustomerStatusStyle(item.customerStatus).bg, color: getCustomerStatusStyle(item.customerStatus).text }}>
+              {getCustomerStatusStyle(item.customerStatus).label || "—"}
+            </span>
+          </span>
+        </div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Payment status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
+              {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
+            </span>
+          </span>
+        </div>
+      </div>
+
+      {/* 4. Order Details & Sync */}
+      <div className="fo-detail-panel">
+        <div className="fo-detail-panel-hdr">Order Details &amp; Sync</div>
         <div className="fo-detail-row">
           <span className="fo-detail-label">Line order #</span>
           <span className="fo-detail-value">
