@@ -482,6 +482,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
           orderId,
           variantId: li.variantId,
           warehouseStatus: "",
+          warehouseTags: "",
           dispatchStatus: "",
           deliveryStatus: "",
           depositPaid: "",

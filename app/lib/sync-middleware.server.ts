@@ -127,6 +127,7 @@ export async function pushLineItemToAllSystems(
           orderId,
           variantId,
           warehouseStatus: record.warehouseStatus ?? "",
+          warehouseTags: record.warehouseTags ?? "",
           dispatchStatus: fields.dispatchStatus ?? record.dispatchStatus ?? "",
           deliveryStatus: record.deliveryStatus ?? "",
           depositPaid: record.depositPaid ?? "",

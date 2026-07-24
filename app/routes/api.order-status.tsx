@@ -426,6 +426,7 @@ export async function action({ request }: ActionFunctionArgs) {
         orderId,
         variantId,
         warehouseStatus: updated.warehouseStatus ?? "",
+        warehouseTags: updated.warehouseTags ?? "",
         dispatchStatus: updated.dispatchStatus ?? "",
         deliveryStatus: updated.deliveryStatus ?? "",
         depositPaid: updated.depositPaid ?? "",
