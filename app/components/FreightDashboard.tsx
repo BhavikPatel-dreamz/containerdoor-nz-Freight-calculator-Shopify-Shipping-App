@@ -128,20 +128,44 @@ export default function FreightDashboard({
   const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
+  // Keep input in sync when URL `q` changes (back/forward, clear button).
+  // Depend on urlQ only — other params (tab/page) must not wipe in-progress typing.
+  const urlQ = searchParams.get("q") ?? "";
+  useEffect(() => {
+    setSearch((prev) => (prev === urlQ ? prev : urlQ));
+  }, [urlQ]);
+
+  // Push search → URL. Empty clears immediately so loader returns full list.
   useEffect(() => {
     if (!serverDriven) return;
-    const current = searchParams.get("q") ?? "";
-    if (search === current) return;
+    const trimmed = search.trim();
+    const current = urlQ.trim();
+    if (trimmed === current) return;
+    const delay = trimmed ? 350 : 0;
     const t = setTimeout(() => {
       setSearchParams((prev) => {
         const np = new URLSearchParams(prev);
-        if (search) np.set("q", search); else np.delete("q");
+        const before = (prev.get("q") ?? "").trim();
+        if (trimmed === before) return prev;
+        if (trimmed) np.set("q", trimmed);
+        else np.delete("q");
         np.set("page", "1");
         return np;
       }, { replace: true });
-    }, 350);
+    }, delay);
     return () => clearTimeout(t);
-  }, [search, serverDriven]);
+  }, [search, serverDriven, urlQ, setSearchParams]);
+
+  const clearSearch = () => {
+    setSearch("");
+    if (!serverDriven) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("q");
+      np.set("page", "1");
+      return np;
+    }, { replace: true });
+  };
 
   const setTab = (key: string) => {
     setActiveTab(key);
@@ -336,24 +360,10 @@ export default function FreightDashboard({
     return () => { cancelled = true; clearInterval(interval); };
   }, [rows.map((o) => o.id).join(","), shop]);
 
+  // Server-driven list already filtered by loader `q` — do not re-filter client-side
+  // (re-filtering kept stale rows when search box was cleared before URL refreshed).
   const baseFilteredOrders = serverDriven
-    ? (rows || []).filter((o) => {
-        if (!search.trim()) return true;
-        const q = search.toLowerCase();
-        return (
-          o.shopifyOrderName.toLowerCase().includes(q) ||
-          o.customerName.toLowerCase().includes(q) ||
-          o.email.toLowerCase().includes(q) ||
-          (o.city ?? "").toLowerCase().includes(q) ||
-          o.carriers.toLowerCase().includes(q) ||
-          o.lineItems.some((li) =>
-            (li.sku || "").toLowerCase().includes(q) ||
-            (li.productId || "").toLowerCase().includes(q) ||
-            (li.variantId || "").toLowerCase().includes(q) ||
-            (li.trackingNumber || "").toLowerCase().includes(q)
-          )
-        );
-      })
+    ? (rows || [])
     : (rows || []).filter((o) => {
         if (activeTab !== "all") {
           const hasMatch = o.lineItems.some((li) => {
@@ -946,12 +956,28 @@ export default function FreightDashboard({
                     <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
                   </svg>
                 </span>
-                <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
+                <input
+                  className="fo-nav-search"
+                  placeholder="Search by order #, customer, SKU, product ID, tracking…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") clearSearch();
+                  }}
+                />
+                {search ? (
+                  <button type="button" className="fo-nav-search-clear" onClick={clearSearch} title="Clear search" aria-label="Clear search">
+                    ✕
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
           <div className="fo-nav-right">
-            <NavQueueJobs job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)} />
+            <NavQueueJobs
+              shop={shop}
+              job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)}
+            />
             {navbarRight}
           </div>
         </nav>
