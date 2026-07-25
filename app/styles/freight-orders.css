@@ -60,7 +60,7 @@
   background: #374151;
   border: 1px solid #4b5563;
   border-radius: 6px;
-  padding: 5px 12px 5px 32px;
+  padding: 5px 32px 5px 32px;
   font-size: 13px;
   color: #f3f4f6;
   outline: none;
@@ -83,6 +83,29 @@
   pointer-events: none;
   display: flex;
   align-items: center;
+}
+
+.fo-nav-search-clear {
+  position: absolute;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #9ca3af;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.fo-nav-search-clear:hover {
+  color: #f3f4f6;
+  background: #4b5563;
 }
 
 .fo-nav-right {
@@ -123,6 +146,11 @@
   justify-content: center;
 }
 
+.fo-nav-queue-wrap {
+  position: relative;
+  margin-right: 4px;
+}
+
 .fo-nav-queue {
   display: flex;
   align-items: center;
@@ -134,7 +162,12 @@
   color: #a7f3d0;
   font-size: 11px;
   font-weight: 600;
-  margin-right: 4px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.fo-nav-queue:hover {
+  background: rgba(5, 150, 105, 0.28);
 }
 
 .fo-nav-queue-dot {
@@ -143,6 +176,7 @@
   border-radius: 50%;
   background: #34d399;
   animation: fo-pulse 1.5s ease-in-out infinite;
+  flex-shrink: 0;
 }
 
 .fo-nav-queue-label {
@@ -154,6 +188,169 @@
 
 .fo-nav-queue-status {
   color: #ecfdf5;
+}
+
+.fo-nav-queue-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: default;
+}
+
+.fo-nav-queue-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 81;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(70vh, 480px);
+  overflow: auto;
+  background: #fff;
+  color: #111827;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18);
+  padding: 14px;
+}
+
+.fo-nav-queue-panel-hdr {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.fo-nav-queue-panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.fo-nav-queue-panel-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #6b7280;
+}
+
+.fo-nav-queue-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.fo-nav-queue-meta > div {
+  background: #f9fafb;
+  border: 1px solid #f3f4f6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fo-nav-queue-meta span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+}
+
+.fo-nav-queue-meta strong {
+  font-size: 13px;
+  color: #111827;
+}
+
+.fo-nav-queue-jobid {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-bottom: 10px;
+  word-break: break-all;
+}
+
+.fo-nav-queue-log-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  margin-bottom: 6px;
+}
+
+.fo-nav-queue-empty {
+  font-size: 12px;
+  color: #6b7280;
+  padding: 10px 0;
+}
+
+.fo-nav-queue-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fo-nav-queue-log-row {
+  border: 1px solid #f3f4f6;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.fo-nav-queue-log-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.fo-nav-queue-log-email {
+  font-size: 12px;
+  font-weight: 600;
+  color: #111827;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fo-nav-queue-log-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #f3f4f6;
+  color: #4b5563;
+}
+
+.fo-nav-queue-log-row.status-sent .fo-nav-queue-log-badge,
+.fo-nav-queue-log-row.status-completed .fo-nav-queue-log-badge {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.fo-nav-queue-log-row.status-failed .fo-nav-queue-log-badge {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.fo-nav-queue-log-row.status-pending .fo-nav-queue-log-badge,
+.fo-nav-queue-log-row.status-queued .fo-nav-queue-log-badge {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.fo-nav-queue-log-sub {
+  margin-top: 3px;
+  font-size: 11px;
+  color: #6b7280;
 }
 
 .fo-body {
