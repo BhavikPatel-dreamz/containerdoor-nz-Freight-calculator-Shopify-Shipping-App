@@ -10,13 +10,14 @@ type DetailPanelsProps = {
   item: FreightLineItem;
   onEditDispatch: () => void;
   onEditOps: () => void;
+  onAmendOrder?: () => void;
 };
 
 const editBtnStyle = { background: "none", border: "1px solid #e5e7eb", borderRadius: "4px", padding: "3px 6px", cursor: "pointer", color: "#6b7280", display: "flex" as const, alignItems: "center", gap: "4px", fontSize: "11px", transition: "all 0.15s" };
 const editBtnHover = { borderColor: "#2563eb", color: "#2563eb" };
 const editBtnLeave = { borderColor: "#e5e7eb", color: "#6b7280" };
 
-export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailPanelsProps) {
+export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOrder }: DetailPanelsProps) {
   return (
     <div className="fo-detail-left">
       {/* 1. Dispatch & Freight — editable */}
@@ -71,10 +72,18 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps }: DetailP
 
       {/* 3. Customer */}
       <div className="fo-detail-panel">
-        <div className="fo-detail-panel-hdr">Customer</div>
+        <div className="fo-detail-panel-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span>Customer</span>
+          {onAmendOrder ? (
+            <button onClick={onAmendOrder} title="Amend contact / address" style={editBtnStyle} onMouseEnter={(e) => { Object.assign(e.currentTarget.style, editBtnHover); }} onMouseLeave={(e) => { Object.assign(e.currentTarget.style, editBtnLeave); }}>
+              <IconPencil /> Amend
+            </button>
+          ) : null}
+        </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Name</span><span className="fo-detail-value">{order.customerName || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Email</span><span className="fo-detail-value"><a href={`mailto:${order.email}`} style={{ color: "#2563eb", textDecoration: "none", fontSize: "12px" }}>{order.email || "—"}</a></span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Phone</span><span className="fo-detail-value">{order.phone || "—"}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Address</span><span className="fo-detail-value">{order.fullAddress || "—"}</span></div>
         <div className="fo-detail-row">
           <span className="fo-detail-label">Customer status</span>
           <span className="fo-detail-value">

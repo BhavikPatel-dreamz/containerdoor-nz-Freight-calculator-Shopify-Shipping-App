@@ -503,3 +503,160 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
     </div>
   );
 }
+
+// ─── Order Amendment Modal (contact / address / instructions / cancel) ───────
+
+export type AmendDraft = {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  address1: string;
+  address2: string;
+  city: string;
+  province: string;
+  zip: string;
+  country: string;
+  deliveryInstructions: string;
+};
+
+type AmendOrderModalProps = {
+  orderName: string;
+  variantId: string;
+  form: AmendDraft;
+  error: string;
+  isSaving: boolean;
+  setForm: React.Dispatch<React.SetStateAction<AmendDraft>>;
+  onClose: () => void;
+  onSave: (opts: { cancelLineItem?: boolean; cancelOrder?: boolean }) => void;
+};
+
+export function AmendOrderModal({
+  orderName,
+  form,
+  error,
+  isSaving,
+  setForm,
+  onClose,
+  onSave,
+}: AmendOrderModalProps) {
+  const set = (key: keyof AmendDraft) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm((p) => ({ ...p, [key]: e.target.value }));
+
+  return (
+    <div className="fo-amend-overlay" role="dialog" aria-modal="true" aria-labelledby="fo-amend-title">
+      <div className="fo-amend-screen" onClick={(e) => e.stopPropagation()}>
+        <header className="fo-amend-hdr">
+          <div>
+            <div id="fo-amend-title" className="fo-amend-title">Amend order</div>
+            <div className="fo-amend-sub">{orderName} · syncs to Shopify &amp; Monday · audit logged</div>
+          </div>
+          <button type="button" className="fo-modal-close" onClick={onClose} aria-label="Close">✕</button>
+        </header>
+
+        {error ? <div className="fo-amend-error">{error}</div> : null}
+
+        <div className="fo-amend-grid">
+          <section className="fo-amend-card">
+            <h3 className="fo-amend-card-title">Contact</h3>
+            <div className="fo-amend-fields">
+              <div className="fo-amend-row-2">
+                <div>
+                  <label className="fo-field-label">First name</label>
+                  <input className="fo-input" value={form.firstName} onChange={set("firstName")} />
+                </div>
+                <div>
+                  <label className="fo-field-label">Last name</label>
+                  <input className="fo-input" value={form.lastName} onChange={set("lastName")} />
+                </div>
+              </div>
+              <div>
+                <label className="fo-field-label">Email</label>
+                <input className="fo-input" type="email" value={form.email} onChange={set("email")} />
+              </div>
+              <div>
+                <label className="fo-field-label">Phone</label>
+                <input className="fo-input" value={form.phone} onChange={set("phone")} />
+              </div>
+            </div>
+          </section>
+
+          <section className="fo-amend-card">
+            <h3 className="fo-amend-card-title">Delivery address</h3>
+            <div className="fo-amend-fields">
+              <div>
+                <label className="fo-field-label">Address line 1</label>
+                <input className="fo-input" value={form.address1} onChange={set("address1")} />
+              </div>
+              <div>
+                <label className="fo-field-label">Address line 2</label>
+                <input className="fo-input" value={form.address2} onChange={set("address2")} />
+              </div>
+              <div className="fo-amend-row-2">
+                <div>
+                  <label className="fo-field-label">City</label>
+                  <input className="fo-input" value={form.city} onChange={set("city")} />
+                </div>
+                <div>
+                  <label className="fo-field-label">Province / region</label>
+                  <input className="fo-input" value={form.province} onChange={set("province")} />
+                </div>
+              </div>
+              <div className="fo-amend-row-2">
+                <div>
+                  <label className="fo-field-label">Postcode</label>
+                  <input className="fo-input" value={form.zip} onChange={set("zip")} />
+                </div>
+                <div>
+                  <label className="fo-field-label">Country</label>
+                  <input className="fo-input" value={form.country} onChange={set("country")} />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section className="fo-amend-card fo-amend-card-side">
+            <h3 className="fo-amend-card-title">Instructions</h3>
+            <textarea
+              className="fo-input fo-amend-instructions"
+              value={form.deliveryInstructions}
+              onChange={set("deliveryInstructions")}
+              placeholder="Gate code, leave with neighbour…"
+            />
+            <h3 className="fo-amend-card-title" style={{ marginTop: 12 }}>Cancel</h3>
+            <div className="fo-amend-cancel-stack">
+              <button
+                type="button"
+                className="fo-amend-cancel-btn"
+                disabled={isSaving}
+                onClick={() => onSave({ cancelLineItem: true })}
+              >
+                Cancel this line item
+              </button>
+              <button
+                type="button"
+                className="fo-amend-cancel-btn fo-amend-cancel-btn-order"
+                disabled={isSaving}
+                onClick={() => onSave({ cancelOrder: true })}
+              >
+                Cancel entire order
+              </button>
+            </div>
+          </section>
+        </div>
+
+        <footer className="fo-amend-ftr">
+          <button type="button" className="fo-btn-ghost" onClick={onClose} disabled={isSaving}>Close</button>
+          <button
+            type="button"
+            className="fo-amend-save"
+            onClick={() => onSave({})}
+            disabled={isSaving}
+          >
+            {isSaving ? "Saving…" : "Save & sync"}
+          </button>
+        </footer>
+      </div>
+    </div>
+  );
+}

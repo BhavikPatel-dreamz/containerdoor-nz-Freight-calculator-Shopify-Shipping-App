@@ -14,7 +14,7 @@ import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
 import { OrderTable } from "./freight/OrderTable";
-import { TrackingModal, EddModal, NoteModal, DispatchEditModal, OpsEditModal } from "./freight/Modals";
+import { TrackingModal, EddModal, NoteModal, DispatchEditModal, OpsEditModal, AmendOrderModal, type AmendDraft } from "./freight/Modals";
 import { BulkActionsWorkspace } from "./freight/BulkActionsWorkspace";
 import { NavQueueJobs } from "./freight/NavQueueJobs";
 import type { BulkActionsPayload, BulkActionsResult } from "./freight/BulkActionsWorkspace";
@@ -74,6 +74,14 @@ export default function FreightDashboard({
   const [isSavingOps, setIsSavingOps] = useState(false);
   const [editDispatchError, setEditDispatchError] = useState("");
   const [editOpsError, setEditOpsError] = useState("");
+  const [amendModalOpen, setAmendModalOpen] = useState(false);
+  const [amendForm, setAmendForm] = useState<AmendDraft>({
+    firstName: "", lastName: "", email: "", phone: "",
+    address1: "", address2: "", city: "", province: "", zip: "", country: "",
+    deliveryInstructions: "",
+  });
+  const [amendError, setAmendError] = useState("");
+  const [isSavingAmend, setIsSavingAmend] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
@@ -134,13 +142,6 @@ export default function FreightDashboard({
     });
   };
 
-  const setFilterParam = (key: string, v: string) =>
-    setSearchParams((prev) => {
-      const np = new URLSearchParams(prev);
-      if (v) np.set(key, v); else np.delete(key);
-      np.set("page", "1");
-      return np;
-    });
   const clearAllFilters = () =>
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
@@ -159,7 +160,8 @@ export default function FreightDashboard({
     searchParams.get("paymentStatus")
   );
 
-  const [showFilters, setShowFilters] = useState(false);
+  // Open filter panel by default when URL already has filters (e.g. return from detail).
+  const [showFilters, setShowFilters] = useState(hasActiveFilters);
 
   // Staging state: dropdowns write here, Apply commits to URL params.
   const [stagedFilters, setStagedFilters] = useState({
@@ -180,20 +182,34 @@ export default function FreightDashboard({
     });
   }, [searchParams]);
 
-  const applyFilters = () => {
+  const applyFilters = (next?: Partial<typeof stagedFilters>, { closePanel = false }: { closePanel?: boolean } = {}) => {
+    const merged = { ...stagedFilters, ...next };
+    if (next) setStagedFilters(merged);
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
       const set = (k: string, v: string) => { if (v) np.set(k, v); else np.delete(k); };
-      set("supplier", stagedFilters.supplier);
-      set("warehouseStatus", stagedFilters.warehouseStatus);
-      set("warehouseTag", stagedFilters.warehouseTag);
-      set("carrier", stagedFilters.carrier);
-      set("paymentStatus", stagedFilters.paymentStatus);
+      set("supplier", merged.supplier);
+      set("warehouseStatus", merged.warehouseStatus);
+      set("warehouseTag", merged.warehouseTag);
+      set("carrier", merged.carrier);
+      set("paymentStatus", merged.paymentStatus);
       np.set("page", "1");
       return np;
     });
-    setShowFilters(false);
+    if (closePanel) setShowFilters(false);
   };
+
+  const removeFilter = (key: keyof typeof stagedFilters) => {
+    applyFilters({ [key]: "" });
+  };
+
+  const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
+    stagedFilters.supplier ? { key: "supplier" as const, label: "Supplier", value: stagedFilters.supplier } : null,
+    stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
+    stagedFilters.warehouseTag ? { key: "warehouseTag" as const, label: "Tag", value: stagedFilters.warehouseTag } : null,
+    stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
+    stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
+  ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
 
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
@@ -633,6 +649,128 @@ export default function FreightDashboard({
   };
 
   // ── Operational save ──
+  const handleAmendOpen = async () => {
+    if (!detailView) return;
+    setAmendError("");
+    setIsSavingAmend(false);
+    try {
+      const res = await fetch(
+        `/api/order-amendments?shop=${encodeURIComponent(shop)}&orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}`,
+      );
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "Failed to load order");
+      const d = json.draft;
+      setAmendForm({
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        email: d.email || "",
+        phone: d.phone || "",
+        address1: d.address1 || "",
+        address2: d.address2 || "",
+        city: d.city || "",
+        province: d.province || "",
+        zip: d.zip || "",
+        country: d.country || "",
+        deliveryInstructions: d.deliveryInstructions || "",
+      });
+      setAmendModalOpen(true);
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Failed to open amend form");
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    }
+  };
+
+  const handleAmendSave = async (opts: { cancelLineItem?: boolean; cancelOrder?: boolean } = {}) => {
+    if (!detailView) return;
+    if (opts.cancelOrder && !window.confirm("Cancel all line items on this order? This sets Customer status to Cancelled.")) return;
+    if (opts.cancelLineItem && !window.confirm("Cancel this line item? Customer status → Cancelled.")) return;
+    setIsSavingAmend(true);
+    setAmendError("");
+    try {
+      const res = await fetch("/api/order-amendments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: detailView.order.shopifyOrderId,
+          variantId: detailView.item.variantId,
+          performedBy: noteAuthor,
+          contact: {
+            firstName: amendForm.firstName,
+            lastName: amendForm.lastName,
+            email: amendForm.email,
+            phone: amendForm.phone,
+          },
+          address: {
+            firstName: amendForm.firstName,
+            lastName: amendForm.lastName,
+            address1: amendForm.address1,
+            address2: amendForm.address2,
+            city: amendForm.city,
+            province: amendForm.province,
+            zip: amendForm.zip,
+            country: amendForm.country,
+            phone: amendForm.phone,
+          },
+          deliveryInstructions: amendForm.deliveryInstructions,
+          cancelLineItem: Boolean(opts.cancelLineItem),
+          cancelOrder: Boolean(opts.cancelOrder),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "Amendment failed");
+
+      const fullAddress = [amendForm.address1, amendForm.address2, amendForm.city, amendForm.province, amendForm.zip, amendForm.country]
+        .filter(Boolean)
+        .join(", ");
+      const customerName = `${amendForm.firstName} ${amendForm.lastName}`.trim();
+      const applyOrder = (o: FreightOrderRow): FreightOrderRow => {
+        if (o.id !== detailView.order.id) return o;
+        return {
+          ...o,
+          customerName: customerName || o.customerName,
+          email: amendForm.email || o.email,
+          phone: amendForm.phone || o.phone,
+          fullAddress: fullAddress || o.fullAddress,
+          city: amendForm.city || o.city,
+          postalCode: amendForm.zip || o.postalCode,
+          lineItems: o.lineItems.map((li) => {
+            if (opts.cancelOrder) return { ...li, customerStatus: "cancelled" };
+            if (opts.cancelLineItem && li.variantId === detailView.item.variantId) {
+              return { ...li, customerStatus: "cancelled" };
+            }
+            return li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyOrder));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyOrder) : prev));
+      setDetailView((prev) =>
+        prev
+          ? {
+              ...prev,
+              order: applyOrder(prev.order),
+              item: opts.cancelOrder || opts.cancelLineItem
+                ? { ...prev.item, customerStatus: "cancelled" }
+                : prev.item,
+            }
+          : prev,
+      );
+      setAmendModalOpen(false);
+      const n = json.changes?.length ?? 0;
+      setSyncNotification(
+        n
+          ? `Order amended (${n} change${n === 1 ? "" : "s"})${json.shopifyOk === false ? " — Shopify sync issue" : " & synced"}`
+          : "No changes",
+      );
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    } catch (e) {
+      setAmendError(e instanceof Error ? e.message : "Failed to save amendment");
+    } finally {
+      setIsSavingAmend(false);
+    }
+  };
+
   const handleOpsEdit = () => {
     if (!detailView) return;
     setEditOpsForm({ warehouseStatus: detailView.item.warehouseStatus || "", warehouseTags: detailView.item.warehouseTags || "", dispatchStatus: detailView.item.dispatchStatus || "", deliveryStatus: detailView.item.deliveryStatus || "", poNumber: detailView.item.poNumber || "", depositPaid: detailView.item.depositPaid || "", balanceDue: detailView.item.balanceDue || "", paymentStatus: detailView.item.paymentStatus || "", supplierContainer: detailView.item.supplierContainer || "", receivedDate: detailView.item.receivedDate || "", portArrivalDate: detailView.item.portArrivalDate || "", inTransitDate: detailView.item.inTransitDate || "" });
@@ -798,14 +936,16 @@ export default function FreightDashboard({
           <div className="fo-nav-left">
             <div className="fo-logo-box">F</div>
             <span className="fo-nav-title">Freight OMS</span>
-            <div className="fo-nav-search-wrap">
-              <span className="fo-nav-search-icon">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-              </span>
-              <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
+            {!detailView ? (
+              <div className="fo-nav-search-wrap">
+                <span className="fo-nav-search-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </span>
+                <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+            ) : null}
           </div>
           <div className="fo-nav-right">
             <NavQueueJobs job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)} />
@@ -867,18 +1007,48 @@ export default function FreightDashboard({
                     </button>
                   </>
                 )}
-                <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                  <button className="fo-tool-btn" onClick={() => setShowFilters(!showFilters)} style={hasActiveFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}>
+                <div className="fo-toolbar-right" style={{ alignItems: "flex-end", gap: 8 }}>
+                  <button
+                    className="fo-tool-btn"
+                    onClick={() => setShowFilters(!showFilters)}
+                    style={hasActiveFilters || showFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}
+                  >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                    Filters{hasActiveFilters ? " \u2022" : ""}
+                    {showFilters ? "Hide filters" : "Filters"}
+                    {activeFilterChips.length > 0 ? ` (${activeFilterChips.length})` : ""}
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Filter Panel */}
+            {/* Active filter chips — always visible when filters applied (even if panel closed) */}
+            {!detailView && activeFilterChips.length > 0 && (
+              <div className="fo-filter-chips">
+                {activeFilterChips.map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    className="fo-filter-chip"
+                    onClick={() => removeFilter(chip.key)}
+                    title={`Remove ${chip.label} filter`}
+                  >
+                    <span className="fo-filter-chip-label">{chip.label}:</span> {chip.value}
+                    <span className="fo-filter-chip-x" aria-hidden>✕</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="fo-filter-chip-clear"
+                  onClick={() => { clearAllFilters(); }}
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+
+            {/* Filter Panel — stays open after apply so staff can tweak */}
             {showFilters && !detailView && (
-              <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", background: "#f9fafb", display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" }}>
+              <div className="fo-filter-panel">
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
                   <select className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
@@ -897,35 +1067,55 @@ export default function FreightDashboard({
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
-                  <select className="fo-status-select" value={stagedFilters.supplier} onChange={(e) => setStagedFilters((p) => ({ ...p, supplier: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.supplier}
+                    onChange={(e) => applyFilters({ supplier: e.target.value })}
+                  >
                     <option value="">All suppliers</option>
                     {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
-                  <select className="fo-status-select" value={stagedFilters.warehouseStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseStatus: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.warehouseStatus}
+                    onChange={(e) => applyFilters({ warehouseStatus: e.target.value })}
+                  >
                     <option value="">All</option>
                     {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse tag</label>
-                  <select className="fo-status-select" value={stagedFilters.warehouseTag} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseTag: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.warehouseTag}
+                    onChange={(e) => applyFilters({ warehouseTag: e.target.value })}
+                  >
                     <option value="">All</option>
                     {warehouseTags.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
-                  <select className="fo-status-select" value={stagedFilters.carrier} onChange={(e) => setStagedFilters((p) => ({ ...p, carrier: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.carrier}
+                    onChange={(e) => applyFilters({ carrier: e.target.value })}
+                  >
                     <option value="">All carriers</option>
                     {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
-                  <select className="fo-status-select" value={stagedFilters.paymentStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, paymentStatus: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.paymentStatus}
+                    onChange={(e) => applyFilters({ paymentStatus: e.target.value })}
+                  >
                     <option value="">All</option>
                     <option value="Pending">Pending</option>
                     <option value="Paid">Paid</option>
@@ -933,14 +1123,22 @@ export default function FreightDashboard({
                     <option value="Overdue">Overdue</option>
                   </select>
                 </div>
-                <button className="fo-tool-btn" onClick={applyFilters} style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb", height: "30px" }}>
-                  Apply filters
-                </button>
                 {hasActiveFilters && (
-                  <button className="fo-tool-btn" onClick={() => { clearAllFilters(); setShowFilters(false); }} style={{ color: "#dc2626", borderColor: "#fecaca" }}>
+                  <button
+                    className="fo-tool-btn"
+                    onClick={() => { clearAllFilters(); }}
+                    style={{ color: "#dc2626", borderColor: "#fecaca", height: "30px" }}
+                  >
                     Clear all
                   </button>
                 )}
+                <button
+                  className="fo-tool-btn"
+                  onClick={() => setShowFilters(false)}
+                  style={{ height: "30px" }}
+                >
+                  Done
+                </button>
               </div>
             )}
 
@@ -972,20 +1170,12 @@ export default function FreightDashboard({
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                      Add note
-                    </button>
                     <button className="fo-detail-action-btn" onClick={() => { setEddModal({ order: detailView.order, item: detailView.item }); setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: false }); }}>
                       <IconCalendar /> Update EDD
                     </button>
                     <button className="fo-detail-action-btn" onClick={() => { setTrackingModal({ order: detailView.order, item: detailView.item }); setTrackingForm({ carrier: detailView.item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>
                       Tracking
-                    </button>
-                    <button className="fo-detail-action-btn">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
-                      Notify
                     </button>
                     <button className="fo-detail-action-btn sync-btn" onClick={handleSync} disabled={isSyncing}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
@@ -995,7 +1185,7 @@ export default function FreightDashboard({
                 </div>
 
                 <div className="fo-detail-content">
-                  <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} />
+                  <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} onAmendOrder={handleAmendOpen} />
                   <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
                 </div>
               </div>
@@ -1151,6 +1341,18 @@ export default function FreightDashboard({
       )}
       {editOpsModal && detailView && (
         <OpsEditModal order={detailView.order} item={detailView.item} form={editOpsForm} error={editOpsError} isSaving={isSavingOps} setForm={setEditOpsForm} onClose={() => { setEditOpsModal(false); setEditOpsError(""); }} onSave={handleOpsSave} />
+      )}
+      {amendModalOpen && detailView && (
+        <AmendOrderModal
+          orderName={detailView.order.shopifyOrderName}
+          variantId={detailView.item.variantId}
+          form={amendForm}
+          error={amendError}
+          isSaving={isSavingAmend}
+          setForm={setAmendForm}
+          onClose={() => { setAmendModalOpen(false); setAmendError(""); }}
+          onSave={handleAmendSave}
+        />
       )}
     </>
   );

@@ -104,5 +104,11 @@ Both customer extensions:
 - Caveman mode active in chat (terse). Code, commits, docs = normal English.
 - Commit/PR only when asked. Branch off `main`.
 - en-NZ formatting / NZD currency for customer-facing freight display.
-- **OMS top nav:** background bulk queue status lives in `fo-nav-right` via `NavQueueJobs` (next to avatar) — not in the Bulk Actions toolbar. Avatar/`noteAuthor` must be dynamic from the current user (`currentUserFromSession` for embedded admin; report-auth `UserMenu` for containerdoor dashboard). See `.cursor/rules/oms-nav-user.mdc`.
-- **Central Activity Log:** Activity & History reads **only** Postgres `CommunicationLog`. Customer emails: **enqueue only** into `BulkEmailJob`/`BulkEmailRecipient` + pending log — **cron** `/api/bulk-notify/process` is the only sender (never send on button click). Covers bulk notify, Customer email tab, EDD/tracking “notify customer”. See `.cursor/rules/oms-activity-log.mdc`.
+- **OMS memory (always read):** `.cursor/rules/oms-session-memory.mdc` — index of product decisions.
+- **OMS top nav:** background bulk queue status in `fo-nav-right` via `NavQueueJobs` (next to avatar). Avatar/`noteAuthor` from `currentUserFromSession`. See `.cursor/rules/oms-nav-user.mdc`.
+- **Central Activity Log + email queue:** `CommunicationLog` only in UI; emails enqueue → cron sends. Field updates logged but hidden (`SHOW_FIELD_CHANGE_LOGS`). Notes sync Monday/Shopify only if checked. See `.cursor/rules/oms-activity-log.mdc`.
+- **EDD → Shopify:** await `pushEddToShopify` (`containerdoor_ops.edd_{variantId}`); notes never auto-sync. See `.cursor/rules/oms-edd-shopify-sync.mdc`.
+- **Order amendments:** Amend full-screen (contact/address/instructions/soft cancel). Variant swap later. See `.cursor/rules/oms-order-amendments.mdc`.
+- **Status fields:** use `customerStatus` (not a generic Status). Plus warehouse/payment/dispatch/delivery.
+- **Detail page:** no search in nav; one Note/email control; no dead Notify button.
+- **Filters:** apply on change; chips stay visible; do not auto-hide panel on apply.
