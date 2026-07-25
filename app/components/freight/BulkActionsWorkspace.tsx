@@ -89,7 +89,7 @@ export function BulkActionsWorkspace({
   const [paymentStatus, setPaymentStatus] = useState("");
   const [supplier, setSupplier] = useState("");
   const [noteText, setNoteText] = useState("");
-  const [sendToMonday, setSendToMonday] = useState(true);
+  const [sendToMonday, setSendToMonday] = useState(false);
   const [sendToCin7, setSendToCin7] = useState(false);
   const [addToShopify, setAddToShopify] = useState(false);
   const [notifySubject, setNotifySubject] = useState("");
@@ -223,6 +223,9 @@ export function BulkActionsWorkspace({
     ];
     if (payload.noteOptions?.sendToMonday || payload.eddDate || payload.paymentStatus !== undefined || payload.supplier !== undefined) {
       steps.push({ id: "monday", label: "Syncing Monday", status: "pending" });
+    }
+    if (payload.noteOptions?.addToShopify) {
+      steps.push({ id: "shopify", label: "Updating Shopify note", status: "pending" });
     }
     if (payload.notify) {
       steps.push({ id: "email", label: "Queueing Emails", status: "pending" });
@@ -379,9 +382,8 @@ export function BulkActionsWorkspace({
                     <ToggleOption
                       checked={addToShopify}
                       onChange={setAddToShopify}
-                      label="Add to Shopify Order"
-                      badge="Future"
-                      disabled
+                      label="Add to Shopify order timeline"
+                      description="Visible on the Shopify order for quick reference"
                     />
                   </div>
                 </ActionCard>

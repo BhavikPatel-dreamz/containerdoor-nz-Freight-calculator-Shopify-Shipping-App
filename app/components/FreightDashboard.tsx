@@ -374,15 +374,13 @@ export default function FreightDashboard({
   ];
 
   // ── EDD save ──
+  // Writes eddDate to ops + CommunicationLog (edd_update) via /api/order-status.
+  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
   const handleEddSave = async () => {
     if (!eddModal || !eddForm.newEdd) { setEddError("Please select a date before saving"); return; }
     setEddError(""); setIsSavingEdd(true);
     const oldEdd = eddModal.item.eddDate;
     const newEdd = eddForm.newEdd;
-    const fmt = (d: string) => new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-    const systemNote: NoteItem = { author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldEdd ? `EDD changed from ${fmt(oldEdd)} to ${fmt(newEdd)}.` : `EDD set to ${fmt(newEdd)}.` };
-    const nextNotes = [...notes, systemNote];
-    setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -390,8 +388,7 @@ export default function FreightDashboard({
           shop,
           orderId: eddModal.order.shopifyOrderId,
           variantId: eddModal.item.variantId,
-          data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) },
-          newNotes: [systemNote.text],
+          data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd },
           notifyCustomer: Boolean(eddForm.notifyCustomer),
           notifyKind: "edd",
           performedBy: noteAuthor,
@@ -400,6 +397,9 @@ export default function FreightDashboard({
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0 && oldEdd !== newEdd) {
+        console.warn("[EDD] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
       setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists } } : prev);
       const applyEdd = (o: FreightOrderRow): FreightOrderRow => o.id !== eddModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== eddModal.item.variantId ? li : { ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyEdd));
@@ -410,8 +410,6 @@ export default function FreightDashboard({
         const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
         if (res.ok) {
           const j = await res.json();
-          const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
-          setNotes(parseNotesString(l?.notes ?? ""));
           setCommunications(j.communications ?? []);
         }
       }
@@ -562,18 +560,12 @@ export default function FreightDashboard({
   };
 
   // ── Tracking save ──
+  // Writes tracking/carrier/freightRef + CommunicationLog (tracking_update) via API.
+  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
   const handleTrackingSave = async () => {
     if (!trackingModal || !trackingForm.trackingNumber) { setTrackingError("Please enter a tracking number before saving"); return; }
     setTrackingError(""); setIsSavingTracking(true);
-    const oldTracking = trackingModal.item.trackingNumber;
-    const oldFreightRef = trackingModal.item.freightRef ?? "";
     const newFreightRef = trackingForm.freightRef.trim();
-    const trackingNote: NoteItem = { author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldTracking ? `Tracking number updated from ${oldTracking} to ${trackingForm.trackingNumber}.` : `Tracking number set to ${trackingForm.trackingNumber}.` };
-    const notesToAdd = [trackingNote];
-    if (newFreightRef && newFreightRef !== oldFreightRef) {
-      notesToAdd.push({ author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldFreightRef ? `Freight ref updated from ${oldFreightRef} to ${newFreightRef}.` : `Freight ref set to ${newFreightRef}.` });
-    }
-    const nextNotes = [...notes, ...notesToAdd]; setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -585,9 +577,7 @@ export default function FreightDashboard({
             trackingNumber: trackingForm.trackingNumber,
             carrier: trackingForm.carrier,
             freightRef: newFreightRef,
-            notes: serializeNotes(nextNotes),
           },
-          newNotes: notesToAdd.map((n) => n.text),
           notifyCustomer: Boolean(trackingForm.notifyCustomer),
           notifyKind: "tracking",
           performedBy: noteAuthor,
@@ -596,6 +586,9 @@ export default function FreightDashboard({
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0) {
+        console.warn("[Tracking] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
       setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, freightRef: newFreightRef, cin7Exists } } : prev);
       const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyTrack));
@@ -606,8 +599,6 @@ export default function FreightDashboard({
         const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
         if (res.ok) {
           const j = await res.json();
-          const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
-          setNotes(parseNotesString(l?.notes ?? ""));
           setCommunications(j.communications ?? []);
         }
       }
@@ -630,7 +621,7 @@ export default function FreightDashboard({
       if (editDispatchForm.trackingNumber !== (detailView.item.trackingNumber || "")) data.trackingNumber = editDispatchForm.trackingNumber;
       if (editDispatchForm.freightRef !== (detailView.item.freightRef || "")) data.freightRef = editDispatchForm.freightRef;
       if (Object.keys(data).length === 0) { setEditDispatchModal(false); return; }
-      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data }) });
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const payload = await res.json(); const cin7Exists = Boolean(payload.cin7Exists);
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, eddDate: data.eddDate || li.eddDate, originalEddDate: data.originalEddDate || li.originalEddDate, company: data.carrier || li.company, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
@@ -665,7 +656,7 @@ export default function FreightDashboard({
       if (editOpsForm.portArrivalDate !== (detailView.item.portArrivalDate || "")) data.portArrivalDate = editOpsForm.portArrivalDate;
       if (editOpsForm.inTransitDate !== (detailView.item.inTransitDate || "")) data.inTransitDate = editOpsForm.inTransitDate;
       if (Object.keys(data).length === 0) { setEditOpsModal(false); return; }
-      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data }) });
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, warehouseTags: data.warehouseTags ?? li.warehouseTags, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
       setRows((prev) => prev.map(apply));

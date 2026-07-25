@@ -4,7 +4,22 @@
 /**
  * Activity & History — reads ONLY from our Postgres CommunicationLog.
  * No Shopify / Monday / Cin7 / legacy notes-string as source of truth.
+ *
+ * Field-change rows (EDD / payment / tracking / etc.) are ALWAYS written to
+ * CommunicationLog for audit. Flip SHOW_FIELD_CHANGE_LOGS to true later to
+ * surface them again in this panel.
  */
+
+/** Dashboard filter only — DB still stores every field update. */
+export const SHOW_FIELD_CHANGE_LOGS = false;
+
+const HIDDEN_FIELD_CHANGE_TYPES = new Set([
+  "edd_update",
+  "payment_update",
+  "supplier_update",
+  "tracking_update",
+  "system_event",
+]);
 
 export interface ActivityLogEntry {
   id: string;
@@ -79,14 +94,24 @@ function statusStyle(status: string) {
   return { bg: "#dcfce7", color: "#166534", label: "Sent" };
 }
 
+function isFieldChangeLog(type: string) {
+  return HIDDEN_FIELD_CHANGE_TYPES.has(type) || type.endsWith("_update");
+}
+
 export function NotesPanel({ communications = [], notesFetching, onAddNote }: NotesPanelProps) {
   // Newest first — server already sorts; re-sort client-side as safety net
-  const sorted = [...communications].sort((a, b) => {
-    const ta = new Date(a.sentAt || 0).getTime();
-    const tb = new Date(b.sentAt || 0).getTime();
-    if (tb !== ta) return tb - ta;
-    return String(b.id).localeCompare(String(a.id));
-  });
+  const sorted = [...communications]
+    .filter((c) => {
+      if (SHOW_FIELD_CHANGE_LOGS) return true;
+      const type = c.activityType || (c.channel === "email" ? "email" : "system_event");
+      return !isFieldChangeLog(type);
+    })
+    .sort((a, b) => {
+      const ta = new Date(a.sentAt || 0).getTime();
+      const tb = new Date(b.sentAt || 0).getTime();
+      if (tb !== ta) return tb - ta;
+      return String(b.id).localeCompare(String(a.id));
+    });
   const hasComms = sorted.length > 0;
 
   return (

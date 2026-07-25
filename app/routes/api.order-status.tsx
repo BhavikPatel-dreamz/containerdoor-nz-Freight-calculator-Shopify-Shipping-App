@@ -357,7 +357,8 @@ export async function action({ request }: ActionFunctionArgs) {
     if (pushNoteCin7) plannedSyncTargets.push("cin7");
     if (pushNoteShopify) plannedSyncTargets.push("shopify");
 
-    // Field + staff-note activity rows prepared up front so they commit with ops data
+    // Field + staff-note activity rows — ALWAYS written to CommunicationLog (audit).
+    // Dashboard may hide *_update rows; DB still keeps who/when/what.
     const fieldSpecs: Array<[string, string, string]> = [
       ["eddDate", "edd_update", "EDD"],
       ["paymentStatus", "payment_update", "Payment status"],
@@ -369,7 +370,29 @@ export async function action({ request }: ActionFunctionArgs) {
       ["dispatchStatus", "system_event", "Dispatch status"],
       ["warehouseStatus", "system_event", "Warehouse status"],
       ["deliveryStatus", "system_event", "Delivery status"],
+      ["depositPaid", "system_event", "Deposit paid"],
+      ["balanceDue", "system_event", "Balance due"],
+      ["receivedDate", "system_event", "Received date"],
+      ["portArrivalDate", "system_event", "Port arrival"],
+      ["inTransitDate", "system_event", "In transit date"],
     ];
+
+    const normalizeCompare = (key: string, raw: string) => {
+      const v = String(raw ?? "").trim();
+      if (
+        (key === "eddDate" ||
+          key === "originalEddDate" ||
+          key === "receivedDate" ||
+          key === "portArrivalDate" ||
+          key === "inTransitDate") &&
+        v
+      ) {
+        const d = new Date(v);
+        if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+      }
+      return v;
+    };
+
     const activityRows: Array<{
       activityType: string;
       channel: string;
@@ -383,16 +406,24 @@ export async function action({ request }: ActionFunctionArgs) {
 
     for (const [key, type, label] of fieldSpecs) {
       if (!Object.prototype.hasOwnProperty.call(updateData, key)) continue;
-      const oldVal = String((existing as any)?.[key] ?? "");
-      const newVal = String(updateData[key] ?? "");
+      const oldRaw = String((existing as any)?.[key] ?? "");
+      const newRaw = String(updateData[key] ?? "");
+      const oldVal = normalizeCompare(key, oldRaw);
+      const newVal = normalizeCompare(key, newRaw);
       if (oldVal === newVal) continue;
       activityRows.push({
         activityType: type,
         channel: "system",
         subject: label,
-        body: `${label} changed from "${oldVal || "none"}" to "${newVal || "none"}"`,
+        body: `${label} changed from "${oldVal || "none"}" to "${newVal || "none"}" by ${actor}`,
         deliveryStatus: "internal",
-        metadata: { field: key, oldValue: oldVal, newValue: newVal, source: "oms" },
+        metadata: {
+          field: key,
+          oldValue: oldVal,
+          newValue: newVal,
+          source: "oms",
+          performedBy: actor,
+        },
       });
     }
     const noteRole = String((body as any).noteRole || "internal").toLowerCase();
@@ -575,8 +606,8 @@ export async function action({ request }: ActionFunctionArgs) {
       pushIfChanged("depositPaid", "depositPaid");
       pushIfChanged("balanceDue", "balanceDue");
       pushIfChanged("paymentStatus", "paymentStatus");
-      pushIfChanged("notes", "notes");
-      // Fire-and-forget — push to Shopify + Monday + Cin7
+      // Never auto-push the notes blob on field sync — staff notes go to Monday/Shopify
+      // only via the explicit syncNotes checkboxes below.
       pushLineItemToAllSystems(syncFields, "admin").catch((e) =>
         console.error("[api.order-status] Sync to other systems failed", e),
       );

@@ -1,11 +1,33 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
 import { pushLineItemToAllSystems } from "./sync-middleware.server";
 import { createMondayUpdate } from "./monday.server";
 import { serializeNotes, formatNoteDateTime } from "../components/freight/helpers";
 import type { NoteItem } from "../components/freight/types";
 import { logActivity } from "./communication-log.server";
 import { enqueueCustomerEmails } from "./email-queue.server";
+
+/** Append/set staff note on Shopify order (mirror only — OMS Activity Log is source of truth). */
+async function pushStaffNoteToShopifyOrder(shop: string, orderId: string, staffNote: string) {
+  if (!staffNote.trim()) return;
+  const { admin } = await unauthenticated.admin(shop);
+  const updateRes = await admin.graphql(
+    `#graphql
+      mutation OrderUpdateNote($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order { id note }
+          userErrors { field message }
+        }
+      }`,
+    { variables: { input: { id: `gid://shopify/Order/${orderId}`, note: staffNote } } },
+  );
+  const updateJson = await updateRes.json();
+  const errors = updateJson.data?.orderUpdate?.userErrors ?? [];
+  if (errors.length) {
+    throw new Error(errors.map((e: { message: string }) => e.message).join("; "));
+  }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -123,18 +145,7 @@ async function applyDataActions(
       }
       oldValues.eddDate = oldVal;
       newValues.eddDate = nextVal;
-      const fmt = (d: string) => {
-        try {
-          return new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-        } catch {
-          return d;
-        }
-      };
-      notesToAdd.push(
-        oldVal
-          ? `EDD changed from ${fmt(oldVal)} to ${fmt(nextVal)} (bulk by ${performedBy}).`
-          : `EDD set to ${fmt(nextVal)} (bulk by ${performedBy}).`,
-      );
+      // Field change only — Activity Log records it. Do not create a Monday note.
     }
   }
 
@@ -146,7 +157,7 @@ async function applyDataActions(
       updateData.paymentStatus = nextVal;
       oldValues.paymentStatus = oldVal;
       newValues.paymentStatus = nextVal;
-      notesToAdd.push(`Payment status changed from "${oldVal || "none"}" to "${nextVal || "none"}" (bulk by ${performedBy}).`);
+      // Field change only — no note artifact
     }
   }
 
@@ -158,12 +169,13 @@ async function applyDataActions(
       updateData.supplierContainer = nextVal;
       oldValues.supplierContainer = oldVal;
       newValues.supplierContainer = nextVal;
-      notesToAdd.push(`Supplier changed from "${oldVal || "none"}" to "${nextVal || "none"}" (bulk by ${performedBy}).`);
+      // Field change only — no note artifact
     }
   }
 
-  // ── Note ──
+  // ── Staff note (opt-in Monday / Cin7 / Shopify via noteOptions) ──
   const sendNoteToMonday = Boolean(actions.note && actions.noteOptions?.sendToMonday);
+  const sendNoteToShopify = Boolean(actions.note && actions.noteOptions?.addToShopify);
   if (actions.note) {
     notesToAdd.push(actions.note);
     oldValues.notes = existing?.notes ?? "";
@@ -172,21 +184,23 @@ async function applyDataActions(
 
   // ── Apply DB update ──
   if (Object.keys(updateData).length > 0 || notesToAdd.length > 0) {
-    // Build notes
-    const currentNotes = existing?.notes ?? "";
-    const parsedNotes = currentNotes ? parseNotesFromString(currentNotes) : [];
-    for (const noteText of notesToAdd) {
-      const isUserNote = actions.note === noteText;
-      parsedNotes.unshift({
-        author: performedBy,
-        role: "internal",
-        scheme: "internal",
-        time: formatNoteDateTime(),
-        text: noteText,
-        pushToMonday: isUserNote && sendNoteToMonday,
-      });
+    // Only staff notes go into the notes string (for Monday :monday tag path).
+    // Routine EDD / payment / supplier updates never create notes.
+    if (notesToAdd.length > 0) {
+      const currentNotes = existing?.notes ?? "";
+      const parsedNotes = currentNotes ? parseNotesFromString(currentNotes) : [];
+      for (const noteText of notesToAdd) {
+        parsedNotes.unshift({
+          author: performedBy,
+          role: "internal",
+          scheme: "internal",
+          time: formatNoteDateTime(),
+          text: noteText,
+          pushToMonday: sendNoteToMonday,
+        });
+      }
+      updateData.notes = serializeNotes(parsedNotes);
     }
-    updateData.notes = serializeNotes(parsedNotes);
 
     // Upsert ops + audit + activity log in one transaction (audit alone used to succeed
     // while CommunicationLog writes failed silently outside the txn).
@@ -229,14 +243,16 @@ async function applyDataActions(
       }> = [];
 
       if (actions.note) {
+        const noteTargets: string[] = [];
+        if (sendNoteToMonday) noteTargets.push("monday");
+        if (sendNoteToShopify) noteTargets.push("shopify");
         activityRows.push({
           activityType: "internal_note",
           channel: "oms",
           subject: "Internal note",
           body: actions.note,
-          // Monday sync status filled in after the external call below
-          deliveryStatus: sendNoteToMonday ? "pending" : "internal",
-          syncTargets: sendNoteToMonday ? ["monday"] : undefined,
+          deliveryStatus: noteTargets.length > 0 ? "pending" : "internal",
+          syncTargets: noteTargets.length > 0 ? noteTargets : undefined,
         });
       }
       if (hasOwn(newValues, "eddDate")) {
@@ -363,6 +379,51 @@ async function applyDataActions(
         });
       } catch (logErr) {
         console.error("[BulkActions] Monday activity log update failed", logErr);
+      }
+    }
+
+    if (sendNoteToShopify && actions.note) {
+      let shopifyOk = false;
+      try {
+        await pushStaffNoteToShopifyOrder(shop, orderId, actions.note);
+        shopifyOk = true;
+      } catch (e: any) {
+        console.error("[BulkActions] Shopify note push failed", e);
+      }
+      try {
+        if (!sendNoteToMonday) {
+          await prisma.communicationLog.updateMany({
+            where: {
+              shop,
+              orderId,
+              variantId,
+              opsRecordId: updated.id,
+              activityType: "internal_note",
+              body: actions.note,
+              deliveryStatus: "pending",
+            },
+            data: {
+              deliveryStatus: shopifyOk ? "synced" : "failed",
+              syncResults: { shopify: { ok: shopifyOk } },
+            },
+          });
+        }
+        await logActivity({
+          shop,
+          orderId,
+          variantId,
+          opsRecordId: updated.id,
+          activityType: "shopify_note",
+          channel: "shopify",
+          subject: "Shopify order note",
+          body: actions.note,
+          sentBy: performedBy,
+          deliveryStatus: shopifyOk ? "synced" : "failed",
+          syncTargets: ["shopify"],
+          syncResults: { shopify: { ok: shopifyOk } },
+        });
+      } catch (logErr) {
+        console.error("[BulkActions] Shopify activity log update failed", logErr);
       }
     }
   } else {

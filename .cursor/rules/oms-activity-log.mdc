@@ -10,6 +10,13 @@ alwaysApply: true
 Every OMS event inserts into Postgres `CommunicationLog` first.
 **Activity & History UI reads ONLY `CommunicationLog`.**
 
+### Field updates (EDD / payment / tracking / etc.)
+Always logged to `CommunicationLog` with `sentBy` (who changed it).
+Dashboard panel hides those rows for now (`SHOW_FIELD_CHANGE_LOGS = false` in
+`NotesPanel.tsx`). Flip to `true` later to show full audit in UI.
+Staff notes + emails always visible. Routine field edits must **not** create
+Monday/Shopify notes — only update fields + Activity Log.
+
 ## Customer email — QUEUE ONLY, CRON SENDS
 **Rule:** Button clicks / API saves **never send email**. They only enqueue.
 
