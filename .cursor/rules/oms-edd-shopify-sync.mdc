@@ -1,0 +1,25 @@
+---
+description: OMS Current EDD syncs to linked Shopify order; notes stay OMS-only
+globs: app/lib/shopify-sync.server.ts,app/lib/sync-middleware.server.ts,app/routes/api.order-status.tsx,app/lib/bulk-actions.server.ts
+alwaysApply: false
+---
+
+# OMS → Shopify EDD sync
+
+## Link
+OMS row `OrderLineItemOperationalData` is keyed by `shop + orderId + variantId`
+(= Shopify order + line variant). That link must stay intact.
+
+## Current EDD (customer-facing)
+When `eddDate` changes in OMS (single save or bulk):
+1. Save to our DB first
+2. **Await** `pushEddToShopify` → order metafield `containerdoor_ops.edd_{variantId}`
+3. Customer Account extension also reads live OMS via `/api/order-status`
+
+## Notes
+Internal OMS notes / CommunicationLog notes **never** auto-sync to Shopify.
+Only explicit “Add to Shopify order timeline” checkbox may write a staff note.
+
+## Do not
+- Fire-and-forget EDD as the only Shopify path (always await EDD push)
+- Push the notes blob via `syncChangesToShopify`

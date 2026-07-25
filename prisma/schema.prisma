@@ -382,28 +382,42 @@ model BulkEmailRecipient {
   @@index([jobId, status])
 }
 
-// ─── Communication Log ────────────────────────────────────────────────────────
+// ─── Communication / Activity Log (central OMS history) ───────────────────────
+// Single table for emails, internal notes, external syncs, and system events.
+// Line-item scoped via variantId (null = order-level). Shopify order timeline = phase 2.
 
 model CommunicationLog {
-  id              String   @id @default(cuid())
-  shop            String
-  orderId         String
-  jobId           String?  // links to BulkEmailJob if from bulk notify
-  channel         String   @default("email") // email | sms | whatsapp (future)
-  subject         String
-  body            String
-  recipientEmail  String
-  recipientName   String
-  sentBy          String   // admin user who triggered it
-  deliveryStatus  String   @default("sent")  // sent | failed | pending
+  id                String   @id @default(cuid())
+  shop              String
+  orderId           String
+  variantId         String?  // null = order-level activity
+  opsRecordId       String?  // OrderLineItemOperationalData.id when known
+  jobId             String?  // BulkEmailJob if from bulk notify
+  activityType      String   @default("email")
+  // email | internal_note | monday_note | cin7_note | shopify_note |
+  // system_event | sms | whatsapp | supplier_update | edd_update | payment_update | …
+  channel           String   @default("email") // email | oms | monday | cin7 | shopify | sms | whatsapp
+  subject           String   @default("")
+  body              String   @default("")
+  recipientEmail    String   @default("")
+  recipientName     String   @default("")
+  sentBy            String   // admin / system actor
+  deliveryStatus    String   @default("sent")
+  // pending | sent | failed | synced | internal | partial
   providerMessageId String?
-  sentAt          DateTime
-  createdAt       DateTime @default(now())
+  syncTargets       Json?    // ["monday","cin7","shopify"]
+  syncResults       Json?    // { monday: { ok: true }, cin7: { ok: false, error: "…" } }
+  metadata          Json?    // old/new values, filters, etc.
+  sentAt            DateTime // legacy name; treat as occurredAt
+  createdAt         DateTime @default(now())
 
   job BulkEmailJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
 
   @@index([shop, orderId])
+  @@index([shop, orderId, variantId])
+  @@index([shop, orderId, variantId, sentAt])
   @@index([jobId])
+  @@index([shop, activityType, sentAt])
 }
 
 model BulkActionAudit {

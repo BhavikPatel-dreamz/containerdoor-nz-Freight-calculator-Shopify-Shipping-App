@@ -1,0 +1,41 @@
+---
+description: Central OMS Activity Log + email queue — notes, emails via cron only
+globs: app/lib/communication-log.server.ts,app/lib/email-queue.server.ts,app/routes/api.order-status.tsx,app/components/freight/NotesPanel.tsx,prisma/schema.prisma,app/lib/bulk-actions.server.ts,app/routes/api.bulk-notify*.tsx,vercel.json
+alwaysApply: true
+---
+
+# Central Activity Log + Email Queue
+
+## Principle — OUR DB is source of truth
+Every OMS event inserts into Postgres `CommunicationLog` first.
+**Activity & History UI reads ONLY `CommunicationLog`.**
+
+### Field updates (EDD / payment / tracking / etc.)
+Always logged to `CommunicationLog` with `sentBy` (who changed it).
+Dashboard panel hides those rows for now (`SHOW_FIELD_CHANGE_LOGS = false` in
+`NotesPanel.tsx`). Flip to `true` later to show full audit in UI.
+Staff notes + emails always visible. Routine field edits must **not** create
+Monday/Shopify notes — only update fields + Activity Log.
+
+## Customer email — QUEUE ONLY, CRON SENDS
+**Rule:** Button clicks / API saves **never send email**. They only enqueue.
+
+1. `enqueueCustomerEmails` / `enqueueLineItemCustomerNotify`
+   → `BulkEmailJob` + `BulkEmailRecipient`
+   → `CommunicationLog` pending (“Email Queued”)
+2. **Only** `/api/bulk-notify/process` (Vercel Cron / CRON_SECRET) calls the provider
+3. `finalizeQueuedEmailLog` → sent / failed
+
+### Entry points (all enqueue, none send)
+- Bulk Actions Customer Email
+- `/api/bulk-notify`
+- Note modal Customer email tab (`noteRole: customer`)
+- EDD save with `notifyCustomer: true` + `notifyKind: edd`
+- Tracking save with `notifyCustomer: true` + `notifyKind: tracking`
+
+### UI
+- Save/Queue button returns immediately after DB enqueue
+- Queue chip polls **status only** (GET) — must **not** POST process to send
+- Vercel Cron: `* * * * *` → GET `/api/bulk-notify/process` with `CRON_SECRET`
+
+Helper: `app/lib/email-queue.server.ts`

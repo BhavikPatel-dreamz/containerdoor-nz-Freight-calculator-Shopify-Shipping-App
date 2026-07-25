@@ -16,9 +16,11 @@ export async function action({ request }: ActionFunctionArgs) {
     const body = (await request.json()) as {
       items?: Array<{ orderId: string; variantId: string }>;
       actions?: {
+        eddDate?: string;
         paymentStatus?: string;
         supplier?: string;
         note?: string;
+        noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
         notify?: { subject: string; body: string };
       };
       performedBy?: string;
@@ -30,8 +32,10 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     // Check if at least one action is defined
-    const { paymentStatus, supplier, note, notify } = body.actions;
-    if (!paymentStatus && !supplier && !note && !notify) {
+    const { eddDate, paymentStatus, supplier, note, notify } = body.actions;
+    const hasPayment = Object.prototype.hasOwnProperty.call(body.actions, "paymentStatus");
+    const hasSupplier = Object.prototype.hasOwnProperty.call(body.actions, "supplier");
+    if (!eddDate && !hasPayment && !hasSupplier && !note && !notify) {
       return Response.json({ ok: false, error: "No actions specified" }, { status: 400 });
     }
 

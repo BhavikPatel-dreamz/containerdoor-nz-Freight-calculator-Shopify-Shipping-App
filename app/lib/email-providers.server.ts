@@ -160,6 +160,15 @@ export function getEmailProvider(): EmailProvider {
   }
 }
 
+/** Returns null instead of throwing when provider env is missing. */
+export function tryGetEmailProvider(): { provider: EmailProvider; fromEmail: string } | { error: string } {
+  try {
+    return { provider: getEmailProvider(), fromEmail: getFromEmail() };
+  } catch (e: any) {
+    return { error: e?.message || "Email provider not configured" };
+  }
+}
+
 export function getFromEmail(): string {
   return process.env.SMTP_FROM || "ContainerDoor <noreply@containerdoor.co.nz>";
 }

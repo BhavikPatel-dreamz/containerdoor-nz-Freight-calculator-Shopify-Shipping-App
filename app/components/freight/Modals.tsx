@@ -80,8 +80,8 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", padding: "14px 16px", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
             <div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Notify customer with tracking details</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Sends dispatch email to {tm.order.email}</div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Queue customer email</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Adds to email queue (cron sends) — {tm.order.email}</div>
             </div>
             <button type="button" onClick={() => setTrackingForm((p) => ({ ...p, notifyCustomer: !p.notifyCustomer }))}
               style={{ flexShrink: 0, width: "44px", height: "24px", borderRadius: "12px", background: trackingForm.notifyCustomer ? "#2563eb" : "#d1d5db", border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
@@ -102,362 +102,9 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// BulkUpdateModal — bulk update payment status, supplier, notes + optional notify
+// Bulk actions (EDD / notify / payment / supplier / notes) live in
+// BulkActionsWorkspace.tsx — single workspace, not separate modals.
 // ═══════════════════════════════════════════════════════════════════════════════
-
-export interface BulkUpdatePayload {
-  paymentStatus?: string;
-  supplier?: string;
-  note?: string;
-  notify?: { subject: string; body: string };
-}
-
-interface BulkUpdateModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onApply: (payload: BulkUpdatePayload) => void;
-  isSaving: boolean;
-  selectedCount: number;
-}
-
-export function BulkUpdateModal({
-  onOpenChange,
-  onApply,
-  isSaving,
-  selectedCount,
-}: BulkUpdateModalProps) {
-  const [enablePayment, setEnablePayment] = useState(false);
-  const [enableSupplier, setEnableSupplier] = useState(false);
-  const [enableNote, setEnableNote] = useState(false);
-  const [enableNotify, setEnableNotify] = useState(false);
-
-  const [paymentStatus, setPaymentStatus] = useState("");
-  const [supplier, setSupplier] = useState("");
-  const [noteText, setNoteText] = useState("");
-  const [notifySubject, setNotifySubject] = useState("");
-  const [notifyBody, setNotifyBody] = useState("");
-
-  const hasAction = enablePayment || enableSupplier || enableNote || enableNotify;
-
-  function reset() {
-    setEnablePayment(false);
-    setEnableSupplier(false);
-    setEnableNote(false);
-    setEnableNotify(false);
-    setPaymentStatus("");
-    setSupplier("");
-    setNoteText("");
-    setNotifySubject("");
-    setNotifyBody("");
-  }
-
-  function handleApply() {
-    const payload: BulkUpdatePayload = {};
-    if (enablePayment) payload.paymentStatus = paymentStatus;
-    if (enableSupplier) payload.supplier = supplier;
-    if (enableNote && noteText.trim()) payload.note = noteText.trim();
-    if (enableNotify && notifySubject.trim() && notifyBody.trim()) {
-      payload.notify = { subject: notifySubject.trim(), body: notifyBody.trim() };
-    }
-    if (Object.keys(payload).length === 0) return;
-    onApply(payload);
-  }
-
-  return (
-    <div className="fo-overlay" onClick={(e) => { if (e.target === e.currentTarget) { reset(); onOpenChange(false); } }}>
-      <div className="fo-modal" style={{ width: "560px", maxWidth: "95vw", maxHeight: "90vh", overflow: "auto" }} onClick={(e) => e.stopPropagation()}>
-        <div className="fo-modal-hdr" style={{ borderBottom: "1px solid #e5e7eb", padding: "16px 20px" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <span style={{ fontSize: "18px" }}>✏️</span>
-            <div>
-              <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
-                Bulk Update
-              </span>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                {selectedCount} line item{selectedCount !== 1 ? "s" : ""} selected
-              </div>
-            </div>
-          </div>
-          <button className="fo-modal-close" onClick={() => { reset(); onOpenChange(false); }}>✕</button>
-        </div>
-
-        <div className="fo-modal-body" style={{ display: "flex", flexDirection: "column", gap: 16, padding: "18px 20px" }}>
-          {/* Payment Status */}
-          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
-              <input type="checkbox" className="fo-checkbox" checked={enablePayment} onChange={(e) => setEnablePayment(e.target.checked)} />
-              Update payment status
-            </label>
-            {enablePayment && (
-              <div style={{ marginLeft: 24, marginTop: 8 }}>
-                <label className="fo-field-label" htmlFor="bulk-ps">Payment status</label>
-                <select id="bulk-ps" className="fo-input" value={paymentStatus} onChange={(e) => setPaymentStatus(e.target.value)}>
-                  <option value="">— clear —</option>
-                  <option value="Paid">Paid</option>
-                  <option value="Partial">Partial</option>
-                  <option value="Pending">Pending</option>
-                  <option value="Overdue">Overdue</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Supplier */}
-          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
-              <input type="checkbox" className="fo-checkbox" checked={enableSupplier} onChange={(e) => setEnableSupplier(e.target.checked)} />
-              Update supplier
-            </label>
-            {enableSupplier && (
-              <div style={{ marginLeft: 24, marginTop: 8 }}>
-                <label className="fo-field-label" htmlFor="bulk-sup">Supplier</label>
-                <select id="bulk-sup" className="fo-input" value={supplier} onChange={(e) => setSupplier(e.target.value)}>
-                  <option value="">— clear —</option>
-                  <option value="Castle">Castle</option>
-                  <option value="NZ Post">NZ Post</option>
-                  <option value="TGE">TGE</option>
-                  <option value="Mainfreight">Mainfreight</option>
-                  <option value="Fliway">Fliway</option>
-                  <option value="M2H">M2H</option>
-                  <option value="Direct">Direct</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Note */}
-          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
-              <input type="checkbox" className="fo-checkbox" checked={enableNote} onChange={(e) => setEnableNote(e.target.checked)} />
-              Add internal note
-            </label>
-            {enableNote && (
-              <div style={{ marginLeft: 24, marginTop: 8 }}>
-                <label className="fo-field-label" htmlFor="bulk-note">Note</label>
-                <textarea id="bulk-note" className="fo-input" rows={3} value={noteText} onChange={(e) => setNoteText(e.target.value)} placeholder="e.g. Payment confirmed by CS, synced to Monday" style={{ resize: "vertical" }} />
-              </div>
-            )}
-          </div>
-
-          {/* Notify */}
-          <div style={{ padding: "12px 14px", border: "1px solid #e5e7eb", borderRadius: "8px" }}>
-            <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#111827" }}>
-              <input type="checkbox" className="fo-checkbox" checked={enableNotify} onChange={(e) => setEnableNotify(e.target.checked)} />
-              Send email notification to customers
-            </label>
-            {enableNotify && (
-              <div style={{ marginLeft: 24, marginTop: 8 }}>
-                <label className="fo-field-label" htmlFor="bulk-subject">Subject</label>
-                <input id="bulk-subject" className="fo-input" value={notifySubject} onChange={(e) => setNotifySubject(e.target.value)} placeholder="Order {order} status update" />
-                <div style={{ marginTop: 8 }}>
-                  <label className="fo-field-label" htmlFor="bulk-body">Body</label>
-                  <textarea id="bulk-body" className="fo-input" rows={4} value={notifyBody} onChange={(e) => setNotifyBody(e.target.value)} placeholder={"Hi {name},\n\nYour order {order} has been updated."} style={{ resize: "vertical" }} />
-                </div>
-                <p style={{ marginTop: 6, fontSize: "11px", color: "#6b7280" }}>
-                  Variables: {"{name}"} {"{order}"} {"{link}"} {"{supplier}"} {"{edd}"} {"{carrier}"} {"{tracking}"}
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="fo-modal-ftr" style={{ padding: "12px 20px" }}>
-          <button className="fo-btn-ghost" onClick={() => { reset(); onOpenChange(false); }}>Cancel</button>
-          <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: !hasAction || isSaving ? "#d1d5db" : "#7c3aed", color: "#fff", border: "none", cursor: !hasAction || isSaving ? "not-allowed" : "pointer" }}
-            onClick={handleApply} disabled={!hasAction || isSaving}>
-            {isSaving ? "Applying..." : "Apply changes"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Bulk Notify Customers Modal ──────────────────────────────────────────────
-
-type BulkNotifyModalProps = {
-  selectedCount: number;
-  recipients: Array<{ email: string; name: string; orderName: string; orderId: string; variantId: string }>;
-  form: { subject: string; body: string };
-  error: string;
-  isSending: boolean;
-  jobStatus: { jobId: string; total: number; sent: number; failed: number; remaining: number; status: string; queuePosition?: number; activeCount?: number } | null;
-  setForm: React.Dispatch<React.SetStateAction<{ subject: string; body: string }>>;
-  setError: (v: string) => void;
-  onClose: () => void;
-  onSend: () => void;
-  onPreview: () => void;
-  showPreview: boolean;
-  setShowPreview: (v: boolean) => void;
-};
-
-export function BulkNotifyModal({ selectedCount, recipients, form, error, isSending, jobStatus, setForm, setError, onClose, onSend, onPreview, showPreview, setShowPreview }: BulkNotifyModalProps) {
-  const close = () => { if (!isSending) { onClose(); setError(""); } };
-  const insertLink = () => {
-    const url = prompt("Enter URL:");
-    if (url) {
-      const text = window.getSelection()?.toString() || "click here";
-      setForm((p) => ({ ...p, body: p.body + ` [${text}](${url}) ` }));
-    }
-  };
-
-  const pct = jobStatus && jobStatus.total > 0 ? Math.round(((jobStatus.sent + jobStatus.failed) / jobStatus.total) * 100) : 0;
-  const isTerminal = jobStatus?.status === "COMPLETED" || jobStatus?.status === "FAILED" || jobStatus?.status === "CANCELLED";
-
-  return (
-    <div className="fo-overlay" onClick={close}>
-      <div style={{ background: "#fff", borderRadius: "10px", width: "640px", maxWidth: "95vw", maxHeight: "90vh", boxShadow: "0 20px 60px rgba(0,0,0,0.2)", display: "flex", flexDirection: "column" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
-          <div>
-            <span style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>📧 Notify customers — {selectedCount} recipient{selectedCount === 1 ? "" : "s"}</span>
-            <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>Sends a custom email to each selected customer</div>
-          </div>
-          <button className="fo-modal-close" onClick={close}>✕</button>
-        </div>
-
-        {/* Tabs — hide when job is running or done */}
-        {!jobStatus && (
-          <div style={{ display: "flex", gap: "0", borderBottom: "1px solid #e5e7eb" }}>
-            {(["compose", "recipients", "preview"] as const).map((tab) => (
-              <button key={tab} onClick={() => { if (tab === "preview") { onPreview(); } setShowPreview(tab === "preview"); }}
-                style={{ flex: 1, padding: "8px 0", fontSize: "12px", fontWeight: 600, textTransform: "capitalize", border: "none", borderBottom: (showPreview ? tab === "preview" : tab === "compose") ? "2px solid #2563eb" : "2px solid transparent", background: "none", color: (showPreview ? tab === "preview" : tab === "compose") ? "#2563eb" : "#6b7280", cursor: "pointer" }}>
-                {tab}
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div style={{ padding: "16px 20px", overflowY: "auto", flex: 1 }}>
-          {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px", marginBottom: "12px" }}>{error}</div>}
-
-          {/* ── Compose / Preview tabs ── */}
-          {!jobStatus && !showPreview && (
-            <>
-              <div style={{ marginBottom: "12px" }}>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "4px" }}>Subject</label>
-                <input value={form.subject} onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
-                  placeholder="e.g. Delivery update for your order"
-                  style={{ width: "100%", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "13px", outline: "none" }} />
-              </div>
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                  <label style={{ fontSize: "12px", fontWeight: 700, color: "#374151" }}>Message</label>
-                  <button onClick={insertLink} style={{ fontSize: "11px", color: "#2563eb", background: "none", border: "none", cursor: "pointer", fontWeight: 600 }}>+ Insert link</button>
-                </div>
-                <textarea value={form.body} onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
-                  placeholder={`Hi {name},\n\nYour order {order} has an update…\n\nUse {name}, {order}, {link} as placeholders.`}
-                  style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "13px", outline: "none", fontFamily: "inherit", resize: "vertical", minHeight: "160px", lineHeight: 1.5 }} />
-                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>
-                  Placeholders: {"{name}"} = customer name, {"{order}"} = order #, {"{link}"} = order detail link
-                </div>
-              </div>
-            </>
-          )}
-
-          {!jobStatus && showPreview && (
-            <div>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "8px" }}>Email preview</div>
-              {recipients.length > 0 && (
-                <div style={{ border: "1px solid #e5e7eb", borderRadius: "8px", padding: "16px", background: "#fafafa", fontSize: "13px" }}>
-                  <div style={{ marginBottom: "8px" }}><strong>To:</strong> {recipients[0].email}</div>
-                  <div style={{ marginBottom: "8px" }}><strong>Subject:</strong> {form.subject || "(no subject)"}</div>
-                  <hr style={{ border: "none", borderTop: "1px solid #e5e7eb", margin: "8px 0" }} />
-                  <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{form.body
-                    .replace(/\{name\}/g, recipients[0].name)
-                    .replace(/\{order\}/g, recipients[0].orderName)
-                    .replace(/\{link\}/g, `/app/order/${recipients[0].orderId}?variantId=${recipients[0].variantId}`)
-                  }</div>
-                </div>
-              )}
-              <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "8px" }}>
-                Showing preview for {recipients[0]?.name || "—"}. Each recipient sees their own personalized values.
-              </div>
-            </div>
-          )}
-
-          {/* ── Recipients list ── */}
-          {!jobStatus && !showPreview && (
-            <div style={{ marginTop: "14px" }}>
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "6px" }}>Recipients ({recipients.length})</div>
-              <div style={{ maxHeight: "120px", overflowY: "auto", border: "1px solid #e5e7eb", borderRadius: "6px", fontSize: "12px" }}>
-                {recipients.map((r, i) => (
-                  <div key={i} style={{ padding: "6px 10px", borderBottom: i < recipients.length - 1 ? "1px solid #f3f4f6" : "none", display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#111827" }}>{r.name || "—"}</span>
-                    <span style={{ color: "#6b7280" }}>{r.email || "no email"}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ── Job progress view ── */}
-          {jobStatus && (
-            <div>
-              {/* Progress bar */}
-              {jobStatus.status === "PROCESSING" && (
-                <div style={{ marginBottom: "16px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>
-                    <span>{jobStatus.sent} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
-                    <span>{pct}%</span>
-                  </div>
-                  <div style={{ height: "6px", background: "#e5e7eb", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${pct}%`, background: "#2563eb", borderRadius: "3px", transition: "width 0.5s ease" }} />
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>{jobStatus.remaining} remaining</div>
-                </div>
-              )}
-
-              {/* Status text */}
-              <div style={{ padding: "12px 16px", borderRadius: "8px", background: jobStatus.status === "COMPLETED" ? "#ecfdf5" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#fef2f2" : "#eff6ff", border: `1px solid ${jobStatus.status === "COMPLETED" ? "#a7f3d0" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#fecaca" : "#bfdbfe"}`, fontSize: "13px", color: jobStatus.status === "COMPLETED" ? "#065f46" : jobStatus.status === "FAILED" || jobStatus.status === "CANCELLED" ? "#991b1b" : "#1e40af" }}>
-                {jobStatus.status === "PENDING" && jobStatus.queuePosition != null && jobStatus.queuePosition > 0 && (
-                  <span>⏳ Queued — position {jobStatus.queuePosition + 1} in line</span>
-                )}
-                {jobStatus.status === "PENDING" && (!jobStatus.queuePosition || jobStatus.queuePosition === 0) && (
-                  <span>⏳ Starting…</span>
-                )}
-                {jobStatus.status === "PROCESSING" && (
-                  <span>📤 Sending — {jobStatus.sent} of {jobStatus.total} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
-                )}
-                {jobStatus.status === "COMPLETED" && (
-                  <span>✅ Done — {jobStatus.sent} sent{jobStatus.failed > 0 ? `, ${jobStatus.failed} failed` : ""}</span>
-                )}
-                {jobStatus.status === "FAILED" && (
-                  <span>❌ Failed — {jobStatus.sent} sent, {jobStatus.failed} failed</span>
-                )}
-                {jobStatus.status === "CANCELLED" && (
-                  <span>🚫 Cancelled — {jobStatus.sent} sent before cancellation</span>
-                )}
-              </div>
-
-              {/* Active jobs count */}
-              {jobStatus.activeCount != null && jobStatus.activeCount > 1 && (
-                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "8px" }}>
-                  {jobStatus.activeCount - 1} other job{jobStatus.activeCount - 1 === 1 ? "" : "s"} in queue
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* ── Footer ── */}
-        <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ fontSize: "12px", color: "#6b7280" }}>
-            {isSending && !jobStatus && "Queuing…"}
-          </div>
-          <div style={{ display: "flex", gap: "8px" }}>
-            <button className="fo-btn-ghost" onClick={close}>{isTerminal ? "Close" : "Cancel"}</button>
-            {!jobStatus && (
-              <button onClick={onSend} disabled={isSending || !form.subject.trim() || !form.body.trim()}
-                style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: (!form.subject.trim() || !form.body.trim()) ? "#d1d5db" : "#2563eb", color: "#fff", border: "none", cursor: isSending ? "wait" : "pointer" }}>
-                {isSending ? "Queuing…" : `Send to ${selectedCount} customer${selectedCount === 1 ? "" : "s"}`}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ─── EDD Modal ───────────────────────────────────────────────────────────────
 
@@ -516,8 +163,8 @@ export function EddModal({ eddModal: em, eddForm, eddError, isSavingEdd, setEddF
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderRadius: "8px", background: "#fffbeb", border: "1px solid #fde68a" }}>
             <div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Notify customer of EDD change</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Toggle on to send EDD update to {em.order.email}</div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Queue customer email</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Adds to email queue (cron sends) — {em.order.email}</div>
             </div>
             <button type="button" onClick={() => setEddForm((p) => ({ ...p, notifyCustomer: !p.notifyCustomer }))}
               style={{ flexShrink: 0, width: "44px", height: "24px", borderRadius: "12px", background: eddForm.notifyCustomer ? "#2563eb" : "#d1d5db", border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
@@ -537,78 +184,45 @@ export function EddModal({ eddModal: em, eddForm, eddError, isSavingEdd, setEddF
   );
 }
 
-// ─── Bulk EDD Modal ──────────────────────────────────────────────────────────
-
-type BulkEddModalProps = {
-  selectedCount: number;
-  bulkEddForm: { newEdd: string; notifyCustomer: boolean };
-  bulkEddError: string;
-  isBulkSavingEdd: boolean;
-  bulkProgress: { done: number; total: number } | null;
-  setBulkEddForm: React.Dispatch<React.SetStateAction<{ newEdd: string; notifyCustomer: boolean }>>;
-  setBulkEddModal: (v: boolean) => void;
-  setBulkEddError: (v: string) => void;
-  onSave: () => void;
-};
-
-export function BulkEddModal({ selectedCount, bulkEddForm, bulkEddError, isBulkSavingEdd, bulkProgress, setBulkEddForm, setBulkEddModal, setBulkEddError, onSave }: BulkEddModalProps) {
-  const close = () => { if (!isBulkSavingEdd) { setBulkEddModal(false); setBulkEddError(""); } };
-  return (
-    <div className="fo-overlay" onClick={close}>
-      <div style={{ background: "#fff", borderRadius: "10px", width: "480px", maxWidth: "95vw", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 20px", borderBottom: "1px solid #e5e7eb" }}>
-          <span style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>📅 Bulk update EDD — {selectedCount} line item{selectedCount === 1 ? "" : "s"}</span>
-          <button className="fo-modal-close" onClick={close}>✕</button>
-        </div>
-        <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
-          {bulkEddError && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{bulkEddError}</div>}
-          <div style={{ fontSize: "12px", color: "#6b7280" }}>
-            Applies the new EDD to all {selectedCount} selected line item{selectedCount === 1 ? "" : "s"} on this view.
-          </div>
-          <div>
-            <label style={{ display: "block", fontSize: "12px", fontWeight: 700, color: "#374151", marginBottom: "6px" }}>New EDD</label>
-            <input type="date" value={bulkEddForm.newEdd} onChange={(e) => setBulkEddForm((p) => ({ ...p, newEdd: e.target.value }))}
-              style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", background: "#fff", color: "#111827", fontSize: "13px", outline: "none" }} />
-          </div>
-          {bulkProgress && (
-            <div style={{ fontSize: "13px", color: "#2563eb", fontWeight: 600 }}>
-              Updating {bulkProgress.done} / {bulkProgress.total}…
-            </div>
-          )}
-        </div>
-        <div style={{ padding: "12px 20px", borderTop: "1px solid #e5e7eb", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-          <button className="fo-btn-ghost" onClick={close} disabled={isBulkSavingEdd}>Cancel</button>
-          <button type="button" style={{ padding: "8px 20px", fontSize: "13px", fontWeight: 600, borderRadius: "6px", background: "#2563eb", color: "#fff", border: "none", cursor: isBulkSavingEdd ? "wait" : "pointer" }}
-            onClick={onSave} disabled={isBulkSavingEdd}>
-            {isBulkSavingEdd ? "Updating…" : `Update ${selectedCount} EDD`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ─── Note Modal ──────────────────────────────────────────────────────────────
 
 type NoteModalProps = {
   target: { order: FreightOrderRow; item: FreightLineItem };
   noteTab: string;
   noteText: string;
+  noteSubject: string;
   sendToMonday: boolean;
   sendToCin7: boolean;
+  sendToShopify: boolean;
   isSavingNote: boolean;
   noteAuthor: string;
   setNoteTab: (v: string) => void;
   setNoteText: (v: string) => void;
+  setNoteSubject: (v: string) => void;
   setSendToMonday: (v: boolean) => void;
   setSendToCin7: (v: boolean) => void;
+  setSendToShopify: (v: boolean) => void;
   setNoteModal: (v: boolean) => void;
   setNoteModalTarget: (v: null) => void;
-  onSave: (text: string, tab: string, pushMonday: boolean, pushCin7: boolean) => void;
+  onSave: (payload: {
+    text: string;
+    tab: string;
+    subject: string;
+    pushMonday: boolean;
+    pushCin7: boolean;
+    pushShopify: boolean;
+  }) => void;
 };
 
-export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7, isSavingNote, noteAuthor, setNoteTab, setNoteText, setSendToMonday, setSendToCin7, setNoteModal, setNoteModalTarget, onSave }: NoteModalProps) {
+export function NoteModal({
+  target, noteTab, noteText, noteSubject, sendToMonday, sendToCin7, sendToShopify, isSavingNote, noteAuthor,
+  setNoteTab, setNoteText, setNoteSubject, setSendToMonday, setSendToCin7, setSendToShopify, setNoteModal, setNoteModalTarget, onSave,
+}: NoteModalProps) {
   const close = () => { setNoteModal(false); setNoteModalTarget(null); };
+  const isEmail = noteTab === "customer";
+  const defaultSubject = `Update on your order ${target.order.shopifyOrderName}`;
+  const canSubmit = noteText.trim() && !isSavingNote;
+
   return (
     <div className="fo-overlay" onClick={close}>
       <div className="fo-modal" style={{ width: "min(560px, 95vw)" }} onClick={(e) => e.stopPropagation()}>
@@ -617,7 +231,7 @@ export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7,
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}>
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            Add note — <span style={{ fontWeight: 400, color: "#6b7280" }}>#{target.order.shopifyOrderName}{target.item.letterSuffix}</span>
+            {isEmail ? "Queue customer email" : "Add note"} — <span style={{ fontWeight: 400, color: "#6b7280" }}>#{target.order.shopifyOrderName}{target.item.letterSuffix}</span>
           </div>
           <button className="fo-modal-close" onClick={close}>✕</button>
         </div>
@@ -626,6 +240,11 @@ export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7,
             {target.item.title ?? `#${target.item.variantId}`}
             {target.item.variantId && <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: "4px" }}>— VAR-{target.item.variantId.slice(-6)}</span>}
           </div>
+          {isEmail ? (
+            <div style={{ fontSize: "11px", color: "#6b7280", marginTop: 4 }}>
+              To: {target.order.email || "—"} · Saved to email queue · Cron sends later
+            </div>
+          ) : null}
         </div>
         <div style={{ display: "flex", gap: "8px", padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
           {(["internal", "customer"] as const).map((tab) => (
@@ -635,29 +254,66 @@ export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7,
             </button>
           ))}
         </div>
-        <div style={{ padding: "12px", background: "#fff" }}>
-          <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)}
-            placeholder={noteTab === "internal" ? "Write an internal note…" : "Write a message for the customer…"}
-            style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
-            autoFocus />
+        <div style={{ padding: "12px", background: "#fff", display: "flex", flexDirection: "column", gap: "10px" }}>
+          {isEmail ? (
+            <div>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>Subject (email header)</label>
+              <input
+                value={noteSubject}
+                onChange={(e) => setNoteSubject(e.target.value)}
+                placeholder={defaultSubject}
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827" }}
+              />
+            </div>
+          ) : null}
+          <div>
+            {isEmail ? (
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>Body</label>
+            ) : null}
+            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)}
+              placeholder={isEmail ? "Write the email body… Use {name}, {order}, {edd}, {tracking}" : "Write an internal note…"}
+              style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
+              autoFocus />
+          </div>
         </div>
-        <div style={{ padding: "0 12px 12px", background: "#fff" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
-            <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
-            Send this note to Monday.com (visible to Warehouse)
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer", marginTop: "8px" }}>
-            <input type="checkbox" checked={sendToCin7} onChange={(e) => setSendToCin7(e.target.checked)} />
-            Send this note to Cin7 (Internal Comments)
-          </label>
-        </div>
+        {!isEmail ? (
+          <div style={{ padding: "0 12px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+              <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
+              Send to Monday.com
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#9ca3af", cursor: "not-allowed" }}>
+              <input type="checkbox" checked={sendToCin7} disabled onChange={(e) => setSendToCin7(e.target.checked)} />
+              Send to Cin7 <span style={{ fontSize: "10px", fontWeight: 700, background: "#f3f4f6", padding: "1px 6px", borderRadius: "999px" }}>Coming Soon</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+              <input type="checkbox" checked={sendToShopify} onChange={(e) => setSendToShopify(e.target.checked)} />
+              Add to Shopify order timeline
+            </label>
+          </div>
+        ) : (
+          <div style={{ padding: "0 12px 12px", fontSize: "11px", color: "#6b7280", background: "#fff" }}>
+            Saves one BulkEmailJob + BulkEmailRecipient row and a pending Activity Log entry.
+            Cron reads subject + body from that job and sends — nothing is emailed on this click.
+          </div>
+        )}
         <div style={{ display: "flex", gap: "8px", padding: "12px", borderTop: "1px solid #e5e7eb", justifyContent: "flex-end" }}>
           <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280", cursor: "pointer" }}
             onClick={close}>Cancel</button>
-          <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: isSavingNote ? 0.8 : 1 }}
-            onClick={() => { if (!noteText.trim() || isSavingNote) return; onSave(noteText.trim(), noteTab, sendToMonday, sendToCin7); }}
-            disabled={isSavingNote}>
-            {isSavingNote ? "Saving…" : "Save note"}
+          <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: canSubmit ? 1 : 0.8 }}
+            onClick={() => {
+              if (!canSubmit) return;
+              onSave({
+                text: noteText.trim(),
+                tab: noteTab,
+                subject: (noteSubject.trim() || defaultSubject),
+                pushMonday: isEmail ? false : sendToMonday,
+                pushCin7: isEmail ? false : sendToCin7,
+                pushShopify: isEmail ? false : sendToShopify,
+              });
+            }}
+            disabled={!canSubmit}>
+            {isSavingNote ? (isEmail ? "Queuing…" : "Saving…") : isEmail ? "Queue email" : "Save note"}
           </button>
         </div>
       </div>
