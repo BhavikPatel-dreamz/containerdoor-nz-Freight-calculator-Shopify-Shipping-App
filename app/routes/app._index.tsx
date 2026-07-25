@@ -4,6 +4,7 @@ import { useLoaderData } from "react-router";
 import { Prisma } from "@prisma/client";
 import prisma from "../db.server";
 import FreightDashboard from "../components/FreightDashboard";
+import { NavUserAvatar } from "../components/freight/NavUserAvatar";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 const PAGE_SIZE = 25;
@@ -28,8 +29,10 @@ const listOf = (v: any): string[] =>
 
 export async function loader({ request }: LoaderFunctionArgs) {
   const { authenticate } = await import("../shopify.server");
+  const { currentUserFromSession } = await import("../lib/current-user.server");
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
+  const currentUser = currentUserFromSession(session);
 
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
@@ -224,13 +227,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     completedCount: c.completed,
   };
 
-  return { orders, counts, total, page, pageCount, shop, suppliers, supplier, warehouseStatuses, warehouseTags, carriers, activeFilters: { warehouseStatus, warehouseTag, carrier, paymentStatus } };
+  return { orders, counts, total, page, pageCount, shop, suppliers, supplier, warehouseStatuses, warehouseTags, carriers, activeFilters: { warehouseStatus, warehouseTag, carrier, paymentStatus }, currentUser };
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Index() {
-  const { orders, counts, total, page, pageCount, shop, suppliers, warehouseStatuses, warehouseTags, carriers, activeFilters } = useLoaderData<typeof loader>();
+  const { orders, counts, total, page, pageCount, shop, suppliers, warehouseStatuses, warehouseTags, carriers, activeFilters, currentUser } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
@@ -245,8 +248,14 @@ export default function Index() {
       page={page}
       pageCount={pageCount}
       shop={shop}
-      noteAuthor="SP"
-      navbarRight={<div className="fo-avatar">SP</div>}
+      noteAuthor={currentUser.noteAuthor}
+      navbarRight={
+        <NavUserAvatar
+          name={currentUser.name}
+          email={currentUser.email}
+          initials={currentUser.initials}
+        />
+      }
     />
   );
 }

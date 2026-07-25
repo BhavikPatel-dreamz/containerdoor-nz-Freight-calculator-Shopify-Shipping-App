@@ -104,3 +104,4 @@ Both customer extensions:
 - Caveman mode active in chat (terse). Code, commits, docs = normal English.
 - Commit/PR only when asked. Branch off `main`.
 - en-NZ formatting / NZD currency for customer-facing freight display.
+- **OMS top nav:** background bulk queue status lives in `fo-nav-right` via `NavQueueJobs` (next to avatar) — not in the Bulk Actions toolbar. Avatar/`noteAuthor` must be dynamic from the current user (`currentUserFromSession` for embedded admin; report-auth `UserMenu` for containerdoor dashboard). See `.cursor/rules/oms-nav-user.mdc`.

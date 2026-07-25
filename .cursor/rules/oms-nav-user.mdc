@@ -1,0 +1,22 @@
+---
+description: OMS top nav — queue jobs chip + dynamic current-user avatar
+globs: app/components/FreightDashboard.tsx,app/components/freight/Nav*.tsx,app/routes/app._index.tsx,app/routes/app.order*.tsx,app/routes/apps.containerdoor.dashboard.tsx,app/lib/current-user.server.ts
+alwaysApply: false
+---
+
+# OMS nav: queue jobs + current user
+
+## Queue jobs status
+- Background bulk notify / email jobs show in the **top nav** (`fo-nav-right`), **left of** the avatar / user menu — never in the bulk-actions toolbar.
+- Component: `app/components/freight/NavQueueJobs.tsx`
+- State lives in `FreightDashboard` (`backgroundJobId`, `queueJob`, localStorage key `bulkNotifyJobId`).
+- Do not re-add a "Sending…" chip next to Bulk Actions.
+
+## Current user / avatar
+- **Embedded admin** (`app._index`, `app.order_*`): resolve via `currentUserFromSession(session)` in `app/lib/current-user.server.ts` (Session `firstName`/`lastName`/`email`, else shop label). Pass `noteAuthor={currentUser.noteAuthor}` and `<NavUserAvatar … />`.
+- **External report dashboard** (`apps.containerdoor.dashboard`): keep existing `UserMenu` + report-auth user. Do not replace with hardcoded `SP`.
+- Never hardcode avatar initials like `"SP"` on OMS pages.
+
+## Don't churn
+- Leave existing UserMenu / report logout flow alone unless asked.
+- Only move/add nav queue + dynamic user wiring; don't redesign unrelated OMS chrome.

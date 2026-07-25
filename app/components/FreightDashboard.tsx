@@ -16,6 +16,7 @@ import { NotesPanel } from "./freight/NotesPanel";
 import { OrderTable } from "./freight/OrderTable";
 import { TrackingModal, EddModal, NoteModal, DispatchEditModal, OpsEditModal } from "./freight/Modals";
 import { BulkActionsWorkspace } from "./freight/BulkActionsWorkspace";
+import { NavQueueJobs } from "./freight/NavQueueJobs";
 import type { BulkActionsPayload, BulkActionsResult } from "./freight/BulkActionsWorkspace";
 
 const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
@@ -194,6 +195,7 @@ export default function FreightDashboard({
 
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
+  const [queueJob, setQueueJob] = useState<{ jobId: string; status: string; sent: number; failed: number; total: number } | null>(null);
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -409,11 +411,19 @@ export default function FreightDashboard({
         const data = await res.json().catch(() => (null));
         if (data?.ok && data.job) {
           const j = data.job;
+          setQueueJob({
+            jobId: j.id,
+            status: j.status,
+            sent: j.sentCount,
+            failed: j.failedCount,
+            total: j.totalRecipients,
+          });
           if (j.status === "PROCESSING" || j.status === "PENDING") {
             window.setTimeout(poll, 3000);
           } else {
             setBackgroundJobId(null);
             window.localStorage.removeItem("bulkNotifyJobId");
+            window.setTimeout(() => setQueueJob(null), 4000);
             if (j.status === "FAILED") {
               setSyncNotification(`❌ Bulk email failed: ${j.sentCount} sent, ${j.failedCount} failed`);
             } else if (j.status === "CANCELLED") {
@@ -433,6 +443,7 @@ export default function FreightDashboard({
     const jobId = window.localStorage.getItem("bulkNotifyJobId");
     if (!jobId || backgroundJobId) return;
     setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: 0 });
     startBackgroundPoll(jobId);
   }, []);
 
@@ -721,7 +732,10 @@ export default function FreightDashboard({
               <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
             </div>
           </div>
-          <div className="fo-nav-right">{navbarRight}</div>
+          <div className="fo-nav-right">
+            <NavQueueJobs job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)} />
+            {navbarRight}
+          </div>
         </nav>
 
         <div className="fo-body">
@@ -776,12 +790,6 @@ export default function FreightDashboard({
                       </svg>
                       Bulk Actions ({selected.size})
                     </button>
-                    {backgroundJobId && (
-                      <span style={{ fontSize: "11px", color: "#059669", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px", padding: "0 8px" }}>
-                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#059669", animation: "fo-pulse 1.5s ease-in-out infinite" }} />
-                        Sending…
-                      </span>
-                    )}
                   </>
                 )}
                 <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
@@ -982,6 +990,7 @@ export default function FreightDashboard({
           onRun={handleBulkActionsRun}
           onNotifyJobQueued={(jobId) => {
             setBackgroundJobId(jobId);
+            setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: 0 });
             window.localStorage.setItem("bulkNotifyJobId", jobId);
             startBackgroundPoll(jobId);
           }}
