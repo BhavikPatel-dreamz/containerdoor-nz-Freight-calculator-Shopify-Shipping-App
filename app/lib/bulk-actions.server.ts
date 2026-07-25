@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
 import { pushLineItemToAllSystems } from "./sync-middleware.server";
+import { createMondayUpdate } from "./monday.server";
 import { serializeNotes, formatNoteDateTime } from "../components/freight/helpers";
 import type { NoteItem } from "../components/freight/types";
 
@@ -12,9 +13,11 @@ export interface BulkActionItem {
 }
 
 export interface BulkActions {
+  eddDate?: string;
   paymentStatus?: string;
   supplier?: string;
   note?: string;
+  noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
   notify?: { subject: string; body: string };
 }
 
@@ -104,6 +107,35 @@ async function applyDataActions(
   const oldValues: Record<string, string> = {};
   const newValues: Record<string, string> = {};
 
+  // ── EDD ──
+  if (hasOwn(actions, "eddDate") && actions.eddDate) {
+    const nextVal = actions.eddDate;
+    const oldVal = existing?.eddDate ?? "";
+    if (nextVal !== oldVal) {
+      updateData.eddDate = nextVal;
+      updateData.eddDateUpdatedAt = new Date();
+      if (!existing?.originalEddDate && oldVal) {
+        updateData.originalEddDate = oldVal;
+      } else if (!existing?.originalEddDate) {
+        updateData.originalEddDate = nextVal;
+      }
+      oldValues.eddDate = oldVal;
+      newValues.eddDate = nextVal;
+      const fmt = (d: string) => {
+        try {
+          return new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
+        } catch {
+          return d;
+        }
+      };
+      notesToAdd.push(
+        oldVal
+          ? `EDD changed from ${fmt(oldVal)} to ${fmt(nextVal)} (bulk by ${performedBy}).`
+          : `EDD set to ${fmt(nextVal)} (bulk by ${performedBy}).`,
+      );
+    }
+  }
+
   // ── Payment Status ──
   if (hasOwn(actions, "paymentStatus")) {
     const nextVal = actions.paymentStatus ?? "";
@@ -129,6 +161,7 @@ async function applyDataActions(
   }
 
   // ── Note ──
+  const sendNoteToMonday = Boolean(actions.note && actions.noteOptions?.sendToMonday);
   if (actions.note) {
     notesToAdd.push(actions.note);
     oldValues.notes = existing?.notes ?? "";
@@ -141,25 +174,28 @@ async function applyDataActions(
     const currentNotes = existing?.notes ?? "";
     const parsedNotes = currentNotes ? parseNotesFromString(currentNotes) : [];
     for (const noteText of notesToAdd) {
+      const isUserNote = actions.note === noteText;
       parsedNotes.unshift({
         author: performedBy,
         role: "internal",
         scheme: "internal",
         time: formatNoteDateTime(),
         text: noteText,
+        pushToMonday: isUserNote && sendNoteToMonday,
       });
     }
     updateData.notes = serializeNotes(parsedNotes);
 
     // Upsert
-    await prisma.$transaction(async (tx) => {
+    const updated = await prisma.$transaction(async (tx) => {
+      let record;
       if (existing) {
-        await tx.orderLineItemOperationalData.update({
+        record = await tx.orderLineItemOperationalData.update({
           where: { id: existing.id },
           data: updateData,
         });
       } else {
-        await tx.orderLineItemOperationalData.create({
+        record = await tx.orderLineItemOperationalData.create({
           data: { shop, orderId, variantId, ...updateData },
         });
       }
@@ -177,17 +213,44 @@ async function applyDataActions(
           newValues,
         },
       });
+
+      return record;
     });
 
     // ── Sync to external systems ──
-    if (Object.keys(updateData).length > 1 || updateData.notes) {
-      const syncFields: any = { shop, orderId, variantId };
-      if (hasOwn(updateData, "paymentStatus")) syncFields.paymentStatus = updateData.paymentStatus;
-      if (hasOwn(updateData, "supplierContainer")) syncFields.supplierContainer = updateData.supplierContainer;
-      // Fire-and-forget sync
+    const syncFields: any = { shop, orderId, variantId };
+    let shouldSync = false;
+    if (hasOwn(updateData, "paymentStatus")) {
+      syncFields.paymentStatus = updateData.paymentStatus;
+      shouldSync = true;
+    }
+    if (hasOwn(updateData, "supplierContainer")) {
+      syncFields.supplierContainer = updateData.supplierContainer;
+      shouldSync = true;
+    }
+    if (hasOwn(updateData, "eddDate")) {
+      syncFields.eddDate = updateData.eddDate;
+      shouldSync = true;
+    }
+    if (shouldSync) {
       pushLineItemToAllSystems(syncFields, "admin").catch((e: any) =>
         console.error("[BulkActions] Sync failed", e),
       );
+    }
+
+    // Push user note to Monday as an update (when requested)
+    if (sendNoteToMonday && actions.note && updated.mondayItemId && updated.mondayItemId !== "pending") {
+      createMondayUpdate(updated.mondayItemId, actions.note)
+        .then(async () => {
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: updated.id },
+            data: {
+              notesPushedMondayItemId: updated.mondayItemId,
+              notesPushedCount: { increment: 1 },
+            },
+          });
+        })
+        .catch((e: any) => console.error("[BulkActions] Monday note push failed", e));
     }
   } else {
     await recordBulkActionAudit(shop, item, actions, performedBy, "SUCCESS", oldValues, newValues);
@@ -222,6 +285,7 @@ async function recordBulkActionAudit(
 
 function describeBulkAction(actions: BulkActions): string {
   return [
+    hasOwn(actions, "eddDate") ? "eddDate" : "",
     hasOwn(actions, "paymentStatus") ? "paymentStatus" : "",
     hasOwn(actions, "supplier") ? "supplier" : "",
     actions.note ? "note" : "",
