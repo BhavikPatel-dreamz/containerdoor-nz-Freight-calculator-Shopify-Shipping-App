@@ -1,0 +1,59 @@
+---
+description: Central OMS Activity Log + email queue — notes, emails via cron only
+globs: app/lib/communication-log.server.ts,app/lib/email-queue.server.ts,app/routes/api.order-status.tsx,app/components/freight/NotesPanel.tsx,prisma/schema.prisma,app/lib/bulk-actions.server.ts,app/routes/api.bulk-notify*.tsx,vercel.json,app/components/freight/Modals.tsx,app/components/FreightDashboard.tsx
+alwaysApply: true
+---
+
+# Central Activity Log + Email Queue
+
+## Principle — OUR DB is source of truth
+Every OMS event inserts into Postgres `CommunicationLog` first.
+**Activity & History UI reads ONLY `CommunicationLog`.**
+
+### Field updates (EDD / payment / tracking / contact / address / etc.)
+Always logged to `CommunicationLog` with `sentBy` (who changed it) + old/new in metadata/body.
+Dashboard hides `*_update` / `system_event` rows for now (`SHOW_FIELD_CHANGE_LOGS = false`
+in `NotesPanel.tsx`). Flip to `true` later to show full audit in UI.
+Staff notes + emails always visible.
+
+EDD/Tracking/payment/supplier saves: update fields + Activity Log only —
+**never** append system “notes” that sync to Monday Updates.
+
+## Staff notes — opt-in sync
+Note modal (Internal note tab) checkboxes:
+- ☐ Send to Monday.com → Monday Update only if checked
+- ☐ Send to Cin7 → Coming Soon (disabled in UI)
+- ☐ Add to Shopify order timeline → opt-in staff note on Shopify order
+
+Customer email tab: subject + body → email **queue** (not internal note sync).
+
+## Customer email — QUEUE ONLY, CRON SENDS
+**Rule:** Button clicks / API saves **never send email**. They only enqueue.
+
+1. `enqueueCustomerEmails` / `enqueueLineItemCustomerNotify`
+   → `BulkEmailJob` + `BulkEmailRecipient` (subject/body on job)
+   → `CommunicationLog` pending (“Email Queued”)
+2. **Only** `/api/bulk-notify/process` (Vercel Cron / `CRON_SECRET`) sends
+3. `finalizeQueuedEmailLog` → sent / failed
+
+### Entry points (all enqueue, none send)
+- Bulk Actions Customer Email
+- `/api/bulk-notify`
+- Note modal Customer email tab (`noteRole: customer` + `notifySubject`)
+- EDD save with `notifyCustomer: true` + `notifyKind: edd`
+- Tracking save with `notifyCustomer: true` + `notifyKind: tracking`
+
+### UI
+- Queue chip polls **status only** (GET) — must **not** POST process to send
+- **Vercel Hobby:** minutely crons blocked — `vercel.json` `crons` is **empty/disabled**
+- **Email sender cron (future):** PM2 `ecosystem.config.cjs` → `oms-email-queue-cron`
+  (`scripts/email-queue-cron.mjs` hits `GET /api/bulk-notify/process` with `CRON_SECRET`)
+  Enable when ready: `pm2 start ecosystem.config.cjs --only oms-email-queue-cron`
+- Needs `APP_URL` (or `EMAIL_CRON_APP_URL`) + `CRON_SECRET` + Resend/SMTP
+
+Helper: `app/lib/email-queue.server.ts`
+
+## Phase split (notifications product)
+- **Launch:** plain queue email + bulk field updates + log
+- **Next phase:** rich text editor, templates, preview/test send, auto workflows,
+  one combined email per customer when multiple lines affected

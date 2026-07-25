@@ -76,8 +76,14 @@ export function OrderTable({
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
-                  <td className="fo-td">
-                    <input type="checkbox" className="fo-checkbox" checked={isSelected} onChange={() => toggleSelect(item.id)} />
+                  <td className="fo-td" onClick={(e) => e.stopPropagation()}>
+                    <input
+                      type="checkbox"
+                      className="fo-checkbox"
+                      checked={isSelected}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => toggleSelect(item.id)}
+                    />
                   </td>
                   <td className="fo-td">
                     {isFirstItem ? (

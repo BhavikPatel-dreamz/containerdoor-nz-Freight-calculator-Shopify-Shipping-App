@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "prisma generate && prisma migrate deploy && react-router build",
-    "dev": " cloudflared tunnel run bhavik & shopify app dev --tunnel-url=https://b2b.dynamicdreamz.com:3000",
+    "dev": "prisma generate && cloudflared tunnel run bhavik & shopify app dev --tunnel-url=https://b2b.dynamicdreamz.com:3000",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
@@ -17,7 +17,12 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "cron:email": "node scripts/email-queue-cron.mjs",
+    "cron:email:pm2": "pm2 start ecosystem.config.cjs --only oms-email-queue-cron",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:web": "pm2 start ecosystem.config.cjs --only oms-web",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs"
   },
   "type": "module",
   "engines": {

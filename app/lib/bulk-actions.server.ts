@@ -1,8 +1,34 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
 import { pushLineItemToAllSystems } from "./sync-middleware.server";
+import { pushEddToShopify } from "./shopify-sync.server";
+import { createMondayUpdate } from "./monday.server";
 import { serializeNotes, formatNoteDateTime } from "../components/freight/helpers";
 import type { NoteItem } from "../components/freight/types";
+import { logActivity } from "./communication-log.server";
+import { enqueueCustomerEmails } from "./email-queue.server";
+
+/** Append/set staff note on Shopify order (mirror only — OMS Activity Log is source of truth). */
+async function pushStaffNoteToShopifyOrder(shop: string, orderId: string, staffNote: string) {
+  if (!staffNote.trim()) return;
+  const { admin } = await unauthenticated.admin(shop);
+  const updateRes = await admin.graphql(
+    `#graphql
+      mutation OrderUpdateNote($input: OrderInput!) {
+        orderUpdate(input: $input) {
+          order { id note }
+          userErrors { field message }
+        }
+      }`,
+    { variables: { input: { id: `gid://shopify/Order/${orderId}`, note: staffNote } } },
+  );
+  const updateJson = await updateRes.json();
+  const errors = updateJson.data?.orderUpdate?.userErrors ?? [];
+  if (errors.length) {
+    throw new Error(errors.map((e: { message: string }) => e.message).join("; "));
+  }
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -12,9 +38,11 @@ export interface BulkActionItem {
 }
 
 export interface BulkActions {
+  eddDate?: string;
   paymentStatus?: string;
   supplier?: string;
   note?: string;
+  noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
   notify?: { subject: string; body: string };
 }
 
@@ -104,6 +132,24 @@ async function applyDataActions(
   const oldValues: Record<string, string> = {};
   const newValues: Record<string, string> = {};
 
+  // ── EDD ──
+  if (hasOwn(actions, "eddDate") && actions.eddDate) {
+    const nextVal = actions.eddDate;
+    const oldVal = existing?.eddDate ?? "";
+    if (nextVal !== oldVal) {
+      updateData.eddDate = nextVal;
+      updateData.eddDateUpdatedAt = new Date();
+      if (!existing?.originalEddDate && oldVal) {
+        updateData.originalEddDate = oldVal;
+      } else if (!existing?.originalEddDate) {
+        updateData.originalEddDate = nextVal;
+      }
+      oldValues.eddDate = oldVal;
+      newValues.eddDate = nextVal;
+      // Field change only — Activity Log records it. Do not create a Monday note.
+    }
+  }
+
   // ── Payment Status ──
   if (hasOwn(actions, "paymentStatus")) {
     const nextVal = actions.paymentStatus ?? "";
@@ -112,7 +158,7 @@ async function applyDataActions(
       updateData.paymentStatus = nextVal;
       oldValues.paymentStatus = oldVal;
       newValues.paymentStatus = nextVal;
-      notesToAdd.push(`Payment status changed from "${oldVal || "none"}" to "${nextVal || "none"}" (bulk by ${performedBy}).`);
+      // Field change only — no note artifact
     }
   }
 
@@ -124,11 +170,13 @@ async function applyDataActions(
       updateData.supplierContainer = nextVal;
       oldValues.supplierContainer = oldVal;
       newValues.supplierContainer = nextVal;
-      notesToAdd.push(`Supplier changed from "${oldVal || "none"}" to "${nextVal || "none"}" (bulk by ${performedBy}).`);
+      // Field change only — no note artifact
     }
   }
 
-  // ── Note ──
+  // ── Staff note (opt-in Monday / Cin7 / Shopify via noteOptions) ──
+  const sendNoteToMonday = Boolean(actions.note && actions.noteOptions?.sendToMonday);
+  const sendNoteToShopify = Boolean(actions.note && actions.noteOptions?.addToShopify);
   if (actions.note) {
     notesToAdd.push(actions.note);
     oldValues.notes = existing?.notes ?? "";
@@ -137,29 +185,35 @@ async function applyDataActions(
 
   // ── Apply DB update ──
   if (Object.keys(updateData).length > 0 || notesToAdd.length > 0) {
-    // Build notes
-    const currentNotes = existing?.notes ?? "";
-    const parsedNotes = currentNotes ? parseNotesFromString(currentNotes) : [];
-    for (const noteText of notesToAdd) {
-      parsedNotes.unshift({
-        author: performedBy,
-        role: "internal",
-        scheme: "internal",
-        time: formatNoteDateTime(),
-        text: noteText,
-      });
+    // Only staff notes go into the notes string (for Monday :monday tag path).
+    // Routine EDD / payment / supplier updates never create notes.
+    if (notesToAdd.length > 0) {
+      const currentNotes = existing?.notes ?? "";
+      const parsedNotes = currentNotes ? parseNotesFromString(currentNotes) : [];
+      for (const noteText of notesToAdd) {
+        parsedNotes.unshift({
+          author: performedBy,
+          role: "internal",
+          scheme: "internal",
+          time: formatNoteDateTime(),
+          text: noteText,
+          pushToMonday: sendNoteToMonday,
+        });
+      }
+      updateData.notes = serializeNotes(parsedNotes);
     }
-    updateData.notes = serializeNotes(parsedNotes);
 
-    // Upsert
-    await prisma.$transaction(async (tx) => {
+    // Upsert ops + audit + activity log in one transaction (audit alone used to succeed
+    // while CommunicationLog writes failed silently outside the txn).
+    const updated = await prisma.$transaction(async (tx) => {
+      let record;
       if (existing) {
-        await tx.orderLineItemOperationalData.update({
+        record = await tx.orderLineItemOperationalData.update({
           where: { id: existing.id },
           data: updateData,
         });
       } else {
-        await tx.orderLineItemOperationalData.create({
+        record = await tx.orderLineItemOperationalData.create({
           data: { shop, orderId, variantId, ...updateData },
         });
       }
@@ -177,17 +231,210 @@ async function applyDataActions(
           newValues,
         },
       });
+
+      const now = new Date();
+      const activityRows: Array<{
+        activityType: string;
+        channel: string;
+        subject: string;
+        body: string;
+        deliveryStatus: string;
+        syncTargets?: string[];
+        metadata?: Record<string, string>;
+      }> = [];
+
+      if (actions.note) {
+        const noteTargets: string[] = [];
+        if (sendNoteToMonday) noteTargets.push("monday");
+        if (sendNoteToShopify) noteTargets.push("shopify");
+        activityRows.push({
+          activityType: "internal_note",
+          channel: "oms",
+          subject: "Internal note",
+          body: actions.note,
+          deliveryStatus: noteTargets.length > 0 ? "pending" : "internal",
+          syncTargets: noteTargets.length > 0 ? noteTargets : undefined,
+        });
+      }
+      if (hasOwn(newValues, "eddDate")) {
+        activityRows.push({
+          activityType: "edd_update",
+          channel: "system",
+          subject: "EDD",
+          body: `EDD changed from "${oldValues.eddDate || "none"}" to "${newValues.eddDate || "none"}"`,
+          deliveryStatus: "internal",
+          metadata: { field: "eddDate", oldValue: oldValues.eddDate ?? "", newValue: newValues.eddDate },
+        });
+      }
+      if (hasOwn(newValues, "paymentStatus")) {
+        activityRows.push({
+          activityType: "payment_update",
+          channel: "system",
+          subject: "Payment status",
+          body: `Payment status changed from "${oldValues.paymentStatus || "none"}" to "${newValues.paymentStatus || "none"}"`,
+          deliveryStatus: "internal",
+        });
+      }
+      if (hasOwn(newValues, "supplierContainer")) {
+        activityRows.push({
+          activityType: "supplier_update",
+          channel: "system",
+          subject: "Supplier",
+          body: `Supplier changed from "${oldValues.supplierContainer || "none"}" to "${newValues.supplierContainer || "none"}"`,
+          deliveryStatus: "internal",
+        });
+      }
+
+      for (const row of activityRows) {
+        await tx.communicationLog.create({
+          data: {
+            shop,
+            orderId,
+            variantId,
+            opsRecordId: record.id,
+            activityType: row.activityType,
+            channel: row.channel,
+            subject: row.subject,
+            body: row.body,
+            recipientEmail: "",
+            recipientName: "",
+            sentBy: performedBy,
+            deliveryStatus: row.deliveryStatus,
+            syncTargets: (row.syncTargets as any) ?? undefined,
+            metadata: (row.metadata as any) ?? undefined,
+            sentAt: now,
+          },
+        });
+      }
+
+      return record;
     });
 
     // ── Sync to external systems ──
-    if (Object.keys(updateData).length > 1 || updateData.notes) {
-      const syncFields: any = { shop, orderId, variantId };
-      if (hasOwn(updateData, "paymentStatus")) syncFields.paymentStatus = updateData.paymentStatus;
-      if (hasOwn(updateData, "supplierContainer")) syncFields.supplierContainer = updateData.supplierContainer;
-      // Fire-and-forget sync
+    const syncFields: any = { shop, orderId, variantId };
+    let shouldSync = false;
+    if (hasOwn(updateData, "paymentStatus")) {
+      syncFields.paymentStatus = updateData.paymentStatus;
+      shouldSync = true;
+    }
+    if (hasOwn(updateData, "supplierContainer")) {
+      syncFields.supplierContainer = updateData.supplierContainer;
+      shouldSync = true;
+    }
+    if (hasOwn(updateData, "eddDate")) {
+      syncFields.eddDate = updateData.eddDate;
+      shouldSync = true;
+      // Await customer-facing EDD → linked Shopify order (same shop+orderId+variantId).
+      try {
+        const eddResult = await pushEddToShopify(shop, orderId, variantId, updateData.eddDate);
+        if (!eddResult.ok) {
+          console.error("[BulkActions] EDD→Shopify sync failed", eddResult.error);
+        }
+      } catch (e: any) {
+        console.error("[BulkActions] EDD→Shopify sync threw", e);
+      }
+    }
+    if (shouldSync) {
       pushLineItemToAllSystems(syncFields, "admin").catch((e: any) =>
         console.error("[BulkActions] Sync failed", e),
       );
+    }
+
+    // Push user note to Monday as an update (when requested), then update activity status
+    if (sendNoteToMonday && actions.note && updated.mondayItemId && updated.mondayItemId !== "pending") {
+      let mondayOk = false;
+      try {
+        await createMondayUpdate(updated.mondayItemId, actions.note);
+        mondayOk = true;
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: updated.id },
+          data: {
+            notesPushedMondayItemId: updated.mondayItemId,
+            notesPushedCount: { increment: 1 },
+          },
+        });
+      } catch (e: any) {
+        console.error("[BulkActions] Monday note push failed", e);
+      }
+
+      try {
+        await prisma.communicationLog.updateMany({
+          where: {
+            shop,
+            orderId,
+            variantId,
+            opsRecordId: updated.id,
+            activityType: "internal_note",
+            body: actions.note,
+            deliveryStatus: "pending",
+          },
+          data: {
+            deliveryStatus: mondayOk ? "synced" : "failed",
+            syncResults: { monday: { ok: mondayOk } },
+          },
+        });
+        await logActivity({
+          shop,
+          orderId,
+          variantId,
+          opsRecordId: updated.id,
+          activityType: "monday_note",
+          channel: "monday",
+          subject: "Monday note",
+          body: actions.note,
+          sentBy: performedBy,
+          deliveryStatus: mondayOk ? "synced" : "failed",
+          syncTargets: ["monday"],
+          syncResults: { monday: { ok: mondayOk } },
+        });
+      } catch (logErr) {
+        console.error("[BulkActions] Monday activity log update failed", logErr);
+      }
+    }
+
+    if (sendNoteToShopify && actions.note) {
+      let shopifyOk = false;
+      try {
+        await pushStaffNoteToShopifyOrder(shop, orderId, actions.note);
+        shopifyOk = true;
+      } catch (e: any) {
+        console.error("[BulkActions] Shopify note push failed", e);
+      }
+      try {
+        if (!sendNoteToMonday) {
+          await prisma.communicationLog.updateMany({
+            where: {
+              shop,
+              orderId,
+              variantId,
+              opsRecordId: updated.id,
+              activityType: "internal_note",
+              body: actions.note,
+              deliveryStatus: "pending",
+            },
+            data: {
+              deliveryStatus: shopifyOk ? "synced" : "failed",
+              syncResults: { shopify: { ok: shopifyOk } },
+            },
+          });
+        }
+        await logActivity({
+          shop,
+          orderId,
+          variantId,
+          opsRecordId: updated.id,
+          activityType: "shopify_note",
+          channel: "shopify",
+          subject: "Shopify order note",
+          body: actions.note,
+          sentBy: performedBy,
+          deliveryStatus: shopifyOk ? "synced" : "failed",
+          syncTargets: ["shopify"],
+          syncResults: { shopify: { ok: shopifyOk } },
+        });
+      } catch (logErr) {
+        console.error("[BulkActions] Shopify activity log update failed", logErr);
+      }
     }
   } else {
     await recordBulkActionAudit(shop, item, actions, performedBy, "SUCCESS", oldValues, newValues);
@@ -222,6 +469,7 @@ async function recordBulkActionAudit(
 
 function describeBulkAction(actions: BulkActions): string {
   return [
+    hasOwn(actions, "eddDate") ? "eddDate" : "",
     hasOwn(actions, "paymentStatus") ? "paymentStatus" : "",
     hasOwn(actions, "supplier") ? "supplier" : "",
     actions.note ? "note" : "",
@@ -238,21 +486,15 @@ async function createNotifyJob(
   performedBy: string,
   filters?: Record<string, any>,
 ): Promise<{ jobId: string; recipientCount: number } | null> {
-  // Build recipient list from items that have valid emails
-  const recipients: Array<{
-    email: string; name: string; orderName: string; orderId: string;
-    variantId: string; orderData: Record<string, any>;
-  }> = [];
+  const recipients = [];
 
   for (const item of items) {
-    // Look up the order snapshot for email/name
     const snap = await prisma.orderSnapshot.findUnique({
       where: { shop_orderId: { shop, orderId: item.orderId } },
       select: { email: true, orderName: true, shippingFirstName: true, shippingLastName: true },
     });
     if (!snap?.email) continue;
 
-    // Look up operational data for orderData snapshot
     const ops = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId: item.orderId, variantId: item.variantId } },
       select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true },
@@ -281,37 +523,14 @@ async function createNotifyJob(
     });
   }
 
-  if (recipients.length === 0) return null;
-
-  // Create job + recipients in a transaction
-  const job = await prisma.$transaction(async (tx) => {
-    const j = await tx.bulkEmailJob.create({
-      data: {
-        shop,
-        subject: notify.subject,
-        body: notify.body,
-        sentBy: performedBy,
-        filters: filters ?? undefined,
-        totalRecipients: recipients.length,
-      },
-    });
-
-    await tx.bulkEmailRecipient.createMany({
-      data: recipients.map((r) => ({
-        jobId: j.id,
-        email: r.email,
-        name: r.name,
-        orderName: r.orderName,
-        orderId: r.orderId,
-        variantId: r.variantId,
-        orderData: r.orderData,
-      })),
-    });
-
-    return j;
+  return enqueueCustomerEmails({
+    shop,
+    subject: notify.subject,
+    body: notify.body,
+    sentBy: performedBy,
+    recipients,
+    filters,
   });
-
-  return { jobId: job.id, recipientCount: recipients.length };
 }
 
 // ─── Simple note parser (for appending to existing notes) ────────────────────

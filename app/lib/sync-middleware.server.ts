@@ -97,7 +97,7 @@ export async function pushLineItemToAllSystems(
         ...(fields.receivedDate !== undefined ? { receivedDate: fields.receivedDate } : {}),
         ...(fields.depositPaid !== undefined ? { depositPaid: fields.depositPaid } : {}),
         ...(fields.balanceDue !== undefined ? { balanceDue: fields.balanceDue } : {}),
-        ...(fields.notes !== undefined ? { notes: fields.notes } : {}),
+        // notes never sync to Shopify — internal OMS only
       });
       log("shopify", true);
     } catch (e: any) {

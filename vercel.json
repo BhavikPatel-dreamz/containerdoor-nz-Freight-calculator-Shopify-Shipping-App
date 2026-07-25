@@ -1,4 +1,5 @@
 {
+  "crons": [],
   "headers": [
     {
       "source": "/(.*)",

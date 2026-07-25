@@ -14,8 +14,10 @@ import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
 import { OrderTable } from "./freight/OrderTable";
-import { TrackingModal, EddModal, BulkEddModal, NoteModal, DispatchEditModal, OpsEditModal, BulkNotifyModal, BulkUpdateModal } from "./freight/Modals";
-import type { BulkUpdatePayload } from "./freight/Modals";
+import { TrackingModal, EddModal, NoteModal, DispatchEditModal, OpsEditModal, AmendOrderModal, type AmendDraft } from "./freight/Modals";
+import { BulkActionsWorkspace } from "./freight/BulkActionsWorkspace";
+import { NavQueueJobs } from "./freight/NavQueueJobs";
+import type { BulkActionsPayload, BulkActionsResult } from "./freight/BulkActionsWorkspace";
 
 const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
 
@@ -55,8 +57,10 @@ export default function FreightDashboard({
   const [noteModal, setNoteModal] = useState(false);
   const [noteTab, setNoteTab] = useState("internal");
   const [noteText, setNoteText] = useState("");
+  const [noteSubject, setNoteSubject] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false);
   const [sendToCin7, setSendToCin7] = useState(false);
+  const [sendToShopify, setSendToShopify] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingEdd, setIsSavingEdd] = useState(false);
   const [notesFetching, setNotesFetching] = useState(false);
@@ -70,6 +74,14 @@ export default function FreightDashboard({
   const [isSavingOps, setIsSavingOps] = useState(false);
   const [editDispatchError, setEditDispatchError] = useState("");
   const [editOpsError, setEditOpsError] = useState("");
+  const [amendModalOpen, setAmendModalOpen] = useState(false);
+  const [amendForm, setAmendForm] = useState<AmendDraft>({
+    firstName: "", lastName: "", email: "", phone: "",
+    address1: "", address2: "", city: "", province: "", zip: "", country: "",
+    deliveryInstructions: "",
+  });
+  const [amendError, setAmendError] = useState("");
+  const [isSavingAmend, setIsSavingAmend] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
@@ -130,13 +142,6 @@ export default function FreightDashboard({
     });
   };
 
-  const setFilterParam = (key: string, v: string) =>
-    setSearchParams((prev) => {
-      const np = new URLSearchParams(prev);
-      if (v) np.set(key, v); else np.delete(key);
-      np.set("page", "1");
-      return np;
-    });
   const clearAllFilters = () =>
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
@@ -155,7 +160,8 @@ export default function FreightDashboard({
     searchParams.get("paymentStatus")
   );
 
-  const [showFilters, setShowFilters] = useState(false);
+  // Open filter panel by default when URL already has filters (e.g. return from detail).
+  const [showFilters, setShowFilters] = useState(hasActiveFilters);
 
   // Staging state: dropdowns write here, Apply commits to URL params.
   const [stagedFilters, setStagedFilters] = useState({
@@ -176,37 +182,38 @@ export default function FreightDashboard({
     });
   }, [searchParams]);
 
-  const applyFilters = () => {
+  const applyFilters = (next?: Partial<typeof stagedFilters>, { closePanel = false }: { closePanel?: boolean } = {}) => {
+    const merged = { ...stagedFilters, ...next };
+    if (next) setStagedFilters(merged);
     setSearchParams((prev) => {
       const np = new URLSearchParams(prev);
       const set = (k: string, v: string) => { if (v) np.set(k, v); else np.delete(k); };
-      set("supplier", stagedFilters.supplier);
-      set("warehouseStatus", stagedFilters.warehouseStatus);
-      set("warehouseTag", stagedFilters.warehouseTag);
-      set("carrier", stagedFilters.carrier);
-      set("paymentStatus", stagedFilters.paymentStatus);
+      set("supplier", merged.supplier);
+      set("warehouseStatus", merged.warehouseStatus);
+      set("warehouseTag", merged.warehouseTag);
+      set("carrier", merged.carrier);
+      set("paymentStatus", merged.paymentStatus);
       np.set("page", "1");
       return np;
     });
-    setShowFilters(false);
+    if (closePanel) setShowFilters(false);
   };
 
-  const [bulkEddModal, setBulkEddModal] = useState(false);
-  const [bulkEddForm, setBulkEddForm] = useState({ newEdd: "", notifyCustomer: false });
-  const [bulkEddError, setBulkEddError] = useState("");
-  const [isBulkSavingEdd, setIsBulkSavingEdd] = useState(false);
-  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const removeFilter = (key: keyof typeof stagedFilters) => {
+    applyFilters({ [key]: "" });
+  };
 
-  const [bulkNotifyModal, setBulkNotifyModal] = useState(false);
-  const [bulkNotifyForm, setBulkNotifyForm] = useState({ subject: "", body: "" });
-  const [bulkNotifyError, setBulkNotifyError] = useState("");
-  const [isSendingNotify, setIsSendingNotify] = useState(false);
-  const [bulkNotifyJobStatus, setBulkNotifyJobStatus] = useState<{ jobId: string; total: number; sent: number; failed: number; remaining: number; status: string; queuePosition?: number; activeCount?: number } | null>(null);
-  const [bulkNotifyShowPreview, setBulkNotifyShowPreview] = useState(false);
+  const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
+    stagedFilters.supplier ? { key: "supplier" as const, label: "Supplier", value: stagedFilters.supplier } : null,
+    stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
+    stagedFilters.warehouseTag ? { key: "warehouseTag" as const, label: "Tag", value: stagedFilters.warehouseTag } : null,
+    stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
+    stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
+  ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
+
+  const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
   const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
-
-  const [bulkUpdateModal, setBulkUpdateModal] = useState(false);
-  const [isBulkUpdating, setIsBulkUpdating] = useState(false);
+  const [queueJob, setQueueJob] = useState<{ jobId: string; status: string; sent: number; failed: number; total: number } | null>(null);
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
@@ -217,7 +224,7 @@ export default function FreightDashboard({
     const fetchNotes = async () => {
       setNotesFetching(true);
       try {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(target.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(target.order.shopifyOrderId)}&variantId=${encodeURIComponent(target.item.variantId)}&shop=${encodeURIComponent(shop)}`);
         if (!res.ok) return;
         const json = await res.json();
         const line = (json.lineItems ?? []).find((item: any) => item.variantId === target.item.variantId);
@@ -383,87 +390,52 @@ export default function FreightDashboard({
   ];
 
   // ── EDD save ──
+  // Writes eddDate to ops + CommunicationLog (edd_update) via /api/order-status.
+  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
   const handleEddSave = async () => {
     if (!eddModal || !eddForm.newEdd) { setEddError("Please select a date before saving"); return; }
     setEddError(""); setIsSavingEdd(true);
     const oldEdd = eddModal.item.eddDate;
     const newEdd = eddForm.newEdd;
-    const fmt = (d: string) => new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-    const systemNote: NoteItem = { author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldEdd ? `EDD changed from ${fmt(oldEdd)} to ${fmt(newEdd)}.` : `EDD set to ${fmt(newEdd)}.` };
-    const nextNotes = [...notes, systemNote];
-    setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, orderId: eddModal.order.shopifyOrderId, variantId: eddModal.item.variantId, data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) }, newNotes: [systemNote.text] }),
+        body: JSON.stringify({
+          shop,
+          orderId: eddModal.order.shopifyOrderId,
+          variantId: eddModal.item.variantId,
+          data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd },
+          notifyCustomer: Boolean(eddForm.notifyCustomer),
+          notifyKind: "edd",
+          performedBy: noteAuthor,
+        }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0 && oldEdd !== newEdd) {
+        console.warn("[EDD] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
       setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists } } : prev);
       const applyEdd = (o: FreightOrderRow): FreightOrderRow => o.id !== eddModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== eddModal.item.variantId ? li : { ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyEdd));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyEdd) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: false });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+        if (res.ok) {
+          const j = await res.json();
+          setCommunications(j.communications ?? []);
+        }
       }
     } catch (e) { setEddError(e instanceof Error ? e.message : "Failed to save EDD"); } finally { setIsSavingEdd(false); }
   };
 
   const selectedTargets = (rows || []).flatMap((o) => o.lineItems.filter((li) => selected.has(li.id)).map((li) => ({ order: o, item: li })));
 
-  // ── Bulk EDD update ──
-  const handleBulkEddSave = async () => {
-    if (!bulkEddForm.newEdd) { setBulkEddError("Please select a date before saving"); return; }
-    if (selectedTargets.length === 0) { setBulkEddError("No line items selected"); return; }
-    setBulkEddError(""); setIsBulkSavingEdd(true);
-    const newEdd = bulkEddForm.newEdd;
-    const fmt = (d: string) => new Date(d).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" });
-    let done = 0; setBulkProgress({ done: 0, total: selectedTargets.length });
-    const succeeded = new Set<string>();
-    try {
-      for (const t of selectedTargets) {
-        const note: NoteItem = { author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: t.item.eddDate ? `EDD changed from ${fmt(t.item.eddDate)} to ${fmt(newEdd)} (bulk).` : `EDD set to ${fmt(newEdd)} (bulk).` };
-        try {
-          const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: t.order.shopifyOrderId, variantId: t.item.variantId, data: { eddDate: newEdd, originalEddDate: t.item.originalEddDate || t.item.eddDate || newEdd }, newNotes: [note.text] }) });
-          if (res.ok) succeeded.add(t.item.id);
-        } catch { /* keep going */ }
-        done++; setBulkProgress({ done, total: selectedTargets.length });
-      }
-      const apply = (o: FreightOrderRow): FreightOrderRow => ({ ...o, lineItems: o.lineItems.map((li) => succeeded.has(li.id) ? { ...li, eddDate: newEdd, originalEddDate: li.originalEddDate || li.eddDate || newEdd } : li) });
-      setRows((prev = []) => prev.map(apply));
-      if (allRows) setAllRows((prev) => (prev ? prev.map(apply) : prev));
-      const failed = selectedTargets.length - succeeded.size;
-      setSyncNotification(`Bulk EDD: ${succeeded.size} updated${failed ? `, ${failed} failed` : ""}`);
-      window.setTimeout(() => setSyncNotification(null), 4500);
-      setSelected(new Set()); setBulkEddModal(false); setBulkEddForm({ newEdd: "", notifyCustomer: false });
-    } finally { setIsBulkSavingEdd(false); setBulkProgress(null); }
-  };
-
-  // ── Bulk notify customers ──
-  const notifyRecipients = selectedTargets
-    .map((t) => ({ email: t.order.email, name: t.order.customerName, orderName: t.order.shopifyOrderName, orderId: t.order.shopifyOrderId, variantId: t.item.variantId }))
-    .filter((r) => r.email && r.email !== "—");
-
-  const handleBulkNotifySend = async () => {
-    if (!bulkNotifyForm.subject.trim() || !bulkNotifyForm.body.trim()) { setBulkNotifyError("Subject and message are required"); return; }
-    if (notifyRecipients.length === 0) { setBulkNotifyError("No recipients with valid email addresses"); return; }
-    setBulkNotifyError(""); setIsSendingNotify(true); setBulkNotifyJobStatus(null);
-    try {
-      const res = await fetch("/api/bulk-notify", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subject: bulkNotifyForm.subject, body: bulkNotifyForm.body, recipients: notifyRecipients, filters: activeFilters, performedBy: noteAuthor }) });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok || !payload.ok) throw new Error(payload.error || `API error: ${res.status}`);
-      const jobId = payload.jobId as string;
-      setBulkNotifyJobStatus({ jobId, total: payload.total, sent: 0, failed: 0, remaining: payload.total, status: "PENDING", queuePosition: payload.queuePosition ?? 0, activeCount: payload.activeCount ?? 1 });
-      setBackgroundJobId(jobId); // track independently of modal
-      window.localStorage.setItem("bulkNotifyJobId", jobId);
-      startBackgroundPoll(jobId);
-    } catch (e) { setBulkNotifyError(e instanceof Error ? e.message : "Failed to queue"); } finally { setIsSendingNotify(false); }
-  };
-
-  // Polling lives here (parent) so it survives modal close
+  // Poll job status only — never send from the browser.
+  // Cron (/api/bulk-notify/process) is the only email sender.
   const startBackgroundPoll = (jobId: string) => {
     const poll = async () => {
       try {
@@ -471,13 +443,19 @@ export default function FreightDashboard({
         const data = await res.json().catch(() => (null));
         if (data?.ok && data.job) {
           const j = data.job;
-          setBulkNotifyJobStatus({ jobId: j.id, total: j.totalRecipients, sent: j.sentCount, failed: j.failedCount, remaining: j.totalRecipients - j.sentCount - j.failedCount, status: j.status, queuePosition: data.queuePosition, activeCount: data.activeCount });
+          setQueueJob({
+            jobId: j.id,
+            status: j.status,
+            sent: j.sentCount,
+            failed: j.failedCount,
+            total: j.totalRecipients,
+          });
           if (j.status === "PROCESSING" || j.status === "PENDING") {
             window.setTimeout(poll, 3000);
           } else {
-            // Terminal state — show toast even if modal is closed
             setBackgroundJobId(null);
             window.localStorage.removeItem("bulkNotifyJobId");
+            window.setTimeout(() => setQueueJob(null), 4000);
             if (j.status === "FAILED") {
               setSyncNotification(`❌ Bulk email failed: ${j.sentCount} sent, ${j.failedCount} failed`);
             } else if (j.status === "CANCELLED") {
@@ -486,6 +464,16 @@ export default function FreightDashboard({
               setSyncNotification(`📧 Bulk emails: ${j.sentCount} sent${j.failedCount ? `, ${j.failedCount} failed` : ""}`);
             }
             window.setTimeout(() => setSyncNotification(null), 8000);
+            if (detailView) {
+              fetch(
+                `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+              )
+                .then((r) => (r.ok ? r.json() : null))
+                .then((json) => {
+                  if (json?.communications) setCommunications(json.communications);
+                })
+                .catch(() => null);
+            }
           }
         }
       } catch { window.setTimeout(poll, 5000); }
@@ -493,94 +481,142 @@ export default function FreightDashboard({
     poll();
   };
 
+  const watchQueuedEmail = (jobId: string, recipientCount = 1) => {
+    setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: recipientCount });
+    window.localStorage.setItem("bulkNotifyJobId", jobId);
+    startBackgroundPoll(jobId);
+    setSyncNotification(`📧 Email queued — cron will send (${recipientCount})`);
+    window.setTimeout(() => setSyncNotification(null), 6000);
+  };
+
   useEffect(() => {
     const jobId = window.localStorage.getItem("bulkNotifyJobId");
     if (!jobId || backgroundJobId) return;
     setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: 0 });
     startBackgroundPoll(jobId);
   }, []);
 
-  // ── Bulk update (payment status, supplier, notes, optional notify) ──
-  const handleBulkUpdate = async (payload: BulkUpdatePayload) => {
-    if (selectedTargets.length === 0) return;
-    setIsBulkUpdating(true);
-    try {
-      const items = selectedTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
-      const res = await fetch("/api/bulk-actions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items, actions: payload, performedBy: noteAuthor, filters: activeFilters }),
+  // ── Unified bulk actions workspace ──
+  const handleBulkActionsRun = async (payload: BulkActionsPayload): Promise<BulkActionsResult> => {
+    if (selectedTargets.length === 0) throw new Error("No line items selected");
+    const items = selectedTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+    const res = await fetch("/api/bulk-actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, actions: payload, performedBy: noteAuthor, filters: activeFilters }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || `API error: ${res.status}`);
+
+    if (Array.isArray(result.results)) {
+      const succeededSet = new Set(
+        result.results.filter((r: any) => r.success).map((r: any) => `${r.orderId}:${r.variantId}`),
+      );
+      const applyUpdates = (o: FreightOrderRow): FreightOrderRow => ({
+        ...o,
+        lineItems: o.lineItems.map((li) => {
+          if (!succeededSet.has(`${o.shopifyOrderId}:${li.variantId}`)) return li;
+          return {
+            ...li,
+            paymentStatus: payload.paymentStatus !== undefined ? payload.paymentStatus : li.paymentStatus,
+            supplierContainer: payload.supplier !== undefined ? payload.supplier : li.supplierContainer,
+            eddDate: payload.eddDate !== undefined ? payload.eddDate : li.eddDate,
+            originalEddDate:
+              payload.eddDate !== undefined
+                ? li.originalEddDate || li.eddDate || payload.eddDate
+                : li.originalEddDate,
+          };
+        }),
       });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || `API error: ${res.status}`);
-      const { summary, notifyJobId, notifyRecipients } = result;
-      const msgs: string[] = [];
-      if (summary.succeeded > 0) msgs.push(`${summary.succeeded} updated`);
-      if (summary.failed > 0) msgs.push(`${summary.failed} failed`);
-      if (summary.failed > 0 && Array.isArray(result.results)) {
-        const failedItems = result.results.filter((r: any) => !r.success).slice(0, 3).map((r: any) => `${r.orderId}/${r.variantId}`);
-        if (failedItems.length) msgs.push(`failed: ${failedItems.join(", ")}`);
-      }
-      if (notifyJobId) msgs.push(`📧 ${notifyRecipients} email${notifyRecipients !== 1 ? "s" : ""} queued`);
-      setSyncNotification(msgs.join(" · ") || "Bulk update complete");
-      window.setTimeout(() => setSyncNotification(null), 5000);
-      if (notifyJobId) { setBackgroundJobId(notifyJobId); window.localStorage.setItem("bulkNotifyJobId", notifyJobId); startBackgroundPoll(notifyJobId); }
-      setSelected(new Set());
-      setBulkUpdateModal(false);
-      // Optimistic update: apply changes to local state
-      if (result.ok && Array.isArray(result.results)) {
-        const succeededSet = new Set(result.results.filter((r: any) => r.success).map((r: any) => `${r.orderId}:${r.variantId}`));
-        const applyUpdates = (o: FreightOrderRow): FreightOrderRow => ({
-          ...o,
-          lineItems: o.lineItems.map((li) => {
-            if (!succeededSet.has(`${o.shopifyOrderId}:${li.variantId}`)) return li;
-            return {
-              ...li,
-              paymentStatus: payload.paymentStatus !== undefined ? payload.paymentStatus : li.paymentStatus,
-              supplierContainer: payload.supplier !== undefined ? payload.supplier : li.supplierContainer,
-            };
-          }),
-        });
-        setRows((prev = []) => prev.map(applyUpdates));
-        if (allRows) setAllRows((prev) => (prev ? prev.map(applyUpdates) : prev));
-      }
-    } catch (e) {
-      setSyncNotification(e instanceof Error ? e.message : "Bulk update failed");
-      window.setTimeout(() => setSyncNotification(null), 5000);
-    } finally {
-      setIsBulkUpdating(false);
+      setRows((prev = []) => prev.map(applyUpdates));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyUpdates) : prev));
     }
+
+    setSelected(new Set());
+
+    // Refresh Activity & History if the open detail row was part of this bulk run
+    if (detailView && Array.isArray(result.results)) {
+      const touched = result.results.some(
+        (r: any) =>
+          r.success &&
+          r.orderId === detailView.order.shopifyOrderId &&
+          r.variantId === detailView.item.variantId,
+      );
+      if (touched) {
+        try {
+          const logRes = await fetch(
+            `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+          );
+          if (logRes.ok) {
+            const logJson = await logRes.json();
+            const line = (logJson.lineItems ?? []).find(
+              (item: any) => item.variantId === detailView.item.variantId,
+            );
+            setNotes(parseNotesString(line?.notes ?? ""));
+            setCommunications(logJson.communications ?? []);
+          }
+        } catch (e) {
+          console.error("Failed to refresh activity log after bulk", e);
+        }
+      }
+    }
+
+    return {
+      summary: result.summary,
+      notifyJobId: result.notifyJobId,
+      notifyRecipients: result.notifyRecipients,
+      results: result.results,
+    };
+  };
+
+  const handleBulkActionsClose = () => {
+    setBulkActionsOpen(false);
   };
 
   // ── Tracking save ──
+  // Writes tracking/carrier/freightRef + CommunicationLog (tracking_update) via API.
+  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
   const handleTrackingSave = async () => {
     if (!trackingModal || !trackingForm.trackingNumber) { setTrackingError("Please enter a tracking number before saving"); return; }
     setTrackingError(""); setIsSavingTracking(true);
-    const oldTracking = trackingModal.item.trackingNumber;
-    const oldFreightRef = trackingModal.item.freightRef ?? "";
     const newFreightRef = trackingForm.freightRef.trim();
-    const trackingNote: NoteItem = { author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldTracking ? `Tracking number updated from ${oldTracking} to ${trackingForm.trackingNumber}.` : `Tracking number set to ${trackingForm.trackingNumber}.` };
-    const notesToAdd = [trackingNote];
-    if (newFreightRef && newFreightRef !== oldFreightRef) {
-      notesToAdd.push({ author: "SY", role: "system", scheme: "system", time: formatNoteDateTime(), text: oldFreightRef ? `Freight ref updated from ${oldFreightRef} to ${newFreightRef}.` : `Freight ref set to ${newFreightRef}.` });
-    }
-    const nextNotes = [...notes, ...notesToAdd]; setNotes(nextNotes);
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, orderId: trackingModal.order.shopifyOrderId, variantId: trackingModal.item.variantId, data: { trackingNumber: trackingForm.trackingNumber, carrier: trackingForm.carrier, freightRef: newFreightRef, notes: serializeNotes(nextNotes) }, newNotes: notesToAdd.map((n) => n.text) }),
+        body: JSON.stringify({
+          shop,
+          orderId: trackingModal.order.shopifyOrderId,
+          variantId: trackingModal.item.variantId,
+          data: {
+            trackingNumber: trackingForm.trackingNumber,
+            carrier: trackingForm.carrier,
+            freightRef: newFreightRef,
+          },
+          notifyCustomer: Boolean(trackingForm.notifyCustomer),
+          notifyKind: "tracking",
+          performedBy: noteAuthor,
+        }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
       const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0) {
+        console.warn("[Tracking] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
       setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, freightRef: newFreightRef, cin7Exists } } : prev);
       const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyTrack));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyTrack) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setTrackingModal(null); setTrackingForm({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+        if (res.ok) {
+          const j = await res.json();
+          setCommunications(j.communications ?? []);
+        }
       }
     } catch (e) { setTrackingError(e instanceof Error ? e.message : "Failed to save tracking"); } finally { setIsSavingTracking(false); }
   };
@@ -601,7 +637,7 @@ export default function FreightDashboard({
       if (editDispatchForm.trackingNumber !== (detailView.item.trackingNumber || "")) data.trackingNumber = editDispatchForm.trackingNumber;
       if (editDispatchForm.freightRef !== (detailView.item.freightRef || "")) data.freightRef = editDispatchForm.freightRef;
       if (Object.keys(data).length === 0) { setEditDispatchModal(false); return; }
-      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data }) });
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const payload = await res.json(); const cin7Exists = Boolean(payload.cin7Exists);
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, eddDate: data.eddDate || li.eddDate, originalEddDate: data.originalEddDate || li.originalEddDate, company: data.carrier || li.company, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
@@ -613,6 +649,128 @@ export default function FreightDashboard({
   };
 
   // ── Operational save ──
+  const handleAmendOpen = async () => {
+    if (!detailView) return;
+    setAmendError("");
+    setIsSavingAmend(false);
+    try {
+      const res = await fetch(
+        `/api/order-amendments?shop=${encodeURIComponent(shop)}&orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}`,
+      );
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "Failed to load order");
+      const d = json.draft;
+      setAmendForm({
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        email: d.email || "",
+        phone: d.phone || "",
+        address1: d.address1 || "",
+        address2: d.address2 || "",
+        city: d.city || "",
+        province: d.province || "",
+        zip: d.zip || "",
+        country: d.country || "",
+        deliveryInstructions: d.deliveryInstructions || "",
+      });
+      setAmendModalOpen(true);
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Failed to open amend form");
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    }
+  };
+
+  const handleAmendSave = async (opts: { cancelLineItem?: boolean; cancelOrder?: boolean } = {}) => {
+    if (!detailView) return;
+    if (opts.cancelOrder && !window.confirm("Cancel all line items on this order? This sets Customer status to Cancelled.")) return;
+    if (opts.cancelLineItem && !window.confirm("Cancel this line item? Customer status → Cancelled.")) return;
+    setIsSavingAmend(true);
+    setAmendError("");
+    try {
+      const res = await fetch("/api/order-amendments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: detailView.order.shopifyOrderId,
+          variantId: detailView.item.variantId,
+          performedBy: noteAuthor,
+          contact: {
+            firstName: amendForm.firstName,
+            lastName: amendForm.lastName,
+            email: amendForm.email,
+            phone: amendForm.phone,
+          },
+          address: {
+            firstName: amendForm.firstName,
+            lastName: amendForm.lastName,
+            address1: amendForm.address1,
+            address2: amendForm.address2,
+            city: amendForm.city,
+            province: amendForm.province,
+            zip: amendForm.zip,
+            country: amendForm.country,
+            phone: amendForm.phone,
+          },
+          deliveryInstructions: amendForm.deliveryInstructions,
+          cancelLineItem: Boolean(opts.cancelLineItem),
+          cancelOrder: Boolean(opts.cancelOrder),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) throw new Error(json.error || "Amendment failed");
+
+      const fullAddress = [amendForm.address1, amendForm.address2, amendForm.city, amendForm.province, amendForm.zip, amendForm.country]
+        .filter(Boolean)
+        .join(", ");
+      const customerName = `${amendForm.firstName} ${amendForm.lastName}`.trim();
+      const applyOrder = (o: FreightOrderRow): FreightOrderRow => {
+        if (o.id !== detailView.order.id) return o;
+        return {
+          ...o,
+          customerName: customerName || o.customerName,
+          email: amendForm.email || o.email,
+          phone: amendForm.phone || o.phone,
+          fullAddress: fullAddress || o.fullAddress,
+          city: amendForm.city || o.city,
+          postalCode: amendForm.zip || o.postalCode,
+          lineItems: o.lineItems.map((li) => {
+            if (opts.cancelOrder) return { ...li, customerStatus: "cancelled" };
+            if (opts.cancelLineItem && li.variantId === detailView.item.variantId) {
+              return { ...li, customerStatus: "cancelled" };
+            }
+            return li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyOrder));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyOrder) : prev));
+      setDetailView((prev) =>
+        prev
+          ? {
+              ...prev,
+              order: applyOrder(prev.order),
+              item: opts.cancelOrder || opts.cancelLineItem
+                ? { ...prev.item, customerStatus: "cancelled" }
+                : prev.item,
+            }
+          : prev,
+      );
+      setAmendModalOpen(false);
+      const n = json.changes?.length ?? 0;
+      setSyncNotification(
+        n
+          ? `Order amended (${n} change${n === 1 ? "" : "s"})${json.shopifyOk === false ? " — Shopify sync issue" : " & synced"}`
+          : "No changes",
+      );
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    } catch (e) {
+      setAmendError(e instanceof Error ? e.message : "Failed to save amendment");
+    } finally {
+      setIsSavingAmend(false);
+    }
+  };
+
   const handleOpsEdit = () => {
     if (!detailView) return;
     setEditOpsForm({ warehouseStatus: detailView.item.warehouseStatus || "", warehouseTags: detailView.item.warehouseTags || "", dispatchStatus: detailView.item.dispatchStatus || "", deliveryStatus: detailView.item.deliveryStatus || "", poNumber: detailView.item.poNumber || "", depositPaid: detailView.item.depositPaid || "", balanceDue: detailView.item.balanceDue || "", paymentStatus: detailView.item.paymentStatus || "", supplierContainer: detailView.item.supplierContainer || "", receivedDate: detailView.item.receivedDate || "", portArrivalDate: detailView.item.portArrivalDate || "", inTransitDate: detailView.item.inTransitDate || "" });
@@ -636,7 +794,7 @@ export default function FreightDashboard({
       if (editOpsForm.portArrivalDate !== (detailView.item.portArrivalDate || "")) data.portArrivalDate = editOpsForm.portArrivalDate;
       if (editOpsForm.inTransitDate !== (detailView.item.inTransitDate || "")) data.inTransitDate = editOpsForm.inTransitDate;
       if (Object.keys(data).length === 0) { setEditOpsModal(false); return; }
-      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data }) });
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, warehouseTags: data.warehouseTags ?? li.warehouseTags, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
       setRows((prev) => prev.map(apply));
@@ -765,7 +923,7 @@ export default function FreightDashboard({
         }
       } catch (cin7Err) { console.error("Cin7 sync failed", cin7Err); }
       // Refresh notes
-      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
       if (notesRes.ok) { const notesJson = await notesRes.json(); const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(line?.notes ?? "")); }
     } catch (e) { console.error("Monday sync failed", e); } finally { setIsSyncing(false); }
   };
@@ -778,16 +936,21 @@ export default function FreightDashboard({
           <div className="fo-nav-left">
             <div className="fo-logo-box">F</div>
             <span className="fo-nav-title">Freight OMS</span>
-            <div className="fo-nav-search-wrap">
-              <span className="fo-nav-search-icon">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
-                </svg>
-              </span>
-              <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
-            </div>
+            {!detailView ? (
+              <div className="fo-nav-search-wrap">
+                <span className="fo-nav-search-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </span>
+                <input className="fo-nav-search" placeholder="Search by order #, customer, SKU, product ID, tracking…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              </div>
+            ) : null}
           </div>
-          <div className="fo-nav-right">{navbarRight}</div>
+          <div className="fo-nav-right">
+            <NavQueueJobs job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)} />
+            {navbarRight}
+          </div>
         </nav>
 
         <div className="fo-body">
@@ -832,37 +995,60 @@ export default function FreightDashboard({
                 </label>
                 {selected.size > 0 && (
                   <>
-                    <button className="fo-tool-btn" style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb" }} onClick={() => { setBulkEddError(""); setBulkEddForm({ newEdd: "", notifyCustomer: false }); setBulkEddModal(true); }}>
-                      <IconCalendar /> Bulk update EDD ({selected.size})
+                    <button
+                      className="fo-tool-btn"
+                      style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
+                      onClick={() => setBulkActionsOpen(true)}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                      </svg>
+                      Bulk Actions ({selected.size})
                     </button>
-                    <button className="fo-tool-btn" style={{ background: "#059669", color: "#fff", borderColor: "#059669" }} onClick={() => { setBulkNotifyError(""); setBulkNotifyForm({ subject: "", body: "" }); setBulkNotifyShowPreview(false); setBulkNotifyModal(true); }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
-                      Notify customers ({selected.size})
-                    </button>
-                    <button className="fo-tool-btn" style={{ background: "#7c3aed", color: "#fff", borderColor: "#7c3aed" }} onClick={() => setBulkUpdateModal(true)}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" /></svg>
-                      Bulk update ({selected.size})
-                    </button>
-                    {backgroundJobId && (
-                      <span style={{ fontSize: "11px", color: "#059669", fontWeight: 600, display: "flex", alignItems: "center", gap: "4px", padding: "0 8px" }}>
-                        <span style={{ width: "6px", height: "6px", borderRadius: "50%", background: "#059669", animation: "fo-pulse 1.5s ease-in-out infinite" }} />
-                        Sending…
-                      </span>
-                    )}
                   </>
                 )}
-                <div className="fo-toolbar-right" style={{ alignItems: "flex-end" }}>
-                  <button className="fo-tool-btn" onClick={() => setShowFilters(!showFilters)} style={hasActiveFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}>
+                <div className="fo-toolbar-right" style={{ alignItems: "flex-end", gap: 8 }}>
+                  <button
+                    className="fo-tool-btn"
+                    onClick={() => setShowFilters(!showFilters)}
+                    style={hasActiveFilters || showFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}
+                  >
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
-                    Filters{hasActiveFilters ? " \u2022" : ""}
+                    {showFilters ? "Hide filters" : "Filters"}
+                    {activeFilterChips.length > 0 ? ` (${activeFilterChips.length})` : ""}
                   </button>
                 </div>
               </div>
             )}
 
-            {/* Filter Panel */}
+            {/* Active filter chips — always visible when filters applied (even if panel closed) */}
+            {!detailView && activeFilterChips.length > 0 && (
+              <div className="fo-filter-chips">
+                {activeFilterChips.map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    className="fo-filter-chip"
+                    onClick={() => removeFilter(chip.key)}
+                    title={`Remove ${chip.label} filter`}
+                  >
+                    <span className="fo-filter-chip-label">{chip.label}:</span> {chip.value}
+                    <span className="fo-filter-chip-x" aria-hidden>✕</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="fo-filter-chip-clear"
+                  onClick={() => { clearAllFilters(); }}
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+
+            {/* Filter Panel — stays open after apply so staff can tweak */}
             {showFilters && !detailView && (
-              <div style={{ padding: "14px 16px", borderBottom: "1px solid #e5e7eb", background: "#f9fafb", display: "flex", flexWrap: "wrap", gap: "10px", alignItems: "flex-end" }}>
+              <div className="fo-filter-panel">
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
                   <select className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
@@ -881,35 +1067,55 @@ export default function FreightDashboard({
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
-                  <select className="fo-status-select" value={stagedFilters.supplier} onChange={(e) => setStagedFilters((p) => ({ ...p, supplier: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.supplier}
+                    onChange={(e) => applyFilters({ supplier: e.target.value })}
+                  >
                     <option value="">All suppliers</option>
                     {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
-                  <select className="fo-status-select" value={stagedFilters.warehouseStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseStatus: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.warehouseStatus}
+                    onChange={(e) => applyFilters({ warehouseStatus: e.target.value })}
+                  >
                     <option value="">All</option>
                     {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse tag</label>
-                  <select className="fo-status-select" value={stagedFilters.warehouseTag} onChange={(e) => setStagedFilters((p) => ({ ...p, warehouseTag: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.warehouseTag}
+                    onChange={(e) => applyFilters({ warehouseTag: e.target.value })}
+                  >
                     <option value="">All</option>
                     {warehouseTags.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
-                  <select className="fo-status-select" value={stagedFilters.carrier} onChange={(e) => setStagedFilters((p) => ({ ...p, carrier: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.carrier}
+                    onChange={(e) => applyFilters({ carrier: e.target.value })}
+                  >
                     <option value="">All carriers</option>
                     {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
-                  <select className="fo-status-select" value={stagedFilters.paymentStatus} onChange={(e) => setStagedFilters((p) => ({ ...p, paymentStatus: e.target.value }))}>
+                  <select
+                    className="fo-status-select"
+                    value={stagedFilters.paymentStatus}
+                    onChange={(e) => applyFilters({ paymentStatus: e.target.value })}
+                  >
                     <option value="">All</option>
                     <option value="Pending">Pending</option>
                     <option value="Paid">Paid</option>
@@ -917,14 +1123,22 @@ export default function FreightDashboard({
                     <option value="Overdue">Overdue</option>
                   </select>
                 </div>
-                <button className="fo-tool-btn" onClick={applyFilters} style={{ background: "#2563eb", color: "#fff", borderColor: "#2563eb", height: "30px" }}>
-                  Apply filters
-                </button>
                 {hasActiveFilters && (
-                  <button className="fo-tool-btn" onClick={() => { clearAllFilters(); setShowFilters(false); }} style={{ color: "#dc2626", borderColor: "#fecaca" }}>
+                  <button
+                    className="fo-tool-btn"
+                    onClick={() => { clearAllFilters(); }}
+                    style={{ color: "#dc2626", borderColor: "#fecaca", height: "30px" }}
+                  >
                     Clear all
                   </button>
                 )}
+                <button
+                  className="fo-tool-btn"
+                  onClick={() => setShowFilters(false)}
+                  style={{ height: "30px" }}
+                >
+                  Done
+                </button>
               </div>
             )}
 
@@ -956,20 +1170,12 @@ export default function FreightDashboard({
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}>
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
-                      Add note
-                    </button>
                     <button className="fo-detail-action-btn" onClick={() => { setEddModal({ order: detailView.order, item: detailView.item }); setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: false }); }}>
                       <IconCalendar /> Update EDD
                     </button>
                     <button className="fo-detail-action-btn" onClick={() => { setTrackingModal({ order: detailView.order, item: detailView.item }); setTrackingForm({ carrier: detailView.item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>
                       Tracking
-                    </button>
-                    <button className="fo-detail-action-btn">
-                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><polyline points="22,6 12,13 2,6" /></svg>
-                      Notify
                     </button>
                     <button className="fo-detail-action-btn sync-btn" onClick={handleSync} disabled={isSyncing}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
@@ -979,8 +1185,8 @@ export default function FreightDashboard({
                 </div>
 
                 <div className="fo-detail-content">
-                  <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} />
-                  <NotesPanel notes={notes} communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }} />
+                  <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} onAmendOrder={handleAmendOpen} />
+                  <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
                 </div>
               </div>
             ) : filteredOrders.length === 0 ? (
@@ -998,7 +1204,7 @@ export default function FreightDashboard({
                 toggleSelectAll={toggleSelectAll}
                 toggleSelect={toggleSelect}
                 onOpenDetail={(order, item) => navigate(`/app/order/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}
-                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}
+                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
                 onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}
                 onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}
                 onFixCin7={handleFixCin7Mismatch}
@@ -1041,23 +1247,92 @@ export default function FreightDashboard({
       {eddModal && (
         <EddModal eddModal={eddModal} eddForm={eddForm} eddError={eddError} isSavingEdd={isSavingEdd} setEddForm={setEddForm} setEddModal={setEddModal} setEddError={setEddError} onSave={handleEddSave} />
       )}
-      {bulkEddModal && (
-        <BulkEddModal selectedCount={selectedTargets.length} bulkEddForm={bulkEddForm} bulkEddError={bulkEddError} isBulkSavingEdd={isBulkSavingEdd} bulkProgress={bulkProgress} setBulkEddForm={setBulkEddForm} setBulkEddModal={setBulkEddModal} setBulkEddError={setBulkEddError} onSave={handleBulkEddSave} />
-      )}
-      {bulkNotifyModal && (
-        <BulkNotifyModal selectedCount={notifyRecipients.length} recipients={notifyRecipients} form={bulkNotifyForm} error={bulkNotifyError} isSending={isSendingNotify} jobStatus={bulkNotifyJobStatus} setForm={setBulkNotifyForm} setError={setBulkNotifyError} onClose={() => { setBulkNotifyModal(false); setBulkNotifyJobStatus(null); setBulkNotifyForm({ subject: "", body: "" }); setSelected(new Set()); }} onSend={handleBulkNotifySend} onPreview={() => setBulkNotifyShowPreview(true)} showPreview={bulkNotifyShowPreview} setShowPreview={setBulkNotifyShowPreview} />
+      {bulkActionsOpen && (
+        <BulkActionsWorkspace
+          open={bulkActionsOpen}
+          onClose={handleBulkActionsClose}
+          targets={selectedTargets}
+          onRun={handleBulkActionsRun}
+          onNotifyJobQueued={(jobId) => {
+            watchQueuedEmail(jobId, 1);
+          }}
+        />
       )}
       {noteModal && activeNoteTarget && (
-        <NoteModal target={activeNoteTarget} noteTab={noteTab} noteText={noteText} sendToMonday={sendToMonday} sendToCin7={sendToCin7} isSavingNote={isSavingNote} noteAuthor={noteAuthor} setNoteTab={setNoteTab} setNoteText={setNoteText} setSendToMonday={setSendToMonday} setSendToCin7={setSendToCin7} setNoteModal={setNoteModal} setNoteModalTarget={setNoteModalTarget}
-          onSave={async (text, tab, pushMonday, pushCin7) => {
+        <NoteModal
+          target={activeNoteTarget}
+          noteTab={noteTab}
+          noteText={noteText}
+          noteSubject={noteSubject}
+          sendToMonday={sendToMonday}
+          sendToCin7={sendToCin7}
+          sendToShopify={sendToShopify}
+          isSavingNote={isSavingNote}
+          noteAuthor={noteAuthor}
+          setNoteTab={setNoteTab}
+          setNoteText={setNoteText}
+          setNoteSubject={setNoteSubject}
+          setSendToMonday={setSendToMonday}
+          setSendToCin7={setSendToCin7}
+          setSendToShopify={setSendToShopify}
+          setNoteModal={setNoteModal}
+          setNoteModalTarget={setNoteModalTarget}
+          onSave={async ({ text, tab, subject, pushMonday, pushCin7, pushShopify }) => {
             setIsSavingNote(true);
-            const newNoteEntry: NoteItem = { author: noteAuthor, role: tab === "internal" ? "internal" : "customer", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
+            const isCustomer = tab === "customer";
+            const newNoteEntry: NoteItem = { author: noteAuthor, role: isCustomer ? "customer" : "internal", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
             const nextNotes = [...notes, newNoteEntry];
             try {
-              const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: activeNoteTarget.order.shopifyOrderId, variantId: activeNoteTarget.item.variantId, data: { notes: serializeNotes(nextNotes) }, newNotes: [text], newCin7Notes: pushCin7 ? [text] : [] }) });
-              if (!res.ok) return;
-              setNotes(nextNotes); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setNoteModal(false); setNoteModalTarget(null);
-            } catch (error) { console.error("Failed to save note", error); } finally { setIsSavingNote(false); }
+              const res = await fetch("/api/order-status", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  shop,
+                  orderId: activeNoteTarget.order.shopifyOrderId,
+                  variantId: activeNoteTarget.item.variantId,
+                  data: { notes: serializeNotes(nextNotes) },
+                  newNotes: [text],
+                  newCin7Notes: pushCin7 ? [text] : [],
+                  syncNotes: { monday: pushMonday, cin7: pushCin7, shopify: pushShopify },
+                  isStaffNote: true,
+                  noteRole: tab,
+                  performedBy: noteAuthor,
+                  ...(isCustomer
+                    ? {
+                        notifyCustomer: true,
+                        notifyKind: "custom",
+                        notifySubject: subject,
+                      }
+                    : {}),
+                }),
+              });
+              const payload = await res.json().catch(() => ({} as any));
+              if (!res.ok) {
+                setSyncNotification(`Note save failed: ${payload.error || res.status}`);
+                window.setTimeout(() => setSyncNotification(null), 8000);
+                return;
+              }
+              setNotes(nextNotes);
+              setNoteText("");
+              setNoteSubject("");
+              setSendToMonday(false);
+              setSendToCin7(false);
+              setSendToShopify(false);
+              setNoteModal(false);
+              setNoteModalTarget(null);
+              if (payload.notifyJobId) {
+                watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
+              }
+              const logRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(activeNoteTarget.order.shopifyOrderId)}&variantId=${encodeURIComponent(activeNoteTarget.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+              if (logRes.ok) {
+                const logJson = await logRes.json();
+                setCommunications(logJson.communications ?? []);
+              }
+            } catch (error) {
+              console.error("Failed to save note", error);
+              setSyncNotification(`Note save failed: ${error instanceof Error ? error.message : "network error"}`);
+              window.setTimeout(() => setSyncNotification(null), 8000);
+            } finally { setIsSavingNote(false); }
           }}
         />
       )}
@@ -1067,8 +1342,17 @@ export default function FreightDashboard({
       {editOpsModal && detailView && (
         <OpsEditModal order={detailView.order} item={detailView.item} form={editOpsForm} error={editOpsError} isSaving={isSavingOps} setForm={setEditOpsForm} onClose={() => { setEditOpsModal(false); setEditOpsError(""); }} onSave={handleOpsSave} />
       )}
-      {bulkUpdateModal && (
-        <BulkUpdateModal open={bulkUpdateModal} onOpenChange={setBulkUpdateModal} onApply={handleBulkUpdate} isSaving={isBulkUpdating} selectedCount={selectedTargets.length} />
+      {amendModalOpen && detailView && (
+        <AmendOrderModal
+          orderName={detailView.order.shopifyOrderName}
+          variantId={detailView.item.variantId}
+          form={amendForm}
+          error={amendError}
+          isSaving={isSavingAmend}
+          setForm={setAmendForm}
+          onClose={() => { setAmendModalOpen(false); setAmendError(""); }}
+          onSave={handleAmendSave}
+        />
       )}
     </>
   );

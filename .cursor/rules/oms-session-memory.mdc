@@ -1,0 +1,76 @@
+---
+description: OMS product decisions memory — notes, email, status fields, amendments, UI UX
+alwaysApply: true
+---
+
+# OMS session memory (ContainerDoor)
+
+Read these rules before changing OMS freight dashboard / email / sync:
+
+| Topic | Rule file |
+|-------|-----------|
+| Activity Log + email queue/cron | `.cursor/rules/oms-activity-log.mdc` |
+| Nav avatar + queue chip | `.cursor/rules/oms-nav-user.mdc` |
+| EDD → Shopify sync | `.cursor/rules/oms-edd-shopify-sync.mdc` |
+| Order amendments | `.cursor/rules/oms-order-amendments.mdc` |
+
+---
+
+## Status fields — no generic “Status”
+- Primary customer-facing status = **`customerStatus`** (Confirmed / Dispatched / Delivered / Cancelled).
+- Also: `warehouseStatus`, `paymentStatus`, `dispatchStatus`, `deliveryStatus`.
+- There is **no** separate generic `status` DB column.
+- Monday maps `customerStatus` → board column titled **"Status"** in code (`monday.server.ts`); prefer renaming that Monday title to **Customer Status** when touching Monday sync — do not invent a second OMS status field.
+
+## Notes & Monday / Cin7 / Shopify
+- Internal notes: OMS `CommunicationLog` only unless staff ticks sync checkboxes.
+- ☐ **Send to Monday.com** — only checked notes create Monday Updates.
+- ☐ **Send to Cin7** — UI “Coming Soon” (API path exists); keep disabled until ready.
+- ☐ **Add to Shopify order timeline** — opt-in only (Note modal + Bulk).
+- Routine field updates (EDD, payment, tracking, supplier) **must not** create Monday/Shopify notes.
+- Bulk Actions Monday checkbox defaults **unchecked** (opt-in).
+
+## Activity Log UI
+- Source of truth: `CommunicationLog` only (`NotesPanel`).
+- Field-change types (`*_update`, `system_event`) are **stored in DB** but **hidden** in UI via `SHOW_FIELD_CHANGE_LOGS = false` in `NotesPanel.tsx`. Flip to `true` later for full audit UI.
+- Visible now: internal notes, emails, monday/shopify/cin7 note sync rows.
+
+## Customer email (operational, not marketing)
+- OMS is central place for ops emails; enqueue → cron sends (Resend/SMTP). Not Shopify marketing.
+- NoteModal **Customer email**: subject + body → `BulkEmailJob` + `BulkEmailRecipient` + pending log.
+- EDD/Tracking notify: opt-in checkbox → enqueue only.
+- **Vercel Hobby:** no minutely cron — `vercel.json` crons disabled.
+- **AWS / PM2 (future):** `ecosystem.config.cjs`
+  - `oms-web` — `react-router-serve ./build/server/index.js` (PORT 3000)
+  - `oms-email-queue-cron` — `scripts/email-queue-cron.mjs`
+  - After build: `pm2 start ecosystem.config.cjs` (or `--only oms-web`)
+- Auto-email on every EDD/status change: **No** — opt-in only (client direction).
+
+## Bulk updates
+- Core launch requirement (container/pre-order ops): bulk EDD, payment, supplier, notes, notify.
+- Keep improving bulk; do not defer basic bulk field updates.
+
+## EDD → customer account
+- OMS `eddDate` must sync to Shopify metafield `containerdoor_ops.edd_{variantId}` (awaited).
+- Customer Account freight block also reads live OMS via `GET /api/order-status`.
+- Internal notes do not sync to Shopify automatically.
+
+## Order amendments (CS)
+- Detail → Customer → **Amend** (full-screen panel).
+- Done: contact, address, delivery instructions, soft cancel line/order + audit + Shopify/Monday where applicable.
+- Not yet: variant swap (`orderEdit`), hard `orderCancel`, Cin7 address/void.
+- Migration: `prisma/migrations/20260725140000_order_amendment_fields/` (`shippingAddress2`, `deliveryInstructions`).
+
+## Detail page UX (`/app/order/:orderId`)
+- Hide nav **search** on detail (meaningless there).
+- One note entry: Activity panel **Note / email** (not duplicate top-bar Add note).
+- Remove dead **Notify** top button (use Note / email → Customer email).
+- Detail actions: Update EDD · Tracking · Sync.
+
+## Dashboard filters UX
+- Filters apply **on change** (no hide-on-apply).
+- Active filter **chips** always visible when applied; chip ✕ removes one.
+- Toggle: Filters / Hide filters; Done closes panel.
+
+## Amend UI
+- Full-screen panel (`.fo-amend-overlay` / `.fo-amend-screen`), 3-column desktop, no scroll on desktop.
