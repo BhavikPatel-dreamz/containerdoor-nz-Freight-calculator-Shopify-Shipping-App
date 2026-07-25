@@ -1,14 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { getEmailProvider, getFromEmail } from "../lib/email-providers.server";
-import { createCommunicationLog } from "../lib/communication-log.server";
+import { tryGetEmailProvider } from "../lib/email-providers.server";
+import { finalizeQueuedEmailLog } from "../lib/communication-log.server";
 import { authenticate } from "../shopify.server";
 
-// ─── Cron Worker — process pending bulk email jobs ────────────────────────────
-// Hit via POST /api/bulk-notify/process
-// Set up an external cron (cron-job.org, Vercel Cron, etc.) to call this every 1-2 min.
-// Auth: Bearer token via CRON_SECRET env var, or X-Cron-Secret header.
+// ─── Cron Worker — process pending bulk email jobs from OUR queue tables ──────
+// Tables: BulkEmailJob + BulkEmailRecipient → send → update CommunicationLog
+// Hit via:
+//   - Vercel Cron GET /api/bulk-notify/process (Authorization: Bearer CRON_SECRET)
+//   - External cron POST with CRON_SECRET
+//   - Admin session POST (embedded app kick while queue chip polls)
+// Auth: Bearer CRON_SECRET, X-Cron-Secret, or Shopify admin session.
 
 const BATCH_SIZE = Number(process.env.EMAIL_BATCH_SIZE || "50");
 const STUCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — auto-fail stuck jobs
@@ -18,6 +21,34 @@ function verifyCronSecret(request: Request): boolean {
   if (!secret) return false;
   const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
   return authHeader === `Bearer ${secret}` || authHeader === secret;
+}
+
+async function authorizeWorker(request: Request): Promise<{ ok: boolean; shop?: string }> {
+  if (verifyCronSecret(request)) return { ok: true };
+  // Allow embedded admin to kick the queue worker (local tunnel / no cron yet)
+  try {
+    const { session } = await authenticate.admin(request);
+    return { ok: true, shop: session.shop };
+  } catch {
+    return { ok: false };
+  }
+}
+
+// ─── POST — process next batch, cancel, retry, or resume ────────────────────
+
+export async function action({ request }: ActionFunctionArgs) {
+  const auth = await authorizeWorker(request);
+  if (!auth.ok) {
+    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  const body = await request.json().catch(() => ({})) as { command?: string; jobId?: string };
+
+  if (body.command === "cancel" && body.jobId) return cancelJob(body.jobId);
+  if (body.command === "retry" && body.jobId) return retryJob(body.jobId);
+  if (body.command === "resume" && body.jobId) return resumeJob(body.jobId);
+
+  return processNextBatch(auth.shop);
 }
 
 type ClaimedRecipient = {
@@ -52,22 +83,6 @@ function toHtml(text: string) {
   return linked.replace(/\r?\n/g, "<br>");
 }
 
-// ─── POST — process next batch, cancel, retry, or resume ────────────────────
-
-export async function action({ request }: ActionFunctionArgs) {
-  if (!verifyCronSecret(request)) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
-
-  const body = await request.json().catch(() => ({})) as { command?: string; jobId?: string };
-
-  if (body.command === "cancel" && body.jobId) return cancelJob(body.jobId);
-  if (body.command === "retry" && body.jobId) return retryJob(body.jobId);
-  if (body.command === "resume" && body.jobId) return resumeJob(body.jobId);
-
-  return processNextBatch();
-}
-
 // ─── Cancel ─────────────────────────────────────────────────────────────────
 
 async function cancelJob(jobId: string) {
@@ -77,7 +92,6 @@ async function cancelJob(jobId: string) {
     return Response.json({ ok: false, error: "Job already finished" }, { status: 400 });
   }
 
-  // Cancel all pending recipients, leave SENT ones as-is
   await prisma.$transaction(async (tx) => {
     await tx.bulkEmailRecipient.updateMany({
       where: { jobId, status: "PENDING" },
@@ -86,6 +100,10 @@ async function cancelJob(jobId: string) {
     await tx.bulkEmailJob.update({
       where: { id: jobId },
       data: { status: "CANCELLED", error: "Cancelled by user", completedAt: new Date() },
+    });
+    await tx.communicationLog.updateMany({
+      where: { jobId, activityType: "email", deliveryStatus: "pending" },
+      data: { deliveryStatus: "failed" },
     });
   });
 
@@ -160,15 +178,30 @@ async function resumeJob(jobId: string) {
 
 // ─── Process next batch ──────────────────────────────────────────────────────
 
-async function processNextBatch() {
+async function processNextBatch(shopFilter?: string) {
   try {
-    const provider = getEmailProvider();
-    const fromEmail = getFromEmail();
+    const providerSetup = tryGetEmailProvider();
+    if ("error" in providerSetup) {
+      // Don't 500 the OMS poller — surface config error clearly
+      return Response.json(
+        {
+          ok: false,
+          error: providerSetup.error,
+          hint: "Set EMAIL_PROVIDER + API key (e.g. RESEND_API_KEY) then retry. Queue jobs stay PENDING.",
+        },
+        { status: 503 },
+      );
+    }
+    const { provider, fromEmail } = providerSetup;
 
     // ── Step 1: Auto-fail stuck jobs ──
     const stuckThreshold = new Date(Date.now() - STUCK_TIMEOUT_MS);
     const stuckJobs = await prisma.bulkEmailJob.findMany({
-      where: { status: "PROCESSING", startedAt: { lt: stuckThreshold } },
+      where: {
+        status: "PROCESSING",
+        startedAt: { lt: stuckThreshold },
+        ...(shopFilter ? { shop: shopFilter } : {}),
+      },
     });
 
     for (const stuck of stuckJobs) {
@@ -184,11 +217,49 @@ async function processNextBatch() {
           where: { jobId: stuck.id, status: "PENDING" },
           data: { status: "FAILED", error: "Job stuck with no progress" },
         });
+        // Mark pending CommunicationLog rows failed too
+        await prisma.communicationLog.updateMany({
+          where: { jobId: stuck.id, activityType: "email", deliveryStatus: "pending" },
+          data: { deliveryStatus: "failed" },
+        });
       }
     }
 
     // ── Step 2: Find next job (oldest PENDING, or resume PROCESSING) ──
-    const claimRows = await prisma.$queryRawUnsafe<ClaimedRecipient[]>(`
+    const claimRows = shopFilter
+      ? await prisma.$queryRawUnsafe<ClaimedRecipient[]>(`
+      WITH next_job AS (
+        SELECT "id"
+        FROM "BulkEmailJob"
+        WHERE "status" IN ('PENDING', 'PROCESSING') AND "shop" = $3
+        ORDER BY "createdAt" ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      ),
+      mark_job AS (
+        UPDATE "BulkEmailJob"
+        SET "status" = 'PROCESSING',
+            "startedAt" = COALESCE("startedAt", NOW()),
+            "provider" = $1,
+            "updatedAt" = NOW()
+        WHERE "id" IN (SELECT "id" FROM next_job)
+        RETURNING "id"
+      ),
+      claim_recipients AS (
+        SELECT "id"
+        FROM "BulkEmailRecipient"
+        WHERE "jobId" IN (SELECT "id" FROM next_job)
+          AND "status" = 'PENDING'
+        ORDER BY "createdAt" ASC
+        LIMIT $2
+        FOR UPDATE SKIP LOCKED
+      )
+      UPDATE "BulkEmailRecipient"
+      SET "status" = 'PROCESSING'
+      WHERE "id" IN (SELECT "id" FROM claim_recipients)
+      RETURNING "id", "jobId", "email", "name", "orderName", "orderId", "variantId", "orderData"
+    `, provider.name, BATCH_SIZE, shopFilter)
+      : await prisma.$queryRawUnsafe<ClaimedRecipient[]>(`
       WITH next_job AS (
         SELECT "id"
         FROM "BulkEmailJob"
@@ -233,7 +304,7 @@ async function processNextBatch() {
 
     const appUrl = process.env.APP_URL || "https://containerdoor-nz-freight-calculator.vercel.app";
 
-    // ── Step 3: Send batch via provider ──
+    // ── Step 3: Send batch via provider (only from our queue tables) ──
     let sent = 0;
     let failed = 0;
 
@@ -257,21 +328,20 @@ async function processNextBatch() {
           data: { status: "SENT", sentAt: new Date(), error: null },
         });
 
-        // Create CommunicationLog entry
-        await createCommunicationLog({
+        await finalizeQueuedEmailLog({
           shop: job.shop,
-          orderId: r.orderId,
           jobId: job.id,
-          channel: "email",
-          subject: personalizedSubject,
-          body: personalizedBody,
+          orderId: r.orderId,
+          variantId: r.variantId,
           recipientEmail: r.email,
           recipientName: r.name,
+          subject: personalizedSubject,
+          body: personalizedBody,
           sentBy: job.sentBy ?? "system",
           deliveryStatus: "sent",
           providerMessageId: result.id,
-          sentAt: new Date(),
-        }).catch((e: any) => console.error("[BulkNotifyWorker] CommunicationLog create failed", e));
+          recipientId: r.id,
+        }).catch((e: any) => console.error("[BulkNotifyWorker] CommunicationLog finalize failed", e));
 
         sent++;
       } catch (e: any) {
@@ -280,6 +350,20 @@ async function processNextBatch() {
           where: { id: r.id },
           data: { status: "FAILED", error: e.message || "Unknown error" },
         });
+        await finalizeQueuedEmailLog({
+          shop: job.shop,
+          jobId: job.id,
+          orderId: r.orderId,
+          variantId: r.variantId,
+          recipientEmail: r.email,
+          recipientName: r.name,
+          subject: job.subject,
+          body: job.body,
+          sentBy: job.sentBy ?? "system",
+          deliveryStatus: "failed",
+          error: e.message || "Unknown error",
+          recipientId: r.id,
+        }).catch((err: any) => console.error("[BulkNotifyWorker] CommunicationLog fail-log failed", err));
       }
     }
 
@@ -345,9 +429,14 @@ async function finalizeDrainedJobs() {
   }
 }
 
-// ─── GET — check job status / list jobs ──────────────────────────────────────
+// ─── GET — Vercel Cron worker OR admin job status ────────────────────────────
 
 export async function loader({ request }: LoaderFunctionArgs) {
+  // Vercel Cron sends GET with Authorization: Bearer <CRON_SECRET>
+  if (verifyCronSecret(request)) {
+    return processNextBatch();
+  }
+
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
   const jobId = url.searchParams.get("jobId");

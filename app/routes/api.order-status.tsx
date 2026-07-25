@@ -5,7 +5,14 @@ import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
-import { getCommunicationLogForOrder } from "../lib/communication-log.server";
+import {
+  getActivityLogForLineItem,
+  getCommunicationLogForOrder,
+  logActivity,
+  updateActivitySyncResults,
+} from "../lib/communication-log.server";
+import type { SyncResultMap, SyncTarget } from "../lib/communication-log.server";
+import { enqueueLineItemCustomerNotify } from "../lib/email-queue.server";
 
 // Debug logging helper
 const debug = (namespace: string, message: string, data?: any) => {
@@ -196,10 +203,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lineItems = lineItems.filter((r) => r.productTitle !== "");
     }
 
-    // ── Fetch communication logs for this order ──
+    // ── Fetch activity log (line-item scoped when variantId present) ──
     let communications: Awaited<ReturnType<typeof getCommunicationLogForOrder>> = [];
     try {
-      communications = await getCommunicationLogForOrder(shop || "", orderId);
+      const variantIdParam = url.searchParams.get("variantId") || "";
+      if (variantIdParam) {
+        communications = await getActivityLogForLineItem(shop || "", orderId, variantIdParam);
+      } else {
+        communications = await getCommunicationLogForOrder(shop || "", orderId);
+      }
     } catch (e) {
       console.error("[api.order-status] CommunicationLog fetch failed", e);
     }
@@ -254,16 +266,33 @@ export async function action({ request }: ActionFunctionArgs) {
       variantId?: string;
       data?: Record<string, string>;
       newNotes?: string[];
-      newCin7Notes?: string[];   // NEW
+      newCin7Notes?: string[];
+      /** Explicit sync targets for staff notes — never auto-push routine updates */
+      syncNotes?: { monday?: boolean; cin7?: boolean; shopify?: boolean };
+      performedBy?: string;
+      noteRole?: string;
+      /** Queue customer email (never send inline — cron sends) */
+      notifyCustomer?: boolean;
+      notifyKind?: "edd" | "tracking" | "custom";
     };
 
-    const { shop, orderId, variantId, data, newNotes, newCin7Notes } = body;
+    const { shop, orderId, variantId, data, newNotes, newCin7Notes, syncNotes, performedBy } = body;
     const shopValue = typeof shop === "string" ? shop : "";
-    const newNotesForShopify = Array.isArray(newNotes)
+    const actor = (performedBy || "SY").trim() || "SY";
+    const pushNoteMonday = Boolean(syncNotes?.monday);
+    const pushNoteCin7 = Boolean(syncNotes?.cin7) || (Array.isArray(newCin7Notes) && newCin7Notes.length > 0);
+    const pushNoteShopify = Boolean(syncNotes?.shopify);
+    const staffNoteTexts = Array.isArray(newNotes)
       ? newNotes.map((n) => String(n).trim()).filter(Boolean)
       : [];
-    const newNotesForCin7 = Array.isArray(newCin7Notes)
-      ? newCin7Notes.map((n) => String(n).trim()).filter(Boolean)
+    const wantCustomerNotify = Boolean((body as any).notifyCustomer);
+    const notifyKindRaw = String((body as any).notifyKind || "").toLowerCase();
+    // Only opt-in notes go to Shopify timeline (phase 1 write; phase 2 = show central log on order page)
+    const newNotesForShopify = pushNoteShopify ? staffNoteTexts : [];
+    const newNotesForCin7 = pushNoteCin7
+      ? (Array.isArray(newCin7Notes) && newCin7Notes.length > 0
+          ? newCin7Notes.map((n) => String(n).trim()).filter(Boolean)
+          : staffNoteTexts)
       : [];
 
     if (!orderId || !variantId || !data) {
@@ -279,6 +308,7 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     let updated;
+
     const existing = shopValue
       ? await prisma.orderLineItemOperationalData.findUnique({
           where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
@@ -298,7 +328,7 @@ export async function action({ request }: ActionFunctionArgs) {
       payload.originalEddDate = updateData.eddDate;
     }
 
-    // ── NEW: stamp field-level timestamps only when that field actually changes ──
+    // ── Stamp field-level timestamps only when that field actually changes ──
     if (
       Object.prototype.hasOwnProperty.call(updateData, "customerStatus") &&
       updateData.customerStatus !== (existing?.customerStatus ?? "")
@@ -317,26 +347,201 @@ export async function action({ request }: ActionFunctionArgs) {
     ) {
       payload.trackingNumberUpdatedAt = new Date();
     }
-    // ── end new block ──
 
-    if (shopValue) {
-      updated = await prisma.orderLineItemOperationalData.upsert({
-        where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
-        update: payload,
-        create: { shop: shopValue, orderId, variantId, ...payload },
-      });
-    } else if (existing) {
-      updated = await prisma.orderLineItemOperationalData.update({
-        where: { id: existing.id },
-        data: payload,
-      });
-    } else {
-      updated = await prisma.orderLineItemOperationalData.create({
-        data: { shop: shopValue, orderId, variantId, ...payload },
+    const resolvedShopEarly = shopValue || existing?.shop || "";
+    const isStaffNote = Boolean(syncNotes) || Boolean((body as any).isStaffNote);
+    const plannedSyncTargets: SyncTarget[] = [];
+    if (pushNoteMonday) plannedSyncTargets.push("monday");
+    if (pushNoteCin7) plannedSyncTargets.push("cin7");
+    if (pushNoteShopify) plannedSyncTargets.push("shopify");
+
+    // Field + staff-note activity rows prepared up front so they commit with ops data
+    const fieldSpecs: Array<[string, string, string]> = [
+      ["eddDate", "edd_update", "EDD"],
+      ["paymentStatus", "payment_update", "Payment status"],
+      ["supplierContainer", "supplier_update", "Supplier"],
+      ["trackingNumber", "tracking_update", "Tracking"],
+      ["freightRef", "system_event", "Freight ref"],
+      ["customerStatus", "system_event", "Customer status"],
+      ["carrier", "system_event", "Carrier"],
+      ["dispatchStatus", "system_event", "Dispatch status"],
+      ["warehouseStatus", "system_event", "Warehouse status"],
+      ["deliveryStatus", "system_event", "Delivery status"],
+    ];
+    const activityRows: Array<{
+      activityType: string;
+      channel: string;
+      subject: string;
+      body: string;
+      deliveryStatus: string;
+      syncTargets?: SyncTarget[];
+      metadata?: Record<string, unknown>;
+      isStaffNote?: boolean;
+    }> = [];
+
+    for (const [key, type, label] of fieldSpecs) {
+      if (!Object.prototype.hasOwnProperty.call(updateData, key)) continue;
+      const oldVal = String((existing as any)?.[key] ?? "");
+      const newVal = String(updateData[key] ?? "");
+      if (oldVal === newVal) continue;
+      activityRows.push({
+        activityType: type,
+        channel: "system",
+        subject: label,
+        body: `${label} changed from "${oldVal || "none"}" to "${newVal || "none"}"`,
+        deliveryStatus: "internal",
+        metadata: { field: key, oldValue: oldVal, newValue: newVal, source: "oms" },
       });
     }
+    const noteRole = String((body as any).noteRole || "internal").toLowerCase();
+    const isCustomerEmail = isStaffNote && noteRole === "customer";
 
-    // ── Push changed fields to ALL systems (Shopify + Monday + Cin7) ──
+    // Internal notes → CommunicationLog. Customer email → BulkEmailJob queue (below).
+    if (isStaffNote && staffNoteTexts.length > 0 && !isCustomerEmail) {
+      for (const text of staffNoteTexts) {
+        activityRows.push({
+          activityType: "internal_note",
+          channel: "oms",
+          subject: "Internal note",
+          body: text,
+          deliveryStatus: plannedSyncTargets.length > 0 ? "pending" : "internal",
+          syncTargets: plannedSyncTargets.length > 0 ? plannedSyncTargets : undefined,
+          metadata: {
+            source: "oms",
+            pushMonday: pushNoteMonday,
+            pushCin7: pushNoteCin7,
+            pushShopify: pushNoteShopify,
+          },
+          isStaffNote: true,
+        });
+      }
+    }
+
+    // Ops save FIRST, then CommunicationLog (so a log failure never rolls back the note).
+    const now = new Date();
+    const staffNoteLogIds: string[] = [];
+    let activityLogged = 0;
+    let notifyJobId: string | undefined;
+    let notifyRecipients: number | undefined;
+
+    try {
+      if (shopValue) {
+        updated = await prisma.orderLineItemOperationalData.upsert({
+          where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
+          update: payload,
+          create: { shop: shopValue, orderId, variantId, ...payload },
+        });
+      } else if (existing) {
+        updated = await prisma.orderLineItemOperationalData.update({
+          where: { id: existing.id },
+          data: payload,
+        });
+      } else {
+        updated = await prisma.orderLineItemOperationalData.create({
+          data: { shop: shopValue, orderId, variantId, ...payload },
+        });
+      }
+    } catch (opsErr) {
+      console.error("[api.order-status] Ops save failed", opsErr);
+      return Response.json(
+        { ok: false, error: "Failed to save line-item data", detail: String(opsErr) },
+        { status: 500, headers: CORS_HEADERS },
+      );
+    }
+
+    const shopForLog = shopValue || updated.shop || resolvedShopEarly;
+    try {
+      for (const row of activityRows) {
+        const isCustomer = Boolean(row.isStaffNote) && noteRole === "customer";
+        const created = await prisma.communicationLog.create({
+          data: {
+            shop: shopForLog,
+            orderId,
+            variantId,
+            opsRecordId: updated.id,
+            activityType: isCustomer ? "customer_note" : row.activityType,
+            channel: row.channel,
+            subject: isCustomer ? "Customer note" : row.subject,
+            body: row.body,
+            sentBy: actor,
+            deliveryStatus: row.deliveryStatus,
+            syncTargets: (row.syncTargets as any) ?? undefined,
+            metadata: (row.metadata as any) ?? undefined,
+            sentAt: now,
+          },
+        });
+        activityLogged += 1;
+        if (row.isStaffNote) staffNoteLogIds.push(created.id);
+      }
+    } catch (logErr) {
+      console.error("[api.order-status] CRITICAL: CommunicationLog insert failed (ops already saved)", logErr);
+      return Response.json(
+        {
+          ok: false,
+          error: "Saved data but failed to write Activity Log — retry note",
+          detail: String(logErr),
+          opsSaved: true,
+          activityLogged: 0,
+          record: updated,
+        },
+        { status: 500, headers: CORS_HEADERS },
+      );
+    }
+
+    // ── Customer email → OUR queue tables only (cron sends — never inline) ──
+    if (
+      shopValue &&
+      ((isCustomerEmail && staffNoteTexts.length > 0) || wantCustomerNotify)
+    ) {
+      const kind =
+        isCustomerEmail || notifyKindRaw === "custom"
+          ? "custom"
+          : notifyKindRaw === "tracking"
+            ? "tracking"
+            : notifyKindRaw === "edd"
+              ? "edd"
+              : wantCustomerNotify && Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")
+                ? "tracking"
+                : wantCustomerNotify && Object.prototype.hasOwnProperty.call(updateData, "eddDate")
+                  ? "edd"
+                  : "custom";
+
+      const queued = await enqueueLineItemCustomerNotify({
+        shop: shopValue,
+        orderId,
+        variantId,
+        sentBy: actor,
+        kind,
+        body: kind === "custom" ? staffNoteTexts.join("\n\n") : undefined,
+        eddDate: updateData.eddDate,
+        trackingNumber: updateData.trackingNumber,
+        carrier: updateData.carrier,
+      });
+
+      if (!queued) {
+        return Response.json(
+          {
+            ok: false,
+            error: "No customer email on this order — cannot queue notification",
+            opsSaved: true,
+            record: updated,
+          },
+          { status: 400, headers: CORS_HEADERS },
+        );
+      }
+      notifyJobId = queued.jobId;
+      notifyRecipients = queued.recipientCount;
+      activityLogged += queued.recipientCount;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Ops + Activity Log + email QUEUE written above (source of truth = our DB).
+    // Emails are NEVER sent here — only cron/worker sends from BulkEmail* tables.
+    // Shopify / Monday / Cin7 below are optional sync mirrors only.
+    // ═══════════════════════════════════════════════════════════════════════
+    const resolvedShop = shopValue || updated.shop || "";
+
+    // ── Push changed fields to ALL systems (Shopify + Monday + Cin7) — mirrors only ──
     if (shopValue && updated) {
       const syncFields: import("../lib/sync-middleware.server").LineItemSyncFields = {
         shop: shopValue,
@@ -382,14 +587,19 @@ export async function action({ request }: ActionFunctionArgs) {
     let cin7Exists = Boolean(cin7SalesOrderId && cin7SalesOrderId !== "pending");
     debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}, newEdd=${updateData.eddDate}`);
     // ── NEW: push note to Cin7 internal comments if checkbox was ticked ──
+    const cin7SyncResults: SyncResultMap = {};
     if (newNotesForCin7.length > 0 && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
       for (const note of newNotesForCin7) {
         try {
           await appendCin7InternalComment({ salesOrderId: cin7SalesOrderId, comment: note });
+          cin7SyncResults.cin7 = { ok: true };
         } catch (e) {
           console.error("[api.order-status] Failed to push note to Cin7", e);
+          cin7SyncResults.cin7 = { ok: false, error: e instanceof Error ? e.message : String(e) };
         }
       }
+    } else if (pushNoteCin7 && staffNoteTexts.length > 0) {
+      cin7SyncResults.cin7 = { ok: false, error: "Cin7 sales order not linked" };
     }
     if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
       debug("Cin7", `Syncing EDD to Cin7: salesOrderId=${cin7SalesOrderId}, eddDate=${updateData.eddDate}`);
@@ -478,8 +688,9 @@ export async function action({ request }: ActionFunctionArgs) {
     }
     // ── end new block ──
 
-    // ── NEW: push new notes to Monday Updates tab ──
-    // ── NEW: push new notes to Monday Updates tab ──
+    // ── Push new notes to Monday Updates ONLY when staff opted in (:monday tag) ──
+    // Routine field sync above updates Monday columns — it must NOT create Monday note updates.
+    const mondayNoteSync: SyncResultMap = {};
     try {
       const noteBlocks = String(updated.notes ?? "")
         .split(/\r?\n\r?\n/)
@@ -500,6 +711,7 @@ export async function action({ request }: ActionFunctionArgs) {
           const createdId = await createMondayUpdate(updated.mondayItemId, cleaned);
           if (createdId) pushedIds.push(String(createdId));
         }
+        mondayNoteSync.monday = { ok: true, id: pushedIds[0] };
         const existingPulledIds = new Set(
           String(updated.notesPulledUpdateIds ?? "").split(",").filter(Boolean)
         );
@@ -512,27 +724,120 @@ export async function action({ request }: ActionFunctionArgs) {
             notesPulledUpdateIds: [...existingPulledIds].join(","),
           },
         });
+      } else if (pushNoteMonday && staffNoteTexts.length > 0) {
+        mondayNoteSync.monday = {
+          ok: false,
+          error: !updated.mondayItemId || updated.mondayItemId === "pending"
+            ? "Monday item not linked"
+            : "No new Monday-tagged notes to push",
+        };
       }
     } catch (noteErr) {
       console.error("[api.order-status] Failed to push notes to Monday updates", noteErr);
+      mondayNoteSync.monday = {
+        ok: false,
+        error: noteErr instanceof Error ? noteErr.message : String(noteErr),
+      };
     }
-    // ── end new block ──
+    // ── end Monday note block ──
 
     // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
-    // Fallback: if the client didn't send a shop, use whatever ended up on the saved record
-    const resolvedShop = shopValue || updated.shop || "";
+    // (resolvedShop already set above for central log)
 
-    // ── NEW: push the newly-added note into Shopify's native order timeline ──
+    // ── Shopify order timeline: ONLY when syncNotes.shopify opted in (mirror, not source of truth) ──
+    const shopifyNoteSync: SyncResultMap = {};
     if (newNotesForShopify.length > 0 && resolvedShop) {
-      (async () => {
-        for (const note of newNotesForShopify) {
-          try {
-            await pushStaffNoteToShopifyOrder(resolvedShop, orderId, note);
-          } catch (e) {
-            console.error("[api.order-status] Failed to push staff note to Shopify", e);
+      for (const note of newNotesForShopify) {
+        try {
+          await pushStaffNoteToShopifyOrder(resolvedShop, orderId, note);
+          shopifyNoteSync.shopify = { ok: true };
+        } catch (e) {
+          console.error("[api.order-status] Failed to push staff note to Shopify", e);
+          shopifyNoteSync.shopify = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
+      }
+    }
+
+    // ── Update central log sync status + channel mirror rows (DB already has the note) ──
+    try {
+      const syncResults: SyncResultMap = {
+        ...mondayNoteSync,
+        ...cin7SyncResults,
+        ...shopifyNoteSync,
+      };
+      const anyFailed = Object.values(syncResults).some((r) => r && r.ok === false);
+      const anyOk = Object.values(syncResults).some((r) => r && r.ok === true);
+      const finalStatus =
+        plannedSyncTargets.length === 0
+          ? "internal"
+          : anyFailed && anyOk
+            ? "partial"
+            : anyFailed
+              ? "failed"
+              : "synced";
+
+      for (const id of staffNoteLogIds) {
+        await updateActivitySyncResults(id, syncResults, finalStatus);
+      }
+
+      // Channel-specific mirror rows (still in OUR DB — records that we also pushed out)
+      if (isStaffNote && staffNoteTexts.length > 0) {
+        for (const text of staffNoteTexts) {
+          if (pushNoteMonday) {
+            await logActivity({
+              shop: resolvedShop,
+              orderId,
+              variantId,
+              opsRecordId: updated.id,
+              activityType: "monday_note",
+              channel: "monday",
+              subject: "Monday note",
+              body: text,
+              sentBy: actor,
+              deliveryStatus: mondayNoteSync.monday?.ok ? "synced" : "failed",
+              syncTargets: ["monday"],
+              syncResults: mondayNoteSync,
+              metadata: { source: "oms", mirrorOf: "internal_note" },
+            });
+          }
+          if (pushNoteCin7) {
+            await logActivity({
+              shop: resolvedShop,
+              orderId,
+              variantId,
+              opsRecordId: updated.id,
+              activityType: "cin7_note",
+              channel: "cin7",
+              subject: "Cin7 note",
+              body: text,
+              sentBy: actor,
+              deliveryStatus: cin7SyncResults.cin7?.ok ? "synced" : "failed",
+              syncTargets: ["cin7"],
+              syncResults: cin7SyncResults,
+              metadata: { source: "oms", mirrorOf: "internal_note" },
+            });
+          }
+          if (pushNoteShopify) {
+            await logActivity({
+              shop: resolvedShop,
+              orderId,
+              variantId,
+              opsRecordId: updated.id,
+              activityType: "shopify_note",
+              channel: "shopify",
+              subject: "Shopify order note",
+              body: text,
+              sentBy: actor,
+              deliveryStatus: shopifyNoteSync.shopify?.ok ? "synced" : "failed",
+              syncTargets: ["shopify"],
+              syncResults: shopifyNoteSync,
+              metadata: { source: "oms", mirrorOf: "internal_note" },
+            });
           }
         }
-      })();
+      }
+    } catch (logErr) {
+      console.error("[api.order-status] Activity log sync-status update failed", logErr);
     }
 
     fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
@@ -548,7 +853,18 @@ export async function action({ request }: ActionFunctionArgs) {
       }),
     }).catch((e) => console.error("[webhook] failed to send", e));
 
-    return Response.json({ ok: true, record: updated, mondayDebug, cin7Exists }, { headers: CORS_HEADERS });
+    return Response.json(
+      {
+        ok: true,
+        record: updated,
+        mondayDebug,
+        cin7Exists,
+        activityLogged,
+        notifyJobId,
+        notifyRecipients,
+      },
+      { headers: CORS_HEADERS },
+    );
   } catch (err) {
     console.error("[api.order-status] action error", err);
     return Response.json(

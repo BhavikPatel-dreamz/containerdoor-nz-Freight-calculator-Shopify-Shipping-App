@@ -80,8 +80,8 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", padding: "14px 16px", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
             <div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Notify customer with tracking details</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Sends dispatch email to {tm.order.email}</div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Queue customer email</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Adds to email queue (cron sends) — {tm.order.email}</div>
             </div>
             <button type="button" onClick={() => setTrackingForm((p) => ({ ...p, notifyCustomer: !p.notifyCustomer }))}
               style={{ flexShrink: 0, width: "44px", height: "24px", borderRadius: "12px", background: trackingForm.notifyCustomer ? "#2563eb" : "#d1d5db", border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
@@ -163,8 +163,8 @@ export function EddModal({ eddModal: em, eddForm, eddError, isSavingEdd, setEddF
           </div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderRadius: "8px", background: "#fffbeb", border: "1px solid #fde68a" }}>
             <div>
-              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Notify customer of EDD change</div>
-              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Toggle on to send EDD update to {em.order.email}</div>
+              <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Queue customer email</div>
+              <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "3px" }}>Adds to email queue (cron sends) — {em.order.email}</div>
             </div>
             <button type="button" onClick={() => setEddForm((p) => ({ ...p, notifyCustomer: !p.notifyCustomer }))}
               style={{ flexShrink: 0, width: "44px", height: "24px", borderRadius: "12px", background: eddForm.notifyCustomer ? "#2563eb" : "#d1d5db", border: "none", cursor: "pointer", position: "relative", transition: "background 0.2s" }}>
@@ -192,18 +192,23 @@ type NoteModalProps = {
   noteText: string;
   sendToMonday: boolean;
   sendToCin7: boolean;
+  sendToShopify: boolean;
   isSavingNote: boolean;
   noteAuthor: string;
   setNoteTab: (v: string) => void;
   setNoteText: (v: string) => void;
   setSendToMonday: (v: boolean) => void;
   setSendToCin7: (v: boolean) => void;
+  setSendToShopify: (v: boolean) => void;
   setNoteModal: (v: boolean) => void;
   setNoteModalTarget: (v: null) => void;
-  onSave: (text: string, tab: string, pushMonday: boolean, pushCin7: boolean) => void;
+  onSave: (text: string, tab: string, pushMonday: boolean, pushCin7: boolean, pushShopify: boolean) => void;
 };
 
-export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7, isSavingNote, noteAuthor, setNoteTab, setNoteText, setSendToMonday, setSendToCin7, setNoteModal, setNoteModalTarget, onSave }: NoteModalProps) {
+export function NoteModal({
+  target, noteTab, noteText, sendToMonday, sendToCin7, sendToShopify, isSavingNote, noteAuthor,
+  setNoteTab, setNoteText, setSendToMonday, setSendToCin7, setSendToShopify, setNoteModal, setNoteModalTarget, onSave,
+}: NoteModalProps) {
   const close = () => { setNoteModal(false); setNoteModalTarget(null); };
   return (
     <div className="fo-overlay" onClick={close}>
@@ -237,23 +242,27 @@ export function NoteModal({ target, noteTab, noteText, sendToMonday, sendToCin7,
             style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
             autoFocus />
         </div>
-        <div style={{ padding: "0 12px 12px", background: "#fff" }}>
+        <div style={{ padding: "0 12px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: "8px" }}>
           <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
             <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
-            Send this note to Monday.com (visible to Warehouse)
+            Send to Monday.com
           </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer", marginTop: "8px" }}>
-            <input type="checkbox" checked={sendToCin7} onChange={(e) => setSendToCin7(e.target.checked)} />
-            Send this note to Cin7 (Internal Comments)
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#9ca3af", cursor: "not-allowed" }}>
+            <input type="checkbox" checked={sendToCin7} disabled onChange={(e) => setSendToCin7(e.target.checked)} />
+            Send to Cin7 <span style={{ fontSize: "10px", fontWeight: 700, background: "#f3f4f6", padding: "1px 6px", borderRadius: "999px" }}>Coming Soon</span>
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+            <input type="checkbox" checked={sendToShopify} onChange={(e) => setSendToShopify(e.target.checked)} />
+            Add to Shopify order timeline
           </label>
         </div>
         <div style={{ display: "flex", gap: "8px", padding: "12px", borderTop: "1px solid #e5e7eb", justifyContent: "flex-end" }}>
           <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280", cursor: "pointer" }}
             onClick={close}>Cancel</button>
           <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: isSavingNote ? 0.8 : 1 }}
-            onClick={() => { if (!noteText.trim() || isSavingNote) return; onSave(noteText.trim(), noteTab, sendToMonday, sendToCin7); }}
+            onClick={() => { if (!noteText.trim() || isSavingNote) return; onSave(noteText.trim(), noteTab, sendToMonday, sendToCin7, sendToShopify); }}
             disabled={isSavingNote}>
-            {isSavingNote ? "Saving…" : "Save note"}
+            {isSavingNote ? "Saving…" : noteTab === "customer" ? "Queue email" : "Save note"}
           </button>
         </div>
       </div>

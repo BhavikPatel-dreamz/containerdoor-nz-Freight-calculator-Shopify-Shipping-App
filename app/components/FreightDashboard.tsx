@@ -59,6 +59,7 @@ export default function FreightDashboard({
   const [noteText, setNoteText] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false);
   const [sendToCin7, setSendToCin7] = useState(false);
+  const [sendToShopify, setSendToShopify] = useState(false);
   const [isSavingNote, setIsSavingNote] = useState(false);
   const [isSavingEdd, setIsSavingEdd] = useState(false);
   const [notesFetching, setNotesFetching] = useState(false);
@@ -206,7 +207,7 @@ export default function FreightDashboard({
     const fetchNotes = async () => {
       setNotesFetching(true);
       try {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(target.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(target.order.shopifyOrderId)}&variantId=${encodeURIComponent(target.item.variantId)}&shop=${encodeURIComponent(shop)}`);
         if (!res.ok) return;
         const json = await res.json();
         const line = (json.lineItems ?? []).find((item: any) => item.variantId === target.item.variantId);
@@ -384,7 +385,16 @@ export default function FreightDashboard({
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, orderId: eddModal.order.shopifyOrderId, variantId: eddModal.item.variantId, data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) }, newNotes: [systemNote.text] }),
+        body: JSON.stringify({
+          shop,
+          orderId: eddModal.order.shopifyOrderId,
+          variantId: eddModal.item.variantId,
+          data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, notes: serializeNotes(nextNotes) },
+          newNotes: [systemNote.text],
+          notifyCustomer: Boolean(eddForm.notifyCustomer),
+          notifyKind: "edd",
+          performedBy: noteAuthor,
+        }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
@@ -393,17 +403,24 @@ export default function FreightDashboard({
       const applyEdd = (o: FreightOrderRow): FreightOrderRow => o.id !== eddModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== eddModal.item.variantId ? li : { ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyEdd));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyEdd) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: false });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+        if (res.ok) {
+          const j = await res.json();
+          const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
+          setNotes(parseNotesString(l?.notes ?? ""));
+          setCommunications(j.communications ?? []);
+        }
       }
     } catch (e) { setEddError(e instanceof Error ? e.message : "Failed to save EDD"); } finally { setIsSavingEdd(false); }
   };
 
   const selectedTargets = (rows || []).flatMap((o) => o.lineItems.filter((li) => selected.has(li.id)).map((li) => ({ order: o, item: li })));
 
-  // Polling lives here (parent) so it survives workspace close
+  // Poll job status only — never send from the browser.
+  // Cron (/api/bulk-notify/process) is the only email sender.
   const startBackgroundPoll = (jobId: string) => {
     const poll = async () => {
       try {
@@ -432,11 +449,30 @@ export default function FreightDashboard({
               setSyncNotification(`📧 Bulk emails: ${j.sentCount} sent${j.failedCount ? `, ${j.failedCount} failed` : ""}`);
             }
             window.setTimeout(() => setSyncNotification(null), 8000);
+            if (detailView) {
+              fetch(
+                `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+              )
+                .then((r) => (r.ok ? r.json() : null))
+                .then((json) => {
+                  if (json?.communications) setCommunications(json.communications);
+                })
+                .catch(() => null);
+            }
           }
         }
       } catch { window.setTimeout(poll, 5000); }
     };
     poll();
+  };
+
+  const watchQueuedEmail = (jobId: string, recipientCount = 1) => {
+    setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: recipientCount });
+    window.localStorage.setItem("bulkNotifyJobId", jobId);
+    startBackgroundPoll(jobId);
+    setSyncNotification(`📧 Email queued — cron will send (${recipientCount})`);
+    window.setTimeout(() => setSyncNotification(null), 6000);
   };
 
   useEffect(() => {
@@ -485,6 +521,33 @@ export default function FreightDashboard({
 
     setSelected(new Set());
 
+    // Refresh Activity & History if the open detail row was part of this bulk run
+    if (detailView && Array.isArray(result.results)) {
+      const touched = result.results.some(
+        (r: any) =>
+          r.success &&
+          r.orderId === detailView.order.shopifyOrderId &&
+          r.variantId === detailView.item.variantId,
+      );
+      if (touched) {
+        try {
+          const logRes = await fetch(
+            `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+          );
+          if (logRes.ok) {
+            const logJson = await logRes.json();
+            const line = (logJson.lineItems ?? []).find(
+              (item: any) => item.variantId === detailView.item.variantId,
+            );
+            setNotes(parseNotesString(line?.notes ?? ""));
+            setCommunications(logJson.communications ?? []);
+          }
+        } catch (e) {
+          console.error("Failed to refresh activity log after bulk", e);
+        }
+      }
+    }
+
     return {
       summary: result.summary,
       notifyJobId: result.notifyJobId,
@@ -513,7 +576,21 @@ export default function FreightDashboard({
     try {
       const response = await fetch("/api/order-status", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ shop, orderId: trackingModal.order.shopifyOrderId, variantId: trackingModal.item.variantId, data: { trackingNumber: trackingForm.trackingNumber, carrier: trackingForm.carrier, freightRef: newFreightRef, notes: serializeNotes(nextNotes) }, newNotes: notesToAdd.map((n) => n.text) }),
+        body: JSON.stringify({
+          shop,
+          orderId: trackingModal.order.shopifyOrderId,
+          variantId: trackingModal.item.variantId,
+          data: {
+            trackingNumber: trackingForm.trackingNumber,
+            carrier: trackingForm.carrier,
+            freightRef: newFreightRef,
+            notes: serializeNotes(nextNotes),
+          },
+          newNotes: notesToAdd.map((n) => n.text),
+          notifyCustomer: Boolean(trackingForm.notifyCustomer),
+          notifyKind: "tracking",
+          performedBy: noteAuthor,
+        }),
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
@@ -522,10 +599,16 @@ export default function FreightDashboard({
       const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyTrack));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyTrack) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setTrackingModal(null); setTrackingForm({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) { const j = await res.json(); const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(l?.notes ?? "")); }
+        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+        if (res.ok) {
+          const j = await res.json();
+          const l = (j.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId);
+          setNotes(parseNotesString(l?.notes ?? ""));
+          setCommunications(j.communications ?? []);
+        }
       }
     } catch (e) { setTrackingError(e instanceof Error ? e.message : "Failed to save tracking"); } finally { setIsSavingTracking(false); }
   };
@@ -710,7 +793,7 @@ export default function FreightDashboard({
         }
       } catch (cin7Err) { console.error("Cin7 sync failed", cin7Err); }
       // Refresh notes
-      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
       if (notesRes.ok) { const notesJson = await notesRes.json(); const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(line?.notes ?? "")); }
     } catch (e) { console.error("Monday sync failed", e); } finally { setIsSyncing(false); }
   };
@@ -897,7 +980,7 @@ export default function FreightDashboard({
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}>
+                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                       Add note
                     </button>
@@ -921,7 +1004,7 @@ export default function FreightDashboard({
 
                 <div className="fo-detail-content">
                   <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} />
-                  <NotesPanel notes={notes} communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }} />
+                  <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
                 </div>
               </div>
             ) : filteredOrders.length === 0 ? (
@@ -939,7 +1022,7 @@ export default function FreightDashboard({
                 toggleSelectAll={toggleSelectAll}
                 toggleSelect={toggleSelect}
                 onOpenDetail={(order, item) => navigate(`/app/order/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}
-                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); }}
+                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
                 onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}
                 onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}
                 onFixCin7={handleFixCin7Mismatch}
@@ -989,24 +1072,59 @@ export default function FreightDashboard({
           targets={selectedTargets}
           onRun={handleBulkActionsRun}
           onNotifyJobQueued={(jobId) => {
-            setBackgroundJobId(jobId);
-            setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: 0 });
-            window.localStorage.setItem("bulkNotifyJobId", jobId);
-            startBackgroundPoll(jobId);
+            watchQueuedEmail(jobId, 1);
           }}
         />
       )}
       {noteModal && activeNoteTarget && (
-        <NoteModal target={activeNoteTarget} noteTab={noteTab} noteText={noteText} sendToMonday={sendToMonday} sendToCin7={sendToCin7} isSavingNote={isSavingNote} noteAuthor={noteAuthor} setNoteTab={setNoteTab} setNoteText={setNoteText} setSendToMonday={setSendToMonday} setSendToCin7={setSendToCin7} setNoteModal={setNoteModal} setNoteModalTarget={setNoteModalTarget}
-          onSave={async (text, tab, pushMonday, pushCin7) => {
+        <NoteModal target={activeNoteTarget} noteTab={noteTab} noteText={noteText} sendToMonday={sendToMonday} sendToCin7={sendToCin7} sendToShopify={sendToShopify} isSavingNote={isSavingNote} noteAuthor={noteAuthor} setNoteTab={setNoteTab} setNoteText={setNoteText} setSendToMonday={setSendToMonday} setSendToCin7={setSendToCin7} setSendToShopify={setSendToShopify} setNoteModal={setNoteModal} setNoteModalTarget={setNoteModalTarget}
+          onSave={async (text, tab, pushMonday, pushCin7, pushShopify) => {
             setIsSavingNote(true);
             const newNoteEntry: NoteItem = { author: noteAuthor, role: tab === "internal" ? "internal" : "customer", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
             const nextNotes = [...notes, newNoteEntry];
             try {
-              const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: activeNoteTarget.order.shopifyOrderId, variantId: activeNoteTarget.item.variantId, data: { notes: serializeNotes(nextNotes) }, newNotes: [text], newCin7Notes: pushCin7 ? [text] : [] }) });
-              if (!res.ok) return;
-              setNotes(nextNotes); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setNoteModal(false); setNoteModalTarget(null);
-            } catch (error) { console.error("Failed to save note", error); } finally { setIsSavingNote(false); }
+              const res = await fetch("/api/order-status", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  shop,
+                  orderId: activeNoteTarget.order.shopifyOrderId,
+                  variantId: activeNoteTarget.item.variantId,
+                  data: { notes: serializeNotes(nextNotes) },
+                  newNotes: [text],
+                  newCin7Notes: pushCin7 ? [text] : [],
+                  syncNotes: { monday: pushMonday, cin7: pushCin7, shopify: pushShopify },
+                  isStaffNote: true,
+                  noteRole: tab,
+                  performedBy: noteAuthor,
+                }),
+              });
+              const payload = await res.json().catch(() => ({} as any));
+              if (!res.ok) {
+                setSyncNotification(`❌ Note save failed: ${payload.error || res.status}`);
+                window.setTimeout(() => setSyncNotification(null), 8000);
+                return;
+              }
+              setNotes(nextNotes);
+              setNoteText("");
+              setSendToMonday(false);
+              setSendToCin7(false);
+              setSendToShopify(false);
+              setNoteModal(false);
+              setNoteModalTarget(null);
+              if (payload.notifyJobId) {
+                watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
+              }
+              const logRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(activeNoteTarget.order.shopifyOrderId)}&variantId=${encodeURIComponent(activeNoteTarget.item.variantId)}&shop=${encodeURIComponent(shop)}`);
+              if (logRes.ok) {
+                const logJson = await logRes.json();
+                setCommunications(logJson.communications ?? []);
+              }
+            } catch (error) {
+              console.error("Failed to save note", error);
+              setSyncNotification(`❌ Note save failed: ${error instanceof Error ? error.message : "network error"}`);
+              window.setTimeout(() => setSyncNotification(null), 8000);
+            } finally { setIsSavingNote(false); }
           }}
         />
       )}

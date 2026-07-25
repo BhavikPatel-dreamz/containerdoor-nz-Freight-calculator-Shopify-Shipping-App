@@ -2,8 +2,9 @@
 import type { LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate } from "../shopify.server";
+import { enqueueCustomerEmails, buildRecipientOrderData } from "../lib/email-queue.server";
 
-// ─── POST — enqueue bulk email job ────────────────────────────────────────────
+// ─── POST — enqueue bulk email job (queue only — cron/worker sends) ───────────
 
 export async function action({ request }: ActionFunctionArgs) {
   if (request.method === "OPTIONS") {
@@ -20,7 +21,7 @@ export async function action({ request }: ActionFunctionArgs) {
       subject?: string;
       body?: string;
       recipients?: Array<{ email: string; name: string; orderName: string; orderId: string; variantId: string }>;
-      filters?: Record<string, any>; // snapshot of active filters at time of send
+      filters?: Record<string, any>;
       performedBy?: string;
     };
 
@@ -28,68 +29,53 @@ export async function action({ request }: ActionFunctionArgs) {
       return Response.json({ ok: false, error: "Missing subject, body, or recipients" }, { status: 400 });
     }
 
-    const recipientsWithSnapshots = await Promise.all(body.recipients.map(async (r) => {
-      const ops = await prisma.orderLineItemOperationalData.findUnique({
-        where: { shop_orderId_variantId: { shop, orderId: r.orderId, variantId: r.variantId } },
-        select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true },
-      });
+    const performedBy = body.performedBy || "admin";
 
-      return {
+    const recipients = await Promise.all(
+      body.recipients.map(async (r) => ({
         ...r,
         orderData: {
           subject: body.subject,
           body: body.body,
           recipient: r.email,
-          orderId: r.orderId,
           orderName: r.orderName,
-          supplier: ops?.supplierContainer ?? "",
-          edd: ops?.eddDate ?? "",
-          carrier: ops?.carrier ?? "",
-          trackingNumber: ops?.trackingNumber ?? "",
-          warehouseStatus: ops?.warehouseStatus ?? "",
-          variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking"],
-          filters: body.filters ?? {},
+          ...(await buildRecipientOrderData(shop, r.orderId, r.variantId, {
+            filters: body.filters ?? {},
+          })),
         },
-      };
-    }));
+      })),
+    );
 
-    const job = await prisma.$transaction(async (tx) => {
-      const j = await tx.bulkEmailJob.create({
-        data: {
-          shop,
-          subject: body.subject!,
-          body: body.body!,
-          filters: body.filters ?? undefined,
-          sentBy: body.performedBy || "admin",
-          totalRecipients: body.recipients!.length,
-        },
-      });
-
-      await tx.bulkEmailRecipient.createMany({
-        data: recipientsWithSnapshots.map((r) => ({
-          jobId: j.id,
-          email: r.email,
-          name: r.name,
-          orderName: r.orderName,
-          orderId: r.orderId,
-          variantId: r.variantId,
-          orderData: r.orderData,
-        })),
-      });
-
-      return j;
+    const job = await enqueueCustomerEmails({
+      shop,
+      subject: body.subject,
+      body: body.body,
+      sentBy: performedBy,
+      recipients,
+      filters: body.filters,
     });
 
+    if (!job) {
+      return Response.json({ ok: false, error: "No valid email recipients" }, { status: 400 });
+    }
+
+    const created = await prisma.bulkEmailJob.findUnique({ where: { id: job.jobId } });
     const [queuePosition, activeCount] = await Promise.all([
       prisma.bulkEmailJob.count({
-        where: { shop, status: "PENDING", createdAt: { lt: job.createdAt } },
+        where: { shop, status: "PENDING", createdAt: { lt: created!.createdAt } },
       }),
       prisma.bulkEmailJob.count({
         where: { shop, status: { in: ["PENDING", "PROCESSING"] } },
       }),
     ]);
 
-    return Response.json({ ok: true, jobId: job.id, total: job.totalRecipients, queuePosition, activeCount });
+    return Response.json({
+      ok: true,
+      jobId: job.jobId,
+      total: job.recipientCount,
+      queuePosition,
+      activeCount,
+    });
   } catch (e: any) {
     console.error("[BulkNotify] Action error:", e);
     return Response.json({ ok: false, error: e.message }, { status: 500 });

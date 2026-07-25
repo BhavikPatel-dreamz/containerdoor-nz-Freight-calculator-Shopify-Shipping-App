@@ -4,6 +4,8 @@ import { pushLineItemToAllSystems } from "./sync-middleware.server";
 import { createMondayUpdate } from "./monday.server";
 import { serializeNotes, formatNoteDateTime } from "../components/freight/helpers";
 import type { NoteItem } from "../components/freight/types";
+import { logActivity } from "./communication-log.server";
+import { enqueueCustomerEmails } from "./email-queue.server";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -186,7 +188,8 @@ async function applyDataActions(
     }
     updateData.notes = serializeNotes(parsedNotes);
 
-    // Upsert
+    // Upsert ops + audit + activity log in one transaction (audit alone used to succeed
+    // while CommunicationLog writes failed silently outside the txn).
     const updated = await prisma.$transaction(async (tx) => {
       let record;
       if (existing) {
@@ -214,6 +217,77 @@ async function applyDataActions(
         },
       });
 
+      const now = new Date();
+      const activityRows: Array<{
+        activityType: string;
+        channel: string;
+        subject: string;
+        body: string;
+        deliveryStatus: string;
+        syncTargets?: string[];
+        metadata?: Record<string, string>;
+      }> = [];
+
+      if (actions.note) {
+        activityRows.push({
+          activityType: "internal_note",
+          channel: "oms",
+          subject: "Internal note",
+          body: actions.note,
+          // Monday sync status filled in after the external call below
+          deliveryStatus: sendNoteToMonday ? "pending" : "internal",
+          syncTargets: sendNoteToMonday ? ["monday"] : undefined,
+        });
+      }
+      if (hasOwn(newValues, "eddDate")) {
+        activityRows.push({
+          activityType: "edd_update",
+          channel: "system",
+          subject: "EDD",
+          body: `EDD changed from "${oldValues.eddDate || "none"}" to "${newValues.eddDate || "none"}"`,
+          deliveryStatus: "internal",
+          metadata: { field: "eddDate", oldValue: oldValues.eddDate ?? "", newValue: newValues.eddDate },
+        });
+      }
+      if (hasOwn(newValues, "paymentStatus")) {
+        activityRows.push({
+          activityType: "payment_update",
+          channel: "system",
+          subject: "Payment status",
+          body: `Payment status changed from "${oldValues.paymentStatus || "none"}" to "${newValues.paymentStatus || "none"}"`,
+          deliveryStatus: "internal",
+        });
+      }
+      if (hasOwn(newValues, "supplierContainer")) {
+        activityRows.push({
+          activityType: "supplier_update",
+          channel: "system",
+          subject: "Supplier",
+          body: `Supplier changed from "${oldValues.supplierContainer || "none"}" to "${newValues.supplierContainer || "none"}"`,
+          deliveryStatus: "internal",
+        });
+      }
+
+      for (const row of activityRows) {
+        await tx.communicationLog.create({
+          data: {
+            shop,
+            orderId,
+            variantId,
+            opsRecordId: record.id,
+            activityType: row.activityType,
+            channel: row.channel,
+            subject: row.subject,
+            body: row.body,
+            sentBy: performedBy,
+            deliveryStatus: row.deliveryStatus,
+            syncTargets: row.syncTargets ?? undefined,
+            metadata: row.metadata ?? undefined,
+            sentAt: now,
+          },
+        });
+      }
+
       return record;
     });
 
@@ -238,19 +312,56 @@ async function applyDataActions(
       );
     }
 
-    // Push user note to Monday as an update (when requested)
+    // Push user note to Monday as an update (when requested), then update activity status
     if (sendNoteToMonday && actions.note && updated.mondayItemId && updated.mondayItemId !== "pending") {
-      createMondayUpdate(updated.mondayItemId, actions.note)
-        .then(async () => {
-          await prisma.orderLineItemOperationalData.update({
-            where: { id: updated.id },
-            data: {
-              notesPushedMondayItemId: updated.mondayItemId,
-              notesPushedCount: { increment: 1 },
-            },
-          });
-        })
-        .catch((e: any) => console.error("[BulkActions] Monday note push failed", e));
+      let mondayOk = false;
+      try {
+        await createMondayUpdate(updated.mondayItemId, actions.note);
+        mondayOk = true;
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: updated.id },
+          data: {
+            notesPushedMondayItemId: updated.mondayItemId,
+            notesPushedCount: { increment: 1 },
+          },
+        });
+      } catch (e: any) {
+        console.error("[BulkActions] Monday note push failed", e);
+      }
+
+      try {
+        await prisma.communicationLog.updateMany({
+          where: {
+            shop,
+            orderId,
+            variantId,
+            opsRecordId: updated.id,
+            activityType: "internal_note",
+            body: actions.note,
+            deliveryStatus: "pending",
+          },
+          data: {
+            deliveryStatus: mondayOk ? "synced" : "failed",
+            syncResults: { monday: { ok: mondayOk } },
+          },
+        });
+        await logActivity({
+          shop,
+          orderId,
+          variantId,
+          opsRecordId: updated.id,
+          activityType: "monday_note",
+          channel: "monday",
+          subject: "Monday note",
+          body: actions.note,
+          sentBy: performedBy,
+          deliveryStatus: mondayOk ? "synced" : "failed",
+          syncTargets: ["monday"],
+          syncResults: { monday: { ok: mondayOk } },
+        });
+      } catch (logErr) {
+        console.error("[BulkActions] Monday activity log update failed", logErr);
+      }
     }
   } else {
     await recordBulkActionAudit(shop, item, actions, performedBy, "SUCCESS", oldValues, newValues);
@@ -302,21 +413,15 @@ async function createNotifyJob(
   performedBy: string,
   filters?: Record<string, any>,
 ): Promise<{ jobId: string; recipientCount: number } | null> {
-  // Build recipient list from items that have valid emails
-  const recipients: Array<{
-    email: string; name: string; orderName: string; orderId: string;
-    variantId: string; orderData: Record<string, any>;
-  }> = [];
+  const recipients = [];
 
   for (const item of items) {
-    // Look up the order snapshot for email/name
     const snap = await prisma.orderSnapshot.findUnique({
       where: { shop_orderId: { shop, orderId: item.orderId } },
       select: { email: true, orderName: true, shippingFirstName: true, shippingLastName: true },
     });
     if (!snap?.email) continue;
 
-    // Look up operational data for orderData snapshot
     const ops = await prisma.orderLineItemOperationalData.findUnique({
       where: { shop_orderId_variantId: { shop, orderId: item.orderId, variantId: item.variantId } },
       select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true },
@@ -345,37 +450,14 @@ async function createNotifyJob(
     });
   }
 
-  if (recipients.length === 0) return null;
-
-  // Create job + recipients in a transaction
-  const job = await prisma.$transaction(async (tx) => {
-    const j = await tx.bulkEmailJob.create({
-      data: {
-        shop,
-        subject: notify.subject,
-        body: notify.body,
-        sentBy: performedBy,
-        filters: filters ?? undefined,
-        totalRecipients: recipients.length,
-      },
-    });
-
-    await tx.bulkEmailRecipient.createMany({
-      data: recipients.map((r) => ({
-        jobId: j.id,
-        email: r.email,
-        name: r.name,
-        orderName: r.orderName,
-        orderId: r.orderId,
-        variantId: r.variantId,
-        orderData: r.orderData,
-      })),
-    });
-
-    return j;
+  return enqueueCustomerEmails({
+    shop,
+    subject: notify.subject,
+    body: notify.body,
+    sentBy: performedBy,
+    recipients,
+    filters,
   });
-
-  return { jobId: job.id, recipientCount: recipients.length };
 }
 
 // ─── Simple note parser (for appending to existing notes) ────────────────────

@@ -105,3 +105,4 @@ Both customer extensions:
 - Commit/PR only when asked. Branch off `main`.
 - en-NZ formatting / NZD currency for customer-facing freight display.
 - **OMS top nav:** background bulk queue status lives in `fo-nav-right` via `NavQueueJobs` (next to avatar) — not in the Bulk Actions toolbar. Avatar/`noteAuthor` must be dynamic from the current user (`currentUserFromSession` for embedded admin; report-auth `UserMenu` for containerdoor dashboard). See `.cursor/rules/oms-nav-user.mdc`.
+- **Central Activity Log:** Activity & History reads **only** Postgres `CommunicationLog`. Customer emails: **enqueue only** into `BulkEmailJob`/`BulkEmailRecipient` + pending log — **cron** `/api/bulk-notify/process` is the only sender (never send on button click). Covers bulk notify, Customer email tab, EDD/tracking “notify customer”. See `.cursor/rules/oms-activity-log.mdc`.
