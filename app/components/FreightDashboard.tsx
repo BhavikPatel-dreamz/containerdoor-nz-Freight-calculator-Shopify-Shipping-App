@@ -989,12 +989,12 @@ export default function FreightDashboard({
             {/* Toolbar */}
             {!detailView && (
               <div className="fo-toolbar">
-                <label className="fo-select-label">
-                  <input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} />
-                  {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
-                </label>
-                {selected.size > 0 && (
-                  <>
+                <div className="fo-toolbar-left">
+                  <label className="fo-select-label">
+                    <input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} />
+                    {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
+                  </label>
+                  {selected.size > 0 && (
                     <button
                       className="fo-tool-btn"
                       style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
@@ -1005,9 +1005,9 @@ export default function FreightDashboard({
                       </svg>
                       Bulk Actions ({selected.size})
                     </button>
-                  </>
-                )}
-                <div className="fo-toolbar-right" style={{ alignItems: "flex-end", gap: 8 }}>
+                  )}
+                </div>
+                <div className="fo-toolbar-right">
                   <button
                     className="fo-tool-btn"
                     onClick={() => setShowFilters(!showFilters)}
