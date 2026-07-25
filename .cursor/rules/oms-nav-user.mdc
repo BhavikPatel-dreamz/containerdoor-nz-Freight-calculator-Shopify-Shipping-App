@@ -9,6 +9,7 @@ alwaysApply: false
 ## Queue jobs status
 - Background bulk notify / email jobs show in the **top nav** (`fo-nav-right`), **left of** the avatar / user menu — never in the bulk-actions toolbar.
 - Component: `app/components/freight/NavQueueJobs.tsx`
+- Click Queue chip → popup explains what Queue is + live send log (recipients).
 - State lives in `FreightDashboard` (`backgroundJobId`, `queueJob`, localStorage key `bulkNotifyJobId`).
 - Do not re-add a "Sending…" chip next to Bulk Actions.
 
