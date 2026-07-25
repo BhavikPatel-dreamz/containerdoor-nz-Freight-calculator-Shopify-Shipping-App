@@ -1902,3 +1902,242 @@
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* ── Dashboard filters ── */
+.fo-filter-panel {
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.fo-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fff;
+}
+
+.fo-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.fo-filter-chip:hover {
+  background: #dbeafe;
+}
+
+.fo-filter-chip-label {
+  font-weight: 600;
+  color: #64748b;
+}
+
+.fo-filter-chip-x {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.fo-filter-chip-clear {
+  border: none;
+  background: transparent;
+  color: #dc2626;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 4px 6px;
+}
+
+.fo-filter-chip-clear:hover {
+  text-decoration: underline;
+}
+
+/* ── Amend order — full-screen, no scroll ── */
+.fo-amend-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: #f3f4f6;
+}
+
+.fo-amend-screen {
+  height: 100vh;
+  height: 100dvh;
+  width: 100%;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  overflow: hidden;
+  background: #f3f4f6;
+}
+
+.fo-amend-hdr {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 24px;
+  background: #fff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.fo-amend-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #111827;
+  line-height: 1.2;
+}
+
+.fo-amend-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.fo-amend-error {
+  margin: 0 24px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.fo-amend-grid {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 0.9fr;
+  gap: 16px;
+  padding: 16px 24px;
+  min-height: 0;
+  overflow: hidden;
+  align-content: stretch;
+}
+
+.fo-amend-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fo-amend-card-title {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fo-amend-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fo-amend-row-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.fo-amend-card .fo-input {
+  font-size: 13px;
+  padding: 8px 10px;
+}
+
+.fo-amend-instructions {
+  flex: 1;
+  min-height: 120px;
+  resize: none;
+}
+
+.fo-amend-cancel-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fo-amend-cancel-btn {
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid #fecaca;
+  background: #fff;
+  color: #b91c1c;
+  cursor: pointer;
+  text-align: left;
+}
+
+.fo-amend-cancel-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.fo-amend-cancel-btn-order {
+  background: #fff7ed;
+  border-color: #fed7aa;
+  color: #9a3412;
+}
+
+.fo-amend-ftr {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  background: #fff;
+  border-top: 1px solid #e5e7eb;
+}
+
+.fo-amend-save {
+  padding: 10px 22px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+.fo-amend-save:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+@media (max-width: 960px) {
+  .fo-amend-screen {
+    overflow-y: auto;
+    grid-template-rows: auto auto auto auto;
+  }
+
+  .fo-amend-grid {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .fo-amend-instructions {
+    min-height: 80px;
+  }
+}

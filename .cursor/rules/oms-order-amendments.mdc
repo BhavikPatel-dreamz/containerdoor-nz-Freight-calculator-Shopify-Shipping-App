@@ -1,0 +1,27 @@
+---
+description: Order amendments — CS edits once; sync + CommunicationLog audit
+globs: app/lib/order-amendments.server.ts,app/routes/api.order-amendments.tsx,app/components/freight/Modals.tsx,app/components/FreightDashboard.tsx
+alwaysApply: false
+---
+
+# Order amendments (launch)
+
+CS amends once in OMS → Shopify (+ Monday name/email) → CommunicationLog audit.
+
+## Done now
+- Contact (name, email, phone)
+- Delivery address
+- Delivery instructions (OMS + `containerdoor_ops.delivery_instructions`)
+- Soft cancel line / entire order (`customerStatus=cancelled` + Shopify metafield)
+
+## Audit
+Every field change → CommunicationLog (`oldValue` / `newValue` / `sentBy` / time).
+Hidden in Activity UI until `SHOW_FIELD_CHANGE_LOGS` is true.
+
+## Not yet (next slice)
+- Product variant swap via Shopify `orderEdit*`
+- Hard Shopify `orderCancel` / Cin7 void
+- Cin7 address push
+
+API: `GET|POST /api/order-amendments`
+UI: Detail → Customer → Amend

@@ -14,6 +14,11 @@ export type ActivityType =
   | "payment_update"
   | "supplier_update"
   | "tracking_update"
+  | "contact_update"
+  | "address_update"
+  | "delivery_instructions_update"
+  | "cancel_update"
+  | "variant_update"
   | "sms"
   | "whatsapp";
 
