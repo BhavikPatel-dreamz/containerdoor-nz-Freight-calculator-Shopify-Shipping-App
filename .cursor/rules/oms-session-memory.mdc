@@ -39,8 +39,11 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - OMS is central place for ops emails; enqueue → cron sends (Resend/SMTP). Not Shopify marketing.
 - NoteModal **Customer email**: subject + body → `BulkEmailJob` + `BulkEmailRecipient` + pending log.
 - EDD/Tracking notify: opt-in checkbox → enqueue only.
-- **Phase 1 (launch):** plain text + queue + bulk field updates + history.
-- **Phase 2 (next):** rich editor, templates, preview/test send, auto rules, combine-by-customer emails.
+- **Vercel Hobby:** no minutely cron — `vercel.json` crons disabled.
+- **AWS / PM2 (future):** `ecosystem.config.cjs`
+  - `oms-web` — `react-router-serve ./build/server/index.js` (PORT 3000)
+  - `oms-email-queue-cron` — `scripts/email-queue-cron.mjs`
+  - After build: `pm2 start ecosystem.config.cjs` (or `--only oms-web`)
 - Auto-email on every EDD/status change: **No** — opt-in only (client direction).
 
 ## Bulk updates
