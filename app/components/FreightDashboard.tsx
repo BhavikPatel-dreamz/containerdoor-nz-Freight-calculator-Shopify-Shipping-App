@@ -57,6 +57,7 @@ export default function FreightDashboard({
   const [noteModal, setNoteModal] = useState(false);
   const [noteTab, setNoteTab] = useState("internal");
   const [noteText, setNoteText] = useState("");
+  const [noteSubject, setNoteSubject] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false);
   const [sendToCin7, setSendToCin7] = useState(false);
   const [sendToShopify, setSendToShopify] = useState(false);
@@ -980,7 +981,7 @@ export default function FreightDashboard({
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}>
+                    <button className="fo-detail-action-btn" onClick={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}>
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                       Add note
                     </button>
@@ -1004,7 +1005,7 @@ export default function FreightDashboard({
 
                 <div className="fo-detail-content">
                   <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} />
-                  <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
+                  <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
                 </div>
               </div>
             ) : filteredOrders.length === 0 ? (
@@ -1022,7 +1023,7 @@ export default function FreightDashboard({
                 toggleSelectAll={toggleSelectAll}
                 toggleSelect={toggleSelect}
                 onOpenDetail={(order, item) => navigate(`/app/order/${order.shopifyOrderId}?variantId=${encodeURIComponent(item.variantId)}`)}
-                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
+                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
                 onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}
                 onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}
                 onFixCin7={handleFixCin7Mismatch}
@@ -1077,10 +1078,28 @@ export default function FreightDashboard({
         />
       )}
       {noteModal && activeNoteTarget && (
-        <NoteModal target={activeNoteTarget} noteTab={noteTab} noteText={noteText} sendToMonday={sendToMonday} sendToCin7={sendToCin7} sendToShopify={sendToShopify} isSavingNote={isSavingNote} noteAuthor={noteAuthor} setNoteTab={setNoteTab} setNoteText={setNoteText} setSendToMonday={setSendToMonday} setSendToCin7={setSendToCin7} setSendToShopify={setSendToShopify} setNoteModal={setNoteModal} setNoteModalTarget={setNoteModalTarget}
-          onSave={async (text, tab, pushMonday, pushCin7, pushShopify) => {
+        <NoteModal
+          target={activeNoteTarget}
+          noteTab={noteTab}
+          noteText={noteText}
+          noteSubject={noteSubject}
+          sendToMonday={sendToMonday}
+          sendToCin7={sendToCin7}
+          sendToShopify={sendToShopify}
+          isSavingNote={isSavingNote}
+          noteAuthor={noteAuthor}
+          setNoteTab={setNoteTab}
+          setNoteText={setNoteText}
+          setNoteSubject={setNoteSubject}
+          setSendToMonday={setSendToMonday}
+          setSendToCin7={setSendToCin7}
+          setSendToShopify={setSendToShopify}
+          setNoteModal={setNoteModal}
+          setNoteModalTarget={setNoteModalTarget}
+          onSave={async ({ text, tab, subject, pushMonday, pushCin7, pushShopify }) => {
             setIsSavingNote(true);
-            const newNoteEntry: NoteItem = { author: noteAuthor, role: tab === "internal" ? "internal" : "customer", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
+            const isCustomer = tab === "customer";
+            const newNoteEntry: NoteItem = { author: noteAuthor, role: isCustomer ? "customer" : "internal", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
             const nextNotes = [...notes, newNoteEntry];
             try {
               const res = await fetch("/api/order-status", {
@@ -1097,16 +1116,24 @@ export default function FreightDashboard({
                   isStaffNote: true,
                   noteRole: tab,
                   performedBy: noteAuthor,
+                  ...(isCustomer
+                    ? {
+                        notifyCustomer: true,
+                        notifyKind: "custom",
+                        notifySubject: subject,
+                      }
+                    : {}),
                 }),
               });
               const payload = await res.json().catch(() => ({} as any));
               if (!res.ok) {
-                setSyncNotification(`❌ Note save failed: ${payload.error || res.status}`);
+                setSyncNotification(`Note save failed: ${payload.error || res.status}`);
                 window.setTimeout(() => setSyncNotification(null), 8000);
                 return;
               }
               setNotes(nextNotes);
               setNoteText("");
+              setNoteSubject("");
               setSendToMonday(false);
               setSendToCin7(false);
               setSendToShopify(false);
@@ -1122,7 +1149,7 @@ export default function FreightDashboard({
               }
             } catch (error) {
               console.error("Failed to save note", error);
-              setSyncNotification(`❌ Note save failed: ${error instanceof Error ? error.message : "network error"}`);
+              setSyncNotification(`Note save failed: ${error instanceof Error ? error.message : "network error"}`);
               window.setTimeout(() => setSyncNotification(null), 8000);
             } finally { setIsSavingNote(false); }
           }}

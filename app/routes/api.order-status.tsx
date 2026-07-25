@@ -274,6 +274,8 @@ export async function action({ request }: ActionFunctionArgs) {
       /** Queue customer email (never send inline — cron sends) */
       notifyCustomer?: boolean;
       notifyKind?: "edd" | "tracking" | "custom";
+      /** Subject/header stored on BulkEmailJob for cron to send */
+      notifySubject?: string;
     };
 
     const { shop, orderId, variantId, data, newNotes, newCin7Notes, syncNotes, performedBy } = body;
@@ -453,22 +455,23 @@ export async function action({ request }: ActionFunctionArgs) {
     try {
       for (const row of activityRows) {
         const isCustomer = Boolean(row.isStaffNote) && noteRole === "customer";
-        const created = await prisma.communicationLog.create({
-          data: {
-            shop: shopForLog,
-            orderId,
-            variantId,
-            opsRecordId: updated.id,
-            activityType: isCustomer ? "customer_note" : row.activityType,
-            channel: row.channel,
-            subject: isCustomer ? "Customer note" : row.subject,
-            body: row.body,
-            sentBy: actor,
-            deliveryStatus: row.deliveryStatus,
-            syncTargets: (row.syncTargets as any) ?? undefined,
-            metadata: (row.metadata as any) ?? undefined,
-            sentAt: now,
-          },
+        // Internal notes stay in CommunicationLog only — never email queue / customer send
+        const created = await logActivity({
+          shop: shopForLog,
+          orderId,
+          variantId,
+          opsRecordId: updated.id,
+          activityType: isCustomer ? "customer_note" : row.activityType,
+          channel: row.channel,
+          subject: isCustomer ? "Customer note" : row.subject,
+          body: row.body,
+          sentBy: actor,
+          deliveryStatus: row.deliveryStatus,
+          recipientEmail: "",
+          recipientName: "",
+          syncTargets: row.syncTargets,
+          metadata: row.metadata,
+          sentAt: now,
         });
         activityLogged += 1;
         if (row.isStaffNote) staffNoteLogIds.push(created.id);
@@ -506,12 +509,14 @@ export async function action({ request }: ActionFunctionArgs) {
                   ? "edd"
                   : "custom";
 
+      const notifySubject = String((body as any).notifySubject || "").trim();
       const queued = await enqueueLineItemCustomerNotify({
         shop: shopValue,
         orderId,
         variantId,
         sentBy: actor,
         kind,
+        subject: notifySubject || undefined,
         body: kind === "custom" ? staffNoteTexts.join("\n\n") : undefined,
         eddDate: updateData.eddDate,
         trackingNumber: updateData.trackingNumber,

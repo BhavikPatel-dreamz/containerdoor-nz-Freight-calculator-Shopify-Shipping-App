@@ -190,6 +190,7 @@ type NoteModalProps = {
   target: { order: FreightOrderRow; item: FreightLineItem };
   noteTab: string;
   noteText: string;
+  noteSubject: string;
   sendToMonday: boolean;
   sendToCin7: boolean;
   sendToShopify: boolean;
@@ -197,19 +198,31 @@ type NoteModalProps = {
   noteAuthor: string;
   setNoteTab: (v: string) => void;
   setNoteText: (v: string) => void;
+  setNoteSubject: (v: string) => void;
   setSendToMonday: (v: boolean) => void;
   setSendToCin7: (v: boolean) => void;
   setSendToShopify: (v: boolean) => void;
   setNoteModal: (v: boolean) => void;
   setNoteModalTarget: (v: null) => void;
-  onSave: (text: string, tab: string, pushMonday: boolean, pushCin7: boolean, pushShopify: boolean) => void;
+  onSave: (payload: {
+    text: string;
+    tab: string;
+    subject: string;
+    pushMonday: boolean;
+    pushCin7: boolean;
+    pushShopify: boolean;
+  }) => void;
 };
 
 export function NoteModal({
-  target, noteTab, noteText, sendToMonday, sendToCin7, sendToShopify, isSavingNote, noteAuthor,
-  setNoteTab, setNoteText, setSendToMonday, setSendToCin7, setSendToShopify, setNoteModal, setNoteModalTarget, onSave,
+  target, noteTab, noteText, noteSubject, sendToMonday, sendToCin7, sendToShopify, isSavingNote, noteAuthor,
+  setNoteTab, setNoteText, setNoteSubject, setSendToMonday, setSendToCin7, setSendToShopify, setNoteModal, setNoteModalTarget, onSave,
 }: NoteModalProps) {
   const close = () => { setNoteModal(false); setNoteModalTarget(null); };
+  const isEmail = noteTab === "customer";
+  const defaultSubject = `Update on your order ${target.order.shopifyOrderName}`;
+  const canSubmit = noteText.trim() && !isSavingNote;
+
   return (
     <div className="fo-overlay" onClick={close}>
       <div className="fo-modal" style={{ width: "min(560px, 95vw)" }} onClick={(e) => e.stopPropagation()}>
@@ -218,7 +231,7 @@ export function NoteModal({
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: "6px" }}>
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
-            Add note — <span style={{ fontWeight: 400, color: "#6b7280" }}>#{target.order.shopifyOrderName}{target.item.letterSuffix}</span>
+            {isEmail ? "Queue customer email" : "Add note"} — <span style={{ fontWeight: 400, color: "#6b7280" }}>#{target.order.shopifyOrderName}{target.item.letterSuffix}</span>
           </div>
           <button className="fo-modal-close" onClick={close}>✕</button>
         </div>
@@ -227,6 +240,11 @@ export function NoteModal({
             {target.item.title ?? `#${target.item.variantId}`}
             {target.item.variantId && <span style={{ fontWeight: 400, color: "#6b7280", marginLeft: "4px" }}>— VAR-{target.item.variantId.slice(-6)}</span>}
           </div>
+          {isEmail ? (
+            <div style={{ fontSize: "11px", color: "#6b7280", marginTop: 4 }}>
+              To: {target.order.email || "—"} · Saved to email queue · Cron sends later
+            </div>
+          ) : null}
         </div>
         <div style={{ display: "flex", gap: "8px", padding: "12px", borderBottom: "1px solid #e5e7eb" }}>
           {(["internal", "customer"] as const).map((tab) => (
@@ -236,33 +254,66 @@ export function NoteModal({
             </button>
           ))}
         </div>
-        <div style={{ padding: "12px", background: "#fff" }}>
-          <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)}
-            placeholder={noteTab === "internal" ? "Write an internal note…" : "Write a message for the customer…"}
-            style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
-            autoFocus />
+        <div style={{ padding: "12px", background: "#fff", display: "flex", flexDirection: "column", gap: "10px" }}>
+          {isEmail ? (
+            <div>
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>Subject (email header)</label>
+              <input
+                value={noteSubject}
+                onChange={(e) => setNoteSubject(e.target.value)}
+                placeholder={defaultSubject}
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827" }}
+              />
+            </div>
+          ) : null}
+          <div>
+            {isEmail ? (
+              <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>Body</label>
+            ) : null}
+            <textarea value={noteText} onChange={(e) => setNoteText(e.target.value)}
+              placeholder={isEmail ? "Write the email body… Use {name}, {order}, {edd}, {tracking}" : "Write an internal note…"}
+              style={{ width: "100%", padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "13px", outline: "none", fontFamily: "inherit", color: "#111827", resize: "vertical", minHeight: "100px" }}
+              autoFocus />
+          </div>
         </div>
-        <div style={{ padding: "0 12px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: "8px" }}>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
-            <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
-            Send to Monday.com
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#9ca3af", cursor: "not-allowed" }}>
-            <input type="checkbox" checked={sendToCin7} disabled onChange={(e) => setSendToCin7(e.target.checked)} />
-            Send to Cin7 <span style={{ fontSize: "10px", fontWeight: 700, background: "#f3f4f6", padding: "1px 6px", borderRadius: "999px" }}>Coming Soon</span>
-          </label>
-          <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
-            <input type="checkbox" checked={sendToShopify} onChange={(e) => setSendToShopify(e.target.checked)} />
-            Add to Shopify order timeline
-          </label>
-        </div>
+        {!isEmail ? (
+          <div style={{ padding: "0 12px 12px", background: "#fff", display: "flex", flexDirection: "column", gap: "8px" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+              <input type="checkbox" checked={sendToMonday} onChange={(e) => setSendToMonday(e.target.checked)} />
+              Send to Monday.com
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#9ca3af", cursor: "not-allowed" }}>
+              <input type="checkbox" checked={sendToCin7} disabled onChange={(e) => setSendToCin7(e.target.checked)} />
+              Send to Cin7 <span style={{ fontSize: "10px", fontWeight: 700, background: "#f3f4f6", padding: "1px 6px", borderRadius: "999px" }}>Coming Soon</span>
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", color: "#374151", cursor: "pointer" }}>
+              <input type="checkbox" checked={sendToShopify} onChange={(e) => setSendToShopify(e.target.checked)} />
+              Add to Shopify order timeline
+            </label>
+          </div>
+        ) : (
+          <div style={{ padding: "0 12px 12px", fontSize: "11px", color: "#6b7280", background: "#fff" }}>
+            Saves one BulkEmailJob + BulkEmailRecipient row and a pending Activity Log entry.
+            Cron reads subject + body from that job and sends — nothing is emailed on this click.
+          </div>
+        )}
         <div style={{ display: "flex", gap: "8px", padding: "12px", borderTop: "1px solid #e5e7eb", justifyContent: "flex-end" }}>
           <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "1px solid #e5e7eb", background: "#fff", color: "#6b7280", cursor: "pointer" }}
             onClick={close}>Cancel</button>
-          <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: isSavingNote ? 0.8 : 1 }}
-            onClick={() => { if (!noteText.trim() || isSavingNote) return; onSave(noteText.trim(), noteTab, sendToMonday, sendToCin7, sendToShopify); }}
-            disabled={isSavingNote}>
-            {isSavingNote ? "Saving…" : noteTab === "customer" ? "Queue email" : "Save note"}
+          <button style={{ padding: "6px 16px", fontSize: "13px", fontWeight: 500, borderRadius: "6px", border: "none", background: "#2563eb", color: "#fff", cursor: "pointer", opacity: canSubmit ? 1 : 0.8 }}
+            onClick={() => {
+              if (!canSubmit) return;
+              onSave({
+                text: noteText.trim(),
+                tab: noteTab,
+                subject: (noteSubject.trim() || defaultSubject),
+                pushMonday: isEmail ? false : sendToMonday,
+                pushCin7: isEmail ? false : sendToCin7,
+                pushShopify: isEmail ? false : sendToShopify,
+              });
+            }}
+            disabled={!canSubmit}>
+            {isSavingNote ? (isEmail ? "Queuing…" : "Saving…") : isEmail ? "Queue email" : "Save note"}
           </button>
         </div>
       </div>
