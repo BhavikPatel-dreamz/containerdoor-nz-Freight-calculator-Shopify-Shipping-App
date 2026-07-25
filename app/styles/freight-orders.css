@@ -274,8 +274,16 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   padding: 10px 16px;
   border-bottom: 1px solid #f3f4f6;
+}
+
+.fo-toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .fo-select-label {
@@ -284,12 +292,15 @@
   display: flex;
   align-items: center;
   gap: 7px;
+  white-space: nowrap;
 }
 
 .fo-toolbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
 }
 
 .fo-status-select {

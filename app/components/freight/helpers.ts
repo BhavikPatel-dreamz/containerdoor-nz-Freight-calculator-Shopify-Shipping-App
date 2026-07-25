@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import type { NoteItem } from "./types";
+import type { FreightLineItem, FreightOrderRow, NoteItem } from "./types";
 
 export function getCustomerStatusStyle(status: string): { bg: string; text: string; label: string } {
   switch ((status || "").toLowerCase()) {
@@ -94,4 +94,39 @@ export function getRefPrefix(carrier: string): string {
 
 export function dedupeOrders<T extends { shopifyOrderId: string }>(list: T[]): T[] {
   return Array.from(new Map(list.map((o) => [o.shopifyOrderId, o])).values());
+}
+
+/** Resolve order + line for `/app/order/:orderId?variantId=` — sync, no flash. */
+export function resolveDetailTarget(
+  orders: FreightOrderRow[],
+  orderId?: string | null,
+  variantId?: string | null,
+): { order: FreightOrderRow; item: FreightLineItem } | null {
+  if (!orderId) return null;
+  const order = orders.find((o) => o.shopifyOrderId === orderId);
+  if (!order) return null;
+  const item =
+    (variantId ? order.lineItems.find((li) => li.variantId === variantId) : undefined) ??
+    order.lineItems[0];
+  if (!item) return null;
+  return { order, item };
+}
+
+/** Patch one line item inside an order list (immutable). */
+export function patchOrderLineItem(
+  orders: FreightOrderRow[],
+  orderId: string,
+  variantId: string,
+  patch: Partial<FreightLineItem> | ((li: FreightLineItem) => FreightLineItem),
+): FreightOrderRow[] {
+  return orders.map((o) => {
+    if (o.shopifyOrderId !== orderId && o.id !== orderId) return o;
+    return {
+      ...o,
+      lineItems: o.lineItems.map((li) => {
+        if (li.variantId !== variantId) return li;
+        return typeof patch === "function" ? patch(li) : { ...li, ...patch };
+      }),
+    };
+  });
 }
