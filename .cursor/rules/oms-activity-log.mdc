@@ -45,8 +45,11 @@ Customer email tab: subject + body → email **queue** (not internal note sync).
 
 ### UI
 - Queue chip polls **status only** (GET) — must **not** POST process to send
-- Vercel Cron: `* * * * *` → GET `/api/bulk-notify/process` with `CRON_SECRET`
-- Provider: Resend / SMTP (`email-providers.server.ts`) — not Shopify marketing
+- **Vercel Hobby:** minutely crons blocked — `vercel.json` `crons` is **empty/disabled**
+- **Email sender cron (future):** PM2 `ecosystem.config.cjs` → `oms-email-queue-cron`
+  (`scripts/email-queue-cron.mjs` hits `GET /api/bulk-notify/process` with `CRON_SECRET`)
+  Enable when ready: `pm2 start ecosystem.config.cjs --only oms-email-queue-cron`
+- Needs `APP_URL` (or `EMAIL_CRON_APP_URL`) + `CRON_SECRET` + Resend/SMTP
 
 Helper: `app/lib/email-queue.server.ts`
 
