@@ -62,9 +62,11 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Migration: `prisma/migrations/20260725140000_order_amendment_fields/` (`shippingAddress2`, `deliveryInstructions`).
 
 ## Detail page UX (`/app/order/:orderId`)
-- Hide nav **search** on detail (meaningless there).
-- One note entry: Activity panel **Note / email** (not duplicate top-bar Add note).
-- Remove dead **Notify** top button (use Note / email → Customer email).
+- **Separate route** — `app.order_.$orderId.tsx` + `FreightOrderDetail` with `viewMode="detail"`.
+- Never flash list: detail resolves on first paint (`resolveDetailTarget`); list chrome gated by `isDetailPage`.
+- Shared client API: `app/components/freight/order-api.ts`; row builder: `freight-orders.server.ts`.
+- Hide nav **search** on detail.
+- One note entry: Activity panel **Note / email**.
 - Detail actions: Update EDD · Tracking · Sync.
 
 ## Dashboard filters UX

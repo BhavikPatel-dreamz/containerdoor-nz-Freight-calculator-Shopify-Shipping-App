@@ -90,6 +90,8 @@ export type FreightDashboardProps = {
   shop: string;
   navbarRight: React.ReactNode;
   noteAuthor?: string;
+  /** When "detail", never render list chrome (no flash on `/app/order/:id`). */
+  viewMode?: "list" | "detail";
   initialDetailOrderId?: string;
   initialDetailVariantId?: string;
   detailBackHref?: string;

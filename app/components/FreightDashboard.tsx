@@ -9,7 +9,8 @@ import "../styles/freight-orders.css";
 export type { FreightLineItem, FreightOrderRow, NoteItem, DashboardCounts, FreightDashboardProps } from "./freight/types";
 import type { FreightLineItem, FreightOrderRow, NoteItem, FreightDashboardProps } from "./freight/types";
 
-import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix } from "./freight/helpers";
+import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix, resolveDetailTarget } from "./freight/helpers";
+import { fetchOrderStatus, findStatusLine, fetchOrderAmendments, postOrderAmendments } from "./freight/order-api";
 import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
@@ -35,6 +36,7 @@ export default function FreightDashboard({
   shop,
   navbarRight,
   noteAuthor = "SP",
+  viewMode = "list",
   initialDetailOrderId,
   initialDetailVariantId,
   detailBackHref,
@@ -48,7 +50,11 @@ export default function FreightDashboard({
   const [currentPage, setCurrentPage] = useState<number>(page ?? 1);
   useEffect(() => { setCurrentPage(page ?? 1); }, [page]);
 
-  const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
+  // Detail route: resolve on first paint so list never flashes.
+  const isDetailPage = viewMode === "detail" || Boolean(initialDetailOrderId);
+  const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(() =>
+    resolveDetailTarget(allOrders ?? orders, initialDetailOrderId, initialDetailVariantId),
+  );
   const [trackingModal, setTrackingModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [eddModal, setEddModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
   const [noteModalTarget, setNoteModalTarget] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
@@ -98,13 +104,19 @@ export default function FreightDashboard({
 
   useEffect(() => {
     if (!initialDetailOrderId) return;
-    const source = allRows ?? rows;
-    const order = source.find((o) => o.shopifyOrderId === initialDetailOrderId);
-    if (!order) return;
-    const item = order.lineItems.find((li) => li.variantId === initialDetailVariantId) ?? order.lineItems[0];
-    if (!item) return;
-    setDetailView((prev) => (prev ? prev : { order, item }));
-    setNotes([]);
+    const next = resolveDetailTarget(allRows ?? rows, initialDetailOrderId, initialDetailVariantId);
+    if (!next) return;
+    setDetailView((prev) => {
+      if (!prev) return next;
+      // Switch line/order only — keep local patches for same target
+      if (
+        prev.order.shopifyOrderId !== next.order.shopifyOrderId ||
+        prev.item.variantId !== next.item.variantId
+      ) {
+        return next;
+      }
+      return prev;
+    });
   }, [initialDetailOrderId, initialDetailVariantId, rows, allRows]);
 
   const [eddError, setEddError] = useState("");
@@ -221,19 +233,18 @@ export default function FreightDashboard({
   useEffect(() => {
     const target = detailView ?? noteModalTarget ?? eddModal ?? trackingModal;
     if (!target) return;
-    const fetchNotes = async () => {
+    const load = async () => {
       setNotesFetching(true);
       try {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(target.order.shopifyOrderId)}&variantId=${encodeURIComponent(target.item.variantId)}&shop=${encodeURIComponent(shop)}`);
-        if (!res.ok) return;
-        const json = await res.json();
-        const line = (json.lineItems ?? []).find((item: any) => item.variantId === target.item.variantId);
+        const json = await fetchOrderStatus(shop, target.order.shopifyOrderId, target.item.variantId);
+        if (!json) return;
+        const line = findStatusLine(json, target.item.variantId);
         setNotes(parseNotesString(line?.notes ?? ""));
         setCommunications(json.communications ?? []);
       } catch (e) { console.error("Failed to load notes", e); } finally { setNotesFetching(false); }
     };
-    fetchNotes();
-  }, [detailView, noteModalTarget, eddModal, trackingModal]);
+    load();
+  }, [detailView, noteModalTarget, eddModal, trackingModal, shop]);
 
   useEffect(() => {
     if (!allowStatusPoll) return;
@@ -654,11 +665,8 @@ export default function FreightDashboard({
     setAmendError("");
     setIsSavingAmend(false);
     try {
-      const res = await fetch(
-        `/api/order-amendments?shop=${encodeURIComponent(shop)}&orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}`,
-      );
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || "Failed to load order");
+      const json = await fetchOrderAmendments(shop, detailView.order.shopifyOrderId);
+      if (!json?.ok) throw new Error(json?.error || "Failed to load order");
       const d = json.draft;
       setAmendForm({
         firstName: d.firstName || "",
@@ -687,38 +695,33 @@ export default function FreightDashboard({
     setIsSavingAmend(true);
     setAmendError("");
     try {
-      const res = await fetch("/api/order-amendments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shop,
-          orderId: detailView.order.shopifyOrderId,
-          variantId: detailView.item.variantId,
-          performedBy: noteAuthor,
-          contact: {
-            firstName: amendForm.firstName,
-            lastName: amendForm.lastName,
-            email: amendForm.email,
-            phone: amendForm.phone,
-          },
-          address: {
-            firstName: amendForm.firstName,
-            lastName: amendForm.lastName,
-            address1: amendForm.address1,
-            address2: amendForm.address2,
-            city: amendForm.city,
-            province: amendForm.province,
-            zip: amendForm.zip,
-            country: amendForm.country,
-            phone: amendForm.phone,
-          },
-          deliveryInstructions: amendForm.deliveryInstructions,
-          cancelLineItem: Boolean(opts.cancelLineItem),
-          cancelOrder: Boolean(opts.cancelOrder),
-        }),
+      const { ok, json } = await postOrderAmendments({
+        shop,
+        orderId: detailView.order.shopifyOrderId,
+        variantId: detailView.item.variantId,
+        performedBy: noteAuthor,
+        contact: {
+          firstName: amendForm.firstName,
+          lastName: amendForm.lastName,
+          email: amendForm.email,
+          phone: amendForm.phone,
+        },
+        address: {
+          firstName: amendForm.firstName,
+          lastName: amendForm.lastName,
+          address1: amendForm.address1,
+          address2: amendForm.address2,
+          city: amendForm.city,
+          province: amendForm.province,
+          zip: amendForm.zip,
+          country: amendForm.country,
+          phone: amendForm.phone,
+        },
+        deliveryInstructions: amendForm.deliveryInstructions,
+        cancelLineItem: Boolean(opts.cancelLineItem),
+        cancelOrder: Boolean(opts.cancelOrder),
       });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.error || "Amendment failed");
+      if (!ok || !json.ok) throw new Error(json.error || "Amendment failed");
 
       const fullAddress = [amendForm.address1, amendForm.address2, amendForm.city, amendForm.province, amendForm.zip, amendForm.country]
         .filter(Boolean)
@@ -936,7 +939,7 @@ export default function FreightDashboard({
           <div className="fo-nav-left">
             <div className="fo-logo-box">F</div>
             <span className="fo-nav-title">Freight OMS</span>
-            {!detailView ? (
+            {!isDetailPage ? (
               <div className="fo-nav-search-wrap">
                 <span className="fo-nav-search-icon">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -955,7 +958,7 @@ export default function FreightDashboard({
 
         <div className="fo-body">
           {/* Stat cards */}
-          {!detailView && (
+          {!isDetailPage && (
             <div className="fo-stats">
               {[
                 { label: "Total line orders", value: totalLineItems, color: "#111827" },
@@ -973,7 +976,7 @@ export default function FreightDashboard({
 
           <div className="fo-card">
             {/* Tabs */}
-            {!detailView && (
+            {!isDetailPage && (
               <div className="fo-tabs">
                 {TABS.map((tab) => (
                   <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setTab(tab.key)}>
@@ -987,14 +990,14 @@ export default function FreightDashboard({
             )}
 
             {/* Toolbar */}
-            {!detailView && (
+            {!isDetailPage && (
               <div className="fo-toolbar">
-                <label className="fo-select-label">
-                  <input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} />
-                  {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
-                </label>
-                {selected.size > 0 && (
-                  <>
+                <div className="fo-toolbar-left">
+                  <label className="fo-select-label">
+                    <input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} />
+                    {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
+                  </label>
+                  {selected.size > 0 && (
                     <button
                       className="fo-tool-btn"
                       style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
@@ -1005,9 +1008,9 @@ export default function FreightDashboard({
                       </svg>
                       Bulk Actions ({selected.size})
                     </button>
-                  </>
-                )}
-                <div className="fo-toolbar-right" style={{ alignItems: "flex-end", gap: 8 }}>
+                  )}
+                </div>
+                <div className="fo-toolbar-right">
                   <button
                     className="fo-tool-btn"
                     onClick={() => setShowFilters(!showFilters)}
@@ -1022,7 +1025,7 @@ export default function FreightDashboard({
             )}
 
             {/* Active filter chips — always visible when filters applied (even if panel closed) */}
-            {!detailView && activeFilterChips.length > 0 && (
+            {!isDetailPage && activeFilterChips.length > 0 && (
               <div className="fo-filter-chips">
                 {activeFilterChips.map((chip) => (
                   <button
@@ -1047,7 +1050,7 @@ export default function FreightDashboard({
             )}
 
             {/* Filter Panel — stays open after apply so staff can tweak */}
-            {showFilters && !detailView && (
+            {showFilters && !isDetailPage && (
               <div className="fo-filter-panel">
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
                   <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
@@ -1150,12 +1153,13 @@ export default function FreightDashboard({
               </div>
             )}
 
-            {/* Detail View */}
-            {detailView ? (
+            {/* Detail View — detail route never falls through to list */}
+            {isDetailPage ? (
+              detailView ? (
               <div className="fo-detail-wrap">
                 <div className="fo-detail-bar">
                   <div className="fo-detail-bar-left">
-                    <button className="fo-icon-btn" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { setDetailView(null); } }} title="Back">
+                    <button className="fo-icon-btn" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { navigate("/app"); } }} title="Back">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
                     </button>
                     <span style={{ fontWeight: 700, fontSize: "14px", color: "#111827" }}>{detailView.order.shopifyOrderName}</span>
@@ -1189,6 +1193,13 @@ export default function FreightDashboard({
                   <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
                 </div>
               </div>
+              ) : (
+                <div className="fo-empty">
+                  <div className="fo-empty-icon">📦</div>
+                  <div className="fo-empty-title">Order not found</div>
+                  <div className="fo-empty-sub">This line may have been removed or has no freight data.</div>
+                </div>
+              )
             ) : filteredOrders.length === 0 ? (
               <div className="fo-empty">
                 <div className="fo-empty-icon">📦</div>
@@ -1219,7 +1230,7 @@ export default function FreightDashboard({
             )}
 
             {/* Pagination */}
-            {pageCount > 1 && (
+            {!isDetailPage && pageCount > 1 && (
               <div className="fo-pagination">
                 <button className="fo-page-btn" disabled={currentPage <= 1}
                   onClick={() => {
