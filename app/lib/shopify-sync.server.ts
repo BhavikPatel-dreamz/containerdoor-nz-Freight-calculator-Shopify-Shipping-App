@@ -1,10 +1,24 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { unauthenticated } from "../shopify.server";
 
-// ─── Metafield namespace for operational data ────────────────────────────────
+/**
+ * Shopify mirror for customer-facing OMS fields.
+ *
+ * Link key: shop + Shopify orderId + variantId (same row as OrderLineItemOperationalData).
+ * Current EDD → order metafield `containerdoor_ops.edd_{variantId}` (per line item).
+ * Internal OMS notes are NEVER written here.
+ *
+ * Customer Account extension also reads live OMS via `/api/order-status`;
+ * this metafield keeps Shopify (Liquid / other surfaces) in sync.
+ */
+
 const OPS_NAMESPACE = "containerdoor_ops";
 
-// ─── Generic: push a single metafield to an order ────────────────────────────
+export type ShopifyMetafieldPushResult = {
+  ok: boolean;
+  key: string;
+  error?: string;
+};
 
 async function pushMetafield(
   shop: string,
@@ -12,8 +26,11 @@ async function pushMetafield(
   key: string,
   value: string,
   metafieldType = "single_line_text_field",
-) {
-  if (!value && value !== "0") return; // allow "0" but skip empty strings
+): Promise<ShopifyMetafieldPushResult> {
+  // Allow clearing? Skip empty for now (OMS always sends a real EDD when syncing).
+  if (!value && value !== "0") {
+    return { ok: true, key }; // nothing to write
+  }
   try {
     const { admin } = await unauthenticated.admin(shop);
     const response = await admin.graphql(
@@ -40,83 +57,108 @@ async function pushMetafield(
     const json = await response.json();
     const errors = json?.data?.metafieldsSet?.userErrors ?? [];
     if (errors.length) {
+      const msg = errors.map((e: { message: string }) => e.message).join("; ");
       console.error(`[ShopifySync] metafield ${key} errors for order ${orderId}:`, errors);
+      return { ok: false, key, error: msg };
     }
+    return { ok: true, key };
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error(`[ShopifySync] Failed to push ${key} for order ${orderId}:`, error);
+    return { ok: false, key, error: msg };
   }
 }
-
-// ─── Per-variant metafield keys ──────────────────────────────────────────────
 
 function variantKey(prefix: string, variantId: string) {
   return `${prefix}_${variantId}`;
 }
 
-// ─── Individual push helpers (kept for callers that only need one field) ────
+/** Normalize to YYYY-MM-DD for Shopify `date` metafield type. */
+export function toShopifyDateValue(raw: string): string {
+  const v = String(raw ?? "").trim();
+  if (!v) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  return d.toISOString().slice(0, 10);
+}
 
-export async function pushEddToShopify(shop: string, orderId: string, variantId: string, eddDate: string) {
-  await pushMetafield(shop, orderId, variantKey("edd", variantId), eddDate);
+/**
+ * Push Current EDD for one OMS line item onto the linked Shopify order.
+ * Metafield: containerdoor_ops.edd_{variantId}
+ */
+export async function pushEddToShopify(
+  shop: string,
+  orderId: string,
+  variantId: string,
+  eddDate: string,
+): Promise<ShopifyMetafieldPushResult> {
+  const dateVal = toShopifyDateValue(eddDate);
+  const key = variantKey("edd", variantId);
+  if (!dateVal) return { ok: true, key };
+
+  // Prefer date type; if definition/type conflict, fall back to text (existing stores).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) {
+    const asDate = await pushMetafield(shop, orderId, key, dateVal, "date");
+    if (asDate.ok) return asDate;
+    console.warn(`[ShopifySync] EDD date-type failed (${asDate.error}); retrying as text`);
+  }
+  return pushMetafield(shop, orderId, key, dateVal, "single_line_text_field");
 }
 
 export async function pushTrackingToShopify(shop: string, orderId: string, variantId: string, trackingNumber: string) {
-  await pushMetafield(shop, orderId, variantKey("tracking", variantId), trackingNumber);
+  return pushMetafield(shop, orderId, variantKey("tracking", variantId), trackingNumber);
 }
 
 export async function pushDispatchStatusToShopify(shop: string, orderId: string, variantId: string, dispatchStatus: string) {
-  await pushMetafield(shop, orderId, variantKey("dispatch", variantId), dispatchStatus);
+  return pushMetafield(shop, orderId, variantKey("dispatch", variantId), dispatchStatus);
 }
 
 export async function pushWarehouseStatusToShopify(shop: string, orderId: string, variantId: string, warehouseStatus: string) {
-  await pushMetafield(shop, orderId, variantKey("warehouse", variantId), warehouseStatus);
+  return pushMetafield(shop, orderId, variantKey("warehouse", variantId), warehouseStatus);
 }
 
 export async function pushDeliveryStatusToShopify(shop: string, orderId: string, variantId: string, deliveryStatus: string) {
-  await pushMetafield(shop, orderId, variantKey("delivery", variantId), deliveryStatus);
+  return pushMetafield(shop, orderId, variantKey("delivery", variantId), deliveryStatus);
 }
 
 export async function pushPortArrivalToShopify(shop: string, orderId: string, variantId: string, portArrivalDate: string) {
-  await pushMetafield(shop, orderId, variantKey("port_arrival", variantId), portArrivalDate);
+  return pushMetafield(shop, orderId, variantKey("port_arrival", variantId), portArrivalDate);
 }
 
 export async function pushInTransitToShopify(shop: string, orderId: string, variantId: string, inTransitDate: string) {
-  await pushMetafield(shop, orderId, variantKey("in_transit", variantId), inTransitDate);
+  return pushMetafield(shop, orderId, variantKey("in_transit", variantId), inTransitDate);
 }
 
 export async function pushSupplierContainerToShopify(shop: string, orderId: string, variantId: string, supplierContainer: string) {
-  await pushMetafield(shop, orderId, variantKey("supplier_container", variantId), supplierContainer);
+  return pushMetafield(shop, orderId, variantKey("supplier_container", variantId), supplierContainer);
 }
 
 export async function pushWarehouseTagsToShopify(shop: string, orderId: string, variantId: string, warehouseTags: string) {
-  await pushMetafield(shop, orderId, variantKey("warehouse_tags", variantId), warehouseTags);
+  return pushMetafield(shop, orderId, variantKey("warehouse_tags", variantId), warehouseTags);
 }
 
 export async function pushReceivedDateToShopify(shop: string, orderId: string, variantId: string, receivedDate: string) {
-  await pushMetafield(shop, orderId, variantKey("received_date", variantId), receivedDate);
+  return pushMetafield(shop, orderId, variantKey("received_date", variantId), receivedDate);
 }
 
 export async function pushDepositPaidToShopify(shop: string, orderId: string, variantId: string, depositPaid: string) {
-  await pushMetafield(shop, orderId, variantKey("deposit_paid", variantId), depositPaid);
+  return pushMetafield(shop, orderId, variantKey("deposit_paid", variantId), depositPaid);
 }
 
 export async function pushBalanceDueToShopify(shop: string, orderId: string, variantId: string, balanceDue: string) {
-  await pushMetafield(shop, orderId, variantKey("balance_due", variantId), balanceDue);
+  return pushMetafield(shop, orderId, variantKey("balance_due", variantId), balanceDue);
 }
 
-export async function pushNotesToShopify(shop: string, orderId: string, variantId: string, notes: string) {
-  if (!notes) return;
-  await pushMetafield(shop, orderId, variantKey("notes", variantId), notes);
+/** @deprecated Internal OMS notes must not sync to Shopify. No-op retained for call-site safety. */
+export async function pushNotesToShopify(_shop: string, _orderId: string, _variantId: string, _notes: string) {
+  console.warn("[ShopifySync] pushNotesToShopify skipped — internal notes stay OMS-only");
+  return { ok: true, key: "notes" };
 }
-
-// ─── Order-level: customer status ───────────────────────────────────────────
 
 export async function pushCustomerStatusToShopify(shop: string, orderId: string, variantId: string, customerStatus: string) {
-  await pushMetafield(shop, orderId, variantKey("customer", variantId), customerStatus);
+  return pushMetafield(shop, orderId, variantKey("customer", variantId), customerStatus);
 }
-
-// ─── Middleware: sync changed fields back to Shopify ─────────────────────────
-// Call this after any operational data update. It inspects which fields
-// changed and pushes only those back to Shopify — minimal API calls.
 
 export interface OperationalDataChanges {
   shop: string;
@@ -135,6 +177,7 @@ export interface OperationalDataChanges {
   receivedDate?: string;
   depositPaid?: string;
   balanceDue?: string;
+  /** Ignored — notes never sync to Shopify */
   notes?: string;
 }
 
@@ -142,7 +185,6 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
   const { shop, orderId, variantId } = changes;
   if (!shop || !orderId) return;
 
-  // Per-variant fields require variantId
   if (variantId) {
     if (changes.eddDate !== undefined) {
       await pushEddToShopify(shop, orderId, variantId, changes.eddDate);
@@ -183,10 +225,6 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
     if (changes.balanceDue !== undefined) {
       await pushBalanceDueToShopify(shop, orderId, variantId, changes.balanceDue);
     }
-    if (changes.notes !== undefined) {
-      await pushNotesToShopify(shop, orderId, variantId, changes.notes);
-    }
+    // notes intentionally omitted — internal OMS only
   }
-
-  // Order-level fields (none — all fields are now per-variant)
 }

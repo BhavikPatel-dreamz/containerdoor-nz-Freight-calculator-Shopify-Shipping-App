@@ -2,6 +2,7 @@
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { pushLineItemToAllSystems } from "./sync-middleware.server";
+import { pushEddToShopify } from "./shopify-sync.server";
 import { createMondayUpdate } from "./monday.server";
 import { serializeNotes, formatNoteDateTime } from "../components/freight/helpers";
 import type { NoteItem } from "../components/freight/types";
@@ -323,6 +324,15 @@ async function applyDataActions(
     if (hasOwn(updateData, "eddDate")) {
       syncFields.eddDate = updateData.eddDate;
       shouldSync = true;
+      // Await customer-facing EDD → linked Shopify order (same shop+orderId+variantId).
+      try {
+        const eddResult = await pushEddToShopify(shop, orderId, variantId, updateData.eddDate);
+        if (!eddResult.ok) {
+          console.error("[BulkActions] EDD→Shopify sync failed", eddResult.error);
+        }
+      } catch (e: any) {
+        console.error("[BulkActions] EDD→Shopify sync threw", e);
+      }
     }
     if (shouldSync) {
       pushLineItemToAllSystems(syncFields, "admin").catch((e: any) =>

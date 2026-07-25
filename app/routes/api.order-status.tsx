@@ -4,6 +4,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
+import { pushEddToShopify } from "../lib/shopify-sync.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
 import {
   getActivityLogForLineItem,
@@ -578,6 +579,9 @@ export async function action({ request }: ActionFunctionArgs) {
     const resolvedShop = shopValue || updated.shop || "";
 
     // ── Push changed fields to ALL systems (Shopify + Monday + Cin7) — mirrors only ──
+    // Priority: Current EDD must sync to the linked Shopify order line (metafield).
+    // Internal notes never sync via this path.
+    let shopifyEddSync: { ok: boolean; error?: string } | undefined;
     if (shopValue && updated) {
       const syncFields: import("../lib/sync-middleware.server").LineItemSyncFields = {
         shop: shopValue,
@@ -606,8 +610,19 @@ export async function action({ request }: ActionFunctionArgs) {
       pushIfChanged("depositPaid", "depositPaid");
       pushIfChanged("balanceDue", "balanceDue");
       pushIfChanged("paymentStatus", "paymentStatus");
-      // Never auto-push the notes blob on field sync — staff notes go to Monday/Shopify
-      // only via the explicit syncNotes checkboxes below.
+
+      // Await EDD → Shopify so customer-facing date is updated before response.
+      if (syncFields.eddDate !== undefined) {
+        const eddResult = await pushEddToShopify(shopValue, orderId, variantId, syncFields.eddDate);
+        shopifyEddSync = { ok: eddResult.ok, error: eddResult.error };
+        if (!eddResult.ok) {
+          console.error("[api.order-status] EDD→Shopify sync failed", eddResult.error);
+        } else {
+          debug("Shopify", `EDD synced to order ${orderId} variant ${variantId}: ${syncFields.eddDate}`);
+        }
+      }
+
+      // Other systems + non-EDD Shopify fields (fire-and-forget). Notes never included.
       pushLineItemToAllSystems(syncFields, "admin").catch((e) =>
         console.error("[api.order-status] Sync to other systems failed", e),
       );
@@ -898,6 +913,7 @@ export async function action({ request }: ActionFunctionArgs) {
         activityLogged,
         notifyJobId,
         notifyRecipients,
+        shopifyEddSync,
       },
       { headers: CORS_HEADERS },
     );
