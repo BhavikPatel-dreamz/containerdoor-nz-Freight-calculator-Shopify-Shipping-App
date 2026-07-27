@@ -123,6 +123,9 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div style={{ borderTop: "1px solid #f3f4f6", margin: "6px 0" }} />
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.variantId || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Line item ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.id}</span></div>
+        {item.mondayItemId ? (
+          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px" }}>{item.mondayBoardId ? <a href={`https://monday.com/boards/${item.mondayBoardId}/pulses/${item.mondayItemId}`} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{item.mondayItemId} ↗</a> : item.mondayItemId}</span></div>
+        ) : null}
         <div style={{ borderTop: "1px solid #f3f4f6", margin: "6px 0" }} />
         <div className="fo-detail-row">
           <span className="fo-detail-label">Sync status</span>
@@ -130,8 +133,11 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
             {(["Cin7", "Monday"] as const).map((lbl) => {
               const isCin7 = lbl === "Cin7";
               const isOk = isCin7 ? Boolean(item.cin7Exists) : (item.mondayStatus === "match");
-              return (
-                <span key={lbl} style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", fontWeight: 600, color: isOk ? "#16a34a" : "#dc2626" }}>
+              const mondayUrl = !isCin7 && item.mondayItemId && item.mondayBoardId
+                ? `https://monday.com/boards/${item.mondayBoardId}/pulses/${item.mondayItemId}`
+                : null;
+              const badge = (
+                <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", fontWeight: 600, color: isOk ? "#16a34a" : "#dc2626" }}>
                   {isOk ? (
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><polyline points="9 12 11 14 15 10" /></svg>
                   ) : (
@@ -139,6 +145,11 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
                   )}
                   {lbl}
                 </span>
+              );
+              return mondayUrl ? (
+                <a key={lbl} href={mondayUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>{badge}</a>
+              ) : (
+                <span key={lbl}>{badge}</span>
               );
             })}
           </span>

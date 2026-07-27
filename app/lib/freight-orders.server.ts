@@ -179,6 +179,8 @@ export function buildRowFromSnapshot(
       cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
+      mondayItemId: ops?.mondayItemId ?? "",
+      mondayBoardId: process.env.MONDAY_BOARD_ID ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
         : undefined,
@@ -262,6 +264,8 @@ export function buildRow(
       cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
+      mondayItemId: ops?.mondayItemId ?? "",
+      mondayBoardId: process.env.MONDAY_BOARD_ID ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
         : undefined,
