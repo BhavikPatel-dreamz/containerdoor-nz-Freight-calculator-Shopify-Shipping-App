@@ -656,8 +656,8 @@ export default function FreightDashboard({
   };
 
   // ── Tracking save ──
-  // Writes tracking/carrier/freightRef + CommunicationLog (tracking_update) via API.
-  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
+  // Writes tracking/freightRef + CommunicationLog (tracking_update) via API.
+  // Carrier is read-only (set at checkout per line item). Does NOT sync to Shopify.
   const handleTrackingSave = async () => {
     if (!trackingModal || !trackingForm.trackingNumber) { setTrackingError("Please enter a tracking number before saving"); return; }
     setTrackingError(""); setIsSavingTracking(true);
@@ -671,7 +671,6 @@ export default function FreightDashboard({
           variantId: trackingModal.item.variantId,
           data: {
             trackingNumber: trackingForm.trackingNumber,
-            carrier: trackingForm.carrier,
             freightRef: newFreightRef,
           },
           notifyCustomer: Boolean(trackingForm.notifyCustomer),
@@ -686,8 +685,8 @@ export default function FreightDashboard({
       if (payload.activityLogged === 0) {
         console.warn("[Tracking] Saved but no CommunicationLog row — check api.order-status field logging");
       }
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || prev.item.company, freightRef: newFreightRef, cin7Exists } } : prev);
-      const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, company: trackingForm.carrier || li.company, freightRef: newFreightRef, cin7Exists }) };
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, freightRef: newFreightRef, cin7Exists } } : prev);
+      const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, freightRef: newFreightRef, cin7Exists }) };
       setRows((prevRows = []) => prevRows.map(applyTrack));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyTrack) : prev);
       if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
@@ -715,18 +714,16 @@ export default function FreightDashboard({
     setIsSavingDispatch(true); setEditDispatchError("");
     try {
       const data: Record<string, string> = {};
-      if (editDispatchForm.eddDate !== (detailView.item.eddDate ? detailView.item.eddDate.slice(0, 10) : "")) { data.eddDate = editDispatchForm.eddDate; data.originalEddDate = detailView.item.originalEddDate || detailView.item.eddDate || editDispatchForm.eddDate; }
-      if (editDispatchForm.carrier !== (detailView.item.company || "")) data.carrier = editDispatchForm.carrier;
       if (editDispatchForm.trackingNumber !== (detailView.item.trackingNumber || "")) data.trackingNumber = editDispatchForm.trackingNumber;
       if (editDispatchForm.freightRef !== (detailView.item.freightRef || "")) data.freightRef = editDispatchForm.freightRef;
       if (Object.keys(data).length === 0) { setEditDispatchModal(false); return; }
       const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const payload = await res.json(); logSyncTrace("Dispatch edit", payload); const cin7Exists = Boolean(payload.cin7Exists);
-      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, eddDate: data.eddDate || li.eddDate, originalEddDate: data.originalEddDate || li.originalEddDate, company: data.carrier || li.company, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
+      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
       setRows((prev) => prev.map(apply));
       if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, eddDate: data.eddDate || prev.item.eddDate, originalEddDate: data.originalEddDate || prev.item.originalEddDate, company: data.carrier || prev.item.company, trackingNumber: data.trackingNumber || prev.item.trackingNumber, freightRef: data.freightRef || prev.item.freightRef, cin7Exists } } : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: data.trackingNumber || prev.item.trackingNumber, freightRef: data.freightRef || prev.item.freightRef, cin7Exists } } : prev);
       setEditDispatchModal(false); setSyncNotification("Dispatch & Freight updated & synced"); window.setTimeout(() => setSyncNotification(null), 4500);
     } catch (e) { setEditDispatchError(e instanceof Error ? e.message : "Failed to save"); } finally { setIsSavingDispatch(false); }
   };

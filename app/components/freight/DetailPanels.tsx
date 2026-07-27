@@ -17,16 +17,14 @@ const editBtnStyle = { background: "none", border: "1px solid #e5e7eb", borderRa
 const editBtnHover = { borderColor: "#2563eb", color: "#2563eb" };
 const editBtnLeave = { borderColor: "#e5e7eb", color: "#6b7280" };
 
-export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOrder }: DetailPanelsProps) {
+export function DetailPanels({ order, item, onEditDispatch: _onEditDispatch, onEditOps: _onEditOps, onAmendOrder }: DetailPanelsProps) {
   return (
     <div className="fo-detail-left">
-      {/* 1. Dispatch & Freight — editable */}
+      {/* 1. Dispatch & Freight — tracking/ref via header "Update Tracking" for now */}
       <div className="fo-detail-panel">
         <div className="fo-detail-panel-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>Dispatch &amp; Freight</span>
-          <button onClick={onEditDispatch} title="Edit Dispatch & Freight" style={editBtnStyle} onMouseEnter={(e) => { Object.assign(e.currentTarget.style, editBtnHover); }} onMouseLeave={(e) => { Object.assign(e.currentTarget.style, editBtnLeave); }}>
-            <IconPencil /> Edit
-          </button>
+          {/* Edit dispatch/EDD/carrier — future phase; use Update Tracking for tracking # + freight ref */}
         </div>
         <div className="fo-detail-row">
           <span className="fo-detail-label">Current EDD</span>
@@ -48,13 +46,11 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
       </div>
 
-      {/* 2. Operational — editable */}
+      {/* 2. Operational — read-only for now */}
       <div className="fo-detail-panel">
         <div className="fo-detail-panel-hdr" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span>Operational</span>
-          <button onClick={onEditOps} title="Edit Operational" style={editBtnStyle} onMouseEnter={(e) => { Object.assign(e.currentTarget.style, editBtnHover); }} onMouseLeave={(e) => { Object.assign(e.currentTarget.style, editBtnLeave); }}>
-            <IconPencil /> Edit
-          </button>
+          {/* Edit operational fields — future phase */}
         </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Warehouse status</span><span className="fo-detail-value">{item.warehouseStatus || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Warehouse tags</span><span className="fo-detail-value">{item.warehouseTags || "—"}</span></div>
