@@ -11,7 +11,9 @@ declare global {
  * Always construct a fresh client when this module loads in development.
  */
 function makeClient() {
-  return new PrismaClient();
+  return new PrismaClient({
+    datasourceUrl: process.env.DATABASE_URL,
+  });
 }
 
 let prisma: PrismaClient;
