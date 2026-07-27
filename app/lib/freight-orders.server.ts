@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { buildMondayItemUrl } from "./monday.server";
+
 // Shared freight-order row builder. Used by both the list loader
 // (app.freight-orders.tsx) and the detail loader (app.freight-orders_.$orderId.tsx)
 // so the FreightDashboard row shape stays identical in both places.
@@ -180,7 +182,7 @@ export function buildRowFromSnapshot(
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
       mondayItemId: ops?.mondayItemId ?? "",
-      mondayBoardId: process.env.MONDAY_BOARD_ID ?? "",
+      mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
         : undefined,
@@ -265,7 +267,7 @@ export function buildRow(
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
       mondayItemId: ops?.mondayItemId ?? "",
-      mondayBoardId: process.env.MONDAY_BOARD_ID ?? "",
+      mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
         : undefined,

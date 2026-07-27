@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
-import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
@@ -195,14 +195,16 @@ export async function loader({ request }: LoaderFunctionArgs) {
         depositPaid: true,
         balanceDue: true,
         notes: true,
+        mondayItemId: true,
       },
     });
 
-    type RecordWithTitle = (typeof records)[number] & { productTitle: string; imageUrl: string };
+    type RecordWithTitle = (typeof records)[number] & { productTitle: string; imageUrl: string; mondayItemUrl: string };
     let lineItems: RecordWithTitle[] = records.map((r) => ({
       ...r,
       productTitle: r.productTitle ?? "",
       imageUrl: "",
+      mondayItemUrl: buildMondayItemUrl(r.mondayItemId) ?? "",
     }));
 
     // Always fetch live line items from Shopify when shop is available.

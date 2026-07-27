@@ -59,6 +59,7 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Monday `change_multiple_column_values` fails the whole mutation if one status label is invalid; normalize labels before push.
 - Always map incoming status casing to exact Monday labels for `warehouseStatus`, `dispatchStatus`, `deliveryStatus`, `customerStatus`, and `paymentStatus`.
 - OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
+- Monday item URL: `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{mondayItemId}` via `buildMondayItemUrl()` in `monday.server.ts`.
 - If EDD updates do not appear in Monday, check `syncTrace.monday.error` first; a different status-column label error can block EDD in the same mutation.
 
 ## Order amendments (CS)

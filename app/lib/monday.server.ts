@@ -47,6 +47,16 @@ export function isStaleMondayItemError(err: unknown): boolean {
   );
 }
 
+/** `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{itemId}` */
+export function buildMondayItemUrl(itemId?: string | null): string | null {
+  const id = String(itemId ?? "").trim();
+  if (!id || id === "pending") return null;
+  const base = String(process.env.MONDAY_BOARD_LINK || "").replace(/\/$/, "");
+  const boardId = String(process.env.MONDAY_BOARD_ID || "").trim();
+  if (!base || !boardId) return null;
+  return `${base}/boards/${boardId}/pulses/${id}`;
+}
+
 export function isInvalidColumnError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (

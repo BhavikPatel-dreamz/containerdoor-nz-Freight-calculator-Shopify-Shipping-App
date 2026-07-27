@@ -123,8 +123,10 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div style={{ borderTop: "1px solid #f3f4f6", margin: "6px 0" }} />
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.variantId || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Line item ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.id}</span></div>
-        {item.mondayItemId ? (
-          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px" }}>{item.mondayBoardId ? <a href={`https://monday.com/boards/${item.mondayBoardId}/pulses/${item.mondayItemId}`} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{item.mondayItemId} ↗</a> : item.mondayItemId}</span></div>
+        {item.mondayItemUrl ? (
+          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px" }}><a href={item.mondayItemUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{item.mondayItemId} ↗</a></span></div>
+        ) : item.mondayItemId ? (
+          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.mondayItemId}</span></div>
         ) : null}
         <div style={{ borderTop: "1px solid #f3f4f6", margin: "6px 0" }} />
         <div className="fo-detail-row">
@@ -133,9 +135,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
             {(["Cin7", "Monday"] as const).map((lbl) => {
               const isCin7 = lbl === "Cin7";
               const isOk = isCin7 ? Boolean(item.cin7Exists) : (item.mondayStatus === "match");
-              const mondayUrl = !isCin7 && item.mondayItemId && item.mondayBoardId
-                ? `https://monday.com/boards/${item.mondayBoardId}/pulses/${item.mondayItemId}`
-                : null;
+              const mondayUrl = !isCin7 ? item.mondayItemUrl || null : null;
               const badge = (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", fontWeight: 600, color: isOk ? "#16a34a" : "#dc2626" }}>
                   {isOk ? (
