@@ -332,6 +332,29 @@ const paymentStatusLabelMap: Record<string, string> = {
   outstanding: "Pending",
 };
 
+const warehouseStatusLabelMap: Record<string, string> = {
+  "not received": "Not received",
+  received: "Received",
+  processing: "Processing",
+  "ready to dispatch": "Ready to dispatch",
+  dispatched: "Dispatched",
+};
+
+const dispatchStatusLabelMap: Record<string, string> = {
+  "not dispatched": "Not dispatched",
+  booked: "Booked",
+  dispatched: "Dispatched",
+  failed: "Failed",
+};
+
+const deliveryStatusLabelMap: Record<string, string> = {
+  pending: "Pending",
+  "in transit": "In transit",
+  "out for delivery": "Out for delivery",
+  delivered: "Delivered",
+  failed: "Failed",
+};
+
 const carrierLabelMap: Record<string, string> = {
   fliway: "Fliway - Linehaul",
   fliwaylinehaul: "Fliway - Linehaul",
@@ -372,13 +395,24 @@ async function buildColumnValues(row: MondayRow) {
         values[colId] = {
           label: paymentStatusLabelMap[paymentStatusVal.toLowerCase()] ?? paymentStatusVal,
         };
-    } else if (
-      key === "warehouseStatus" ||
-      key === "dispatchStatus" ||
-      key === "deliveryStatus"
-    ) {
+    } else if (key === "warehouseStatus") {
       const statusVal = val as string;
-      if (statusVal) values[colId] = { label: statusVal };
+      if (statusVal)
+        values[colId] = {
+          label: warehouseStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
+        };
+    } else if (key === "dispatchStatus") {
+      const statusVal = val as string;
+      if (statusVal)
+        values[colId] = {
+          label: dispatchStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
+        };
+    } else if (key === "deliveryStatus") {
+      const statusVal = val as string;
+      if (statusVal)
+        values[colId] = {
+          label: deliveryStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
+        };
     } else if (key === "warehouseTags") {
       if (val !== "" && val != null) values[colId] = val;
     } else if (key === "email") {
