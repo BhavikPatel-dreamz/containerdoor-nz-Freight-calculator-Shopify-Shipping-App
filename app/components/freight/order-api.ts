@@ -44,6 +44,34 @@ export function findStatusLine(
   return items[0];
 }
 
+/** Map /api/order-status line → FreightLineItem ops fields (detail UI). */
+export function mergeStatusLineIntoItem<T extends Record<string, any>>(
+  item: T,
+  line: OrderStatusLine | undefined | null,
+): T {
+  if (!line) return item;
+  return {
+    ...item,
+    customerStatus: line.customerStatus ?? item.customerStatus,
+    paymentStatus: line.paymentStatus || item.paymentStatus,
+    warehouseStatus: line.warehouseStatus ?? item.warehouseStatus,
+    warehouseTags: line.warehouseTags ?? item.warehouseTags,
+    dispatchStatus: line.dispatchStatus ?? item.dispatchStatus,
+    deliveryStatus: line.deliveryStatus ?? item.deliveryStatus,
+    trackingNumber: line.trackingNumber ?? item.trackingNumber,
+    freightRef: line.freightRef ?? item.freightRef,
+    eddDate: line.eddDate ?? item.eddDate,
+    originalEddDate: line.originalEddDate ?? item.originalEddDate,
+    supplierContainer: line.supplierContainer ?? item.supplierContainer,
+    receivedDate: line.receivedDate ?? item.receivedDate,
+    portArrivalDate: line.portArrivalDate ?? item.portArrivalDate,
+    inTransitDate: line.inTransitDate ?? item.inTransitDate,
+    depositPaid: line.depositPaid ?? item.depositPaid,
+    balanceDue: line.balanceDue ?? item.balanceDue,
+    company: (line.carrier && String(line.carrier).trim()) || item.company,
+  };
+}
+
 export async function postOrderStatus(body: {
   shop: string;
   orderId: string;

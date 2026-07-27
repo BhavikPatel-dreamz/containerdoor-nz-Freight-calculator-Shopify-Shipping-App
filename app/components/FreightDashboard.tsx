@@ -10,7 +10,7 @@ export type { FreightLineItem, FreightOrderRow, NoteItem, DashboardCounts, Freig
 import type { FreightLineItem, FreightOrderRow, NoteItem, FreightDashboardProps } from "./freight/types";
 
 import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix, resolveDetailTarget } from "./freight/helpers";
-import { fetchOrderStatus, findStatusLine, fetchOrderAmendments, postOrderAmendments } from "./freight/order-api";
+import { fetchOrderStatus, findStatusLine, mergeStatusLineIntoItem, fetchOrderAmendments, postOrderAmendments } from "./freight/order-api";
 import { IconCalendar } from "./freight/icons";
 import { DetailPanels } from "./freight/DetailPanels";
 import { NotesPanel } from "./freight/NotesPanel";
@@ -253,10 +253,11 @@ export default function FreightDashboard({
 
   const activeNoteTarget = detailView ?? noteModalTarget;
 
-  // ── Fetch notes whenever a modal that shows notes opens ──
+  // ── Fetch notes + live ops whenever detail / note-related modal opens ──
   useEffect(() => {
     const target = detailView ?? noteModalTarget ?? eddModal ?? trackingModal;
     if (!target) return;
+    let cancelled = false;
     const load = async () => {
       setNotesFetching(true);
       try {
@@ -266,14 +267,55 @@ export default function FreightDashboard({
           target.item.variantId,
           target.item.lineIndexId,
         );
-        if (!json) return;
+        if (!json || cancelled) return;
         const line = findStatusLine(json, target.item.variantId);
         setNotes(parseNotesString(line?.notes ?? ""));
         setCommunications(json.communications ?? []);
-      } catch (e) { console.error("Failed to load notes", e); } finally { setNotesFetching(false); }
+
+        // Apply ops fields to detail/list so Operational panel isn't blank
+        if (line) {
+          const vid = target.item.variantId;
+          const oid = target.order.id;
+          setDetailView((prev) => {
+            if (!prev || prev.item.variantId !== vid) return prev;
+            return { ...prev, item: mergeStatusLineIntoItem(prev.item, line) };
+          });
+          setRows((prev) =>
+            prev.map((o) =>
+              o.id !== oid
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) =>
+                      li.variantId !== vid ? li : mergeStatusLineIntoItem(li, line),
+                    ),
+                  },
+            ),
+          );
+          if (allRows) {
+            setAllRows((prev) =>
+              prev
+                ? prev.map((o) =>
+                    o.id !== oid
+                      ? o
+                      : {
+                          ...o,
+                          lineItems: o.lineItems.map((li) =>
+                            li.variantId !== vid ? li : mergeStatusLineIntoItem(li, line),
+                          ),
+                        },
+                  )
+                : prev,
+            );
+          }
+        }
+      } catch (e) { console.error("Failed to load notes", e); } finally {
+        if (!cancelled) setNotesFetching(false);
+      }
     };
     load();
-  }, [detailView, noteModalTarget, eddModal, trackingModal, shop]);
+    return () => { cancelled = true; };
+  }, [detailView?.order.shopifyOrderId, detailView?.item.variantId, detailView?.item.lineIndexId, noteModalTarget, eddModal, trackingModal, shop]);
 
   useEffect(() => {
     if (!allowStatusPoll) return;

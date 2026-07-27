@@ -59,8 +59,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   if (!snap) throw new Response("Order not found", { status: 404 });
 
   shopifyOrderId = String(snap.orderId);
-  const { opsMap, orderCin7Map } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
-  const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map);
+  const { opsMap, orderCin7Map, orderPoMap } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
+  const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map, orderPoMap);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
 
   // Attach OrderLineItemIndex.id on each line so client can fetch by single id.
@@ -105,15 +105,18 @@ async function buildOpsMapsForOrder(prisma: any, shop: string, orderId: string) 
 
   const orderOpData = await prisma.orderOperationalData.findMany({
     where: { shop, orderId },
-    select: { orderId: true, cin7SalesOrderId: true },
+    select: { orderId: true, cin7SalesOrderId: true, poNumber: true },
   });
   const orderCin7Map = new Map<string, boolean>(
     orderOpData
       .filter((row: any) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
       .map((row: any) => [row.orderId, true] as [string, boolean]),
   );
+  const orderPoMap = new Map<string, string>(
+    orderOpData.map((row: any) => [String(row.orderId), String(row.poNumber ?? "")]),
+  );
 
-  return { opsMap, orderCin7Map };
+  return { opsMap, orderCin7Map, orderPoMap };
 }
 
 export default function FreightOrderDetailPage() {
