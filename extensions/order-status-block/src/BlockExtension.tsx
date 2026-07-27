@@ -67,6 +67,7 @@ function apiUrl(appBase: string, path: string): string {
 }
 
 const CUSTOMER_STATUS_OPTIONS = [
+  // Keep exact values in sync with app/lib/status-options.ts (OMS modals).
   { value: "", label: "— Select —" },
   { value: "Pending", label: "Pending" },
   { value: "Confirmed", label: "Confirmed" },

@@ -2,6 +2,14 @@
 import { useState } from "react";
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { getRefPrefix } from "./helpers";
+import {
+  CUSTOMER_STATUS_OPTIONS,
+  WAREHOUSE_STATUS_OPTIONS,
+  DISPATCH_STATUS_OPTIONS,
+  DELIVERY_STATUS_OPTIONS,
+  PAYMENT_STATUS_OPTIONS,
+  optionsWithCurrent,
+} from "../../lib/status-options";
 
 // ─── Tracking Modal ──────────────────────────────────────────────────────────
 
@@ -399,13 +407,29 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
 
 // ─── Operational Edit Modal ──────────────────────────────────────────────────
 
+type OpsEditForm = {
+  customerStatus: string;
+  warehouseStatus: string;
+  warehouseTags: string;
+  dispatchStatus: string;
+  deliveryStatus: string;
+  poNumber: string;
+  depositPaid: string;
+  balanceDue: string;
+  paymentStatus: string;
+  supplierContainer: string;
+  receivedDate: string;
+  portArrivalDate: string;
+  inTransitDate: string;
+};
+
 type OpsEditModalProps = {
   order: FreightOrderRow;
   item: FreightLineItem;
-  form: { warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; paymentStatus: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string };
+  form: OpsEditForm;
   error: string;
   isSaving: boolean;
-  setForm: React.Dispatch<React.SetStateAction<{ warehouseStatus: string; warehouseTags: string; dispatchStatus: string; deliveryStatus: string; poNumber: string; depositPaid: string; balanceDue: string; paymentStatus: string; supplierContainer: string; receivedDate: string; portArrivalDate: string; inTransitDate: string }>>;
+  setForm: React.Dispatch<React.SetStateAction<OpsEditForm>>;
   onClose: () => void;
   onSave: () => void;
 };
@@ -427,13 +451,35 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
           {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{error}</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <div>
-              <label className="fo-field-label" htmlFor="ops-warehouse">Warehouse status</label>
-              <input id="ops-warehouse" className="fo-input" placeholder="e.g. Picking" value={form.warehouseStatus} onChange={(e) => setForm((p) => ({ ...p, warehouseStatus: e.target.value }))} />
+              <label className="fo-field-label" htmlFor="ops-customer-status">Customer status</label>
+              <select
+                id="ops-customer-status"
+                className="fo-input"
+                value={form.customerStatus}
+                onChange={(e) => setForm((p) => ({ ...p, customerStatus: e.target.value }))}
+              >
+                {optionsWithCurrent(CUSTOMER_STATUS_OPTIONS, form.customerStatus).map((o) => (
+                  <option key={o.value || "__empty"} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
             <div>
-              <label className="fo-field-label" htmlFor="ops-received">Received</label>
-              <input id="ops-received" type="date" className="fo-input" value={form.receivedDate} onChange={(e) => setForm((p) => ({ ...p, receivedDate: e.target.value }))} />
+              <label className="fo-field-label" htmlFor="ops-warehouse">Warehouse status</label>
+              <select
+                id="ops-warehouse"
+                className="fo-input"
+                value={form.warehouseStatus}
+                onChange={(e) => setForm((p) => ({ ...p, warehouseStatus: e.target.value }))}
+              >
+                {optionsWithCurrent(WAREHOUSE_STATUS_OPTIONS, form.warehouseStatus).map((o) => (
+                  <option key={o.value || "__empty"} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
+          </div>
+          <div>
+            <label className="fo-field-label" htmlFor="ops-received">Received</label>
+            <input id="ops-received" type="date" className="fo-input" value={form.receivedDate} onChange={(e) => setForm((p) => ({ ...p, receivedDate: e.target.value }))} />
           </div>
           <div>
             <label className="fo-field-label" htmlFor="ops-warehouse-tags">Warehouse tags</label>
@@ -442,11 +488,29 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <div>
               <label className="fo-field-label" htmlFor="ops-dispatch">Dispatch status</label>
-              <input id="ops-dispatch" className="fo-input" placeholder="e.g. Scheduled" value={form.dispatchStatus} onChange={(e) => setForm((p) => ({ ...p, dispatchStatus: e.target.value }))} />
+              <select
+                id="ops-dispatch"
+                className="fo-input"
+                value={form.dispatchStatus}
+                onChange={(e) => setForm((p) => ({ ...p, dispatchStatus: e.target.value }))}
+              >
+                {optionsWithCurrent(DISPATCH_STATUS_OPTIONS, form.dispatchStatus).map((o) => (
+                  <option key={o.value || "__empty"} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
             <div>
               <label className="fo-field-label" htmlFor="ops-delivery">Delivery status</label>
-              <input id="ops-delivery" className="fo-input" placeholder="e.g. In transit" value={form.deliveryStatus} onChange={(e) => setForm((p) => ({ ...p, deliveryStatus: e.target.value }))} />
+              <select
+                id="ops-delivery"
+                className="fo-input"
+                value={form.deliveryStatus}
+                onChange={(e) => setForm((p) => ({ ...p, deliveryStatus: e.target.value }))}
+              >
+                {optionsWithCurrent(DELIVERY_STATUS_OPTIONS, form.deliveryStatus).map((o) => (
+                  <option key={o.value || "__empty"} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
           </div>
           <div>
@@ -480,11 +544,9 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
           <div>
             <label className="fo-field-label" htmlFor="ops-payment-status">Payment status</label>
             <select id="ops-payment-status" className="fo-input" value={form.paymentStatus} onChange={(e) => setForm((p) => ({ ...p, paymentStatus: e.target.value }))}>
-              <option value="">—</option>
-              <option value="Pending">Pending</option>
-              <option value="Paid">Paid</option>
-              <option value="Partial">Partial</option>
-              <option value="Overdue">Overdue</option>
+              {optionsWithCurrent(PAYMENT_STATUS_OPTIONS, form.paymentStatus).map((o) => (
+                <option key={o.value || "__empty"} value={o.value}>{o.label}</option>
+              ))}
             </select>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "10px 14px", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0", fontSize: "12px", color: "#166534" }}>
