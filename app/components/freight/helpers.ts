@@ -96,6 +96,13 @@ export function dedupeOrders<T extends { shopifyOrderId: string }>(list: T[]): T
   return Array.from(new Map(list.map((o) => [o.shopifyOrderId, o])).values());
 }
 
+/** Normalise URL/list id → OMS OrderSnapshot.orderId (Shopify numeric). */
+export function normalizeShopifyOrderId(raw?: string | null): string {
+  return String(raw || "")
+    .replace(/^gid:\/\/shopify\/Order\//, "")
+    .trim();
+}
+
 /** Resolve order + line for `/app/order/:orderId?variantId=` — sync, no flash. */
 export function resolveDetailTarget(
   orders: FreightOrderRow[],
@@ -103,7 +110,12 @@ export function resolveDetailTarget(
   variantId?: string | null,
 ): { order: FreightOrderRow; item: FreightLineItem } | null {
   if (!orderId) return null;
-  const order = orders.find((o) => o.shopifyOrderId === orderId);
+  const want = normalizeShopifyOrderId(orderId);
+  const order = orders.find(
+    (o) =>
+      normalizeShopifyOrderId(o.shopifyOrderId) === want ||
+      normalizeShopifyOrderId(o.id) === want,
+  );
   if (!order) return null;
   const item =
     (variantId ? order.lineItems.find((li) => li.variantId === variantId) : undefined) ??

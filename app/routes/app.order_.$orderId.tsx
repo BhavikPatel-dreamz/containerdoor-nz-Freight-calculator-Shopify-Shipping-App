@@ -19,19 +19,34 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const currentUser = currentUserFromSession(session);
-  const orderId = params.orderId!;
+  // URL must use OMS OrderSnapshot.orderId (= Shopify numeric order id).
+  // Accept accidental GID / whitespace from older links.
+  const orderId = String(params.orderId || "")
+    .replace(/^gid:\/\/shopify\/Order\//, "")
+    .trim();
 
-  const snap = await prisma.orderSnapshot.findUnique({
-    where: { shop_orderId: { shop, orderId } },
-  });
+  // Prefer shop+orderId (canonical). Fallback: OrderSnapshot cuid if someone
+  // linked with primary key — still resolve to the same DB row.
+  let snap =
+    orderId
+      ? await prisma.orderSnapshot.findUnique({
+          where: { shop_orderId: { shop, orderId } },
+        })
+      : null;
+  if (!snap && orderId) {
+    snap = await prisma.orderSnapshot.findFirst({
+      where: { shop, OR: [{ id: orderId }, { orderId }] },
+    });
+  }
   if (!snap) throw new Response("Order not found", { status: 404 });
 
-  // Ops maps scoped to this order only (not whole shop).
-  const { opsMap, orderCin7Map } = await buildOpsMapsForOrder(prisma, shop, orderId);
+  // Always key ops by the snapshot's Shopify orderId (DB column), not URL quirks.
+  const dbOrderId = String(snap.orderId);
+  const { opsMap, orderCin7Map } = await buildOpsMapsForOrder(prisma, shop, dbOrderId);
   const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
 
-  return { row, shop, currentUser };
+  return { row, shop, currentUser, orderId: dbOrderId };
 }
 
 /** Leaner than full-shop buildOpsMaps — detail page only needs this order. */

@@ -70,14 +70,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const url = new URL(request.url);
-  const orderId = url.searchParams.get("orderId") ?? "";
-  const shop = url.searchParams.get("shop") ?? "";
+  const rawOrderId = url.searchParams.get("orderId") ?? "";
+  const orderId = rawOrderId.replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  let shop = url.searchParams.get("shop") ?? "";
 
   if (!orderId) {
     return Response.json({ error: "Missing orderId" }, { status: 400, headers: CORS_HEADERS });
   }
 
   try {
+    // If shop omitted (admin extension quirk), resolve from OrderSnapshot by Shopify order id.
+    if (!shop) {
+      const snap = await prisma.orderSnapshot.findFirst({
+        where: { orderId },
+        select: { shop: true },
+      });
+      shop = snap?.shop ?? "";
+    }
+
     const records = await prisma.orderLineItemOperationalData.findMany({
       where: { orderId, ...(shop ? { shop } : {}) },
       select: {
@@ -228,6 +238,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 // POST — update editable fields for a single line item (used by admin block)
 // ───────────────────────────────────────────────────────────────────────────
 const EDITABLE_FIELDS = [
+  "productTitle",
   "customerStatus",
   "paymentStatus",
   "warehouseStatus",
@@ -235,8 +246,8 @@ const EDITABLE_FIELDS = [
   "dispatchStatus",
   "deliveryStatus",
   "trackingNumber",
-  "carrier", 
-  "freightRef",   
+  "carrier",
+  "freightRef",
   "eddDate",
   "originalEddDate",
   "supplierContainer",
@@ -277,11 +288,26 @@ export async function action({ request }: ActionFunctionArgs) {
       notifyKind?: "edd" | "tracking" | "custom";
       /** Subject/header stored on BulkEmailJob for cron to send */
       notifySubject?: string;
+      /** e.g. shopify_admin_block — tagged on CommunicationLog metadata */
+      source?: string;
     };
 
-    const { shop, orderId, variantId, data, newNotes, newCin7Notes, syncNotes, performedBy } = body;
-    const shopValue = typeof shop === "string" ? shop : "";
+    const { variantId, data, newNotes, newCin7Notes, syncNotes, performedBy } = body;
+    const orderId = String(body.orderId || "")
+      .replace(/^gid:\/\/shopify\/Order\//, "")
+      .trim();
+    let shopValue = typeof body.shop === "string" ? body.shop.trim() : "";
     const actor = (performedBy || "SY").trim() || "SY";
+    const activitySource = String(body.source || "oms").trim() || "oms";
+
+    // Resolve shop from OMS snapshot when extension omits it.
+    if (!shopValue && orderId) {
+      const snap = await prisma.orderSnapshot.findFirst({
+        where: { orderId },
+        select: { shop: true },
+      });
+      shopValue = snap?.shop ?? "";
+    }
     const pushNoteMonday = Boolean(syncNotes?.monday);
     const pushNoteCin7 = Boolean(syncNotes?.cin7) || (Array.isArray(newCin7Notes) && newCin7Notes.length > 0);
     const pushNoteShopify = Boolean(syncNotes?.shopify);
@@ -305,6 +331,13 @@ export async function action({ request }: ActionFunctionArgs) {
       );
     }
 
+    if (!shopValue) {
+      return Response.json(
+        { ok: false, error: "Missing shop — cannot write OMS line-item row" },
+        { status: 400, headers: CORS_HEADERS }
+      );
+    }
+
     const updateData: Record<string, string> = {};
     for (const key of EDITABLE_FIELDS) {
       if (key in data) updateData[key] = String(data[key] ?? "");
@@ -312,13 +345,30 @@ export async function action({ request }: ActionFunctionArgs) {
 
     let updated;
 
-    const existing = shopValue
-      ? await prisma.orderLineItemOperationalData.findUnique({
-          where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
-        })
-      : await prisma.orderLineItemOperationalData.findFirst({
-          where: { orderId, variantId },
-        });
+    // Upsert requires parent OrderSnapshot (FK shop+orderId). Ensure it exists.
+    const snapExists = await prisma.orderSnapshot.findUnique({
+      where: { shop_orderId: { shop: shopValue, orderId } },
+      select: { orderId: true },
+    });
+    if (!snapExists) {
+      return Response.json(
+        {
+          ok: false,
+          error: `Order ${orderId} not in OMS yet — wait for orders/create webhook or reindex`,
+        },
+        { status: 404, headers: CORS_HEADERS },
+      );
+    }
+
+    const existing = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
+    });
+
+    // Don't wipe title/carrier with empty strings from extension saves.
+    if (!String(updateData.productTitle || "").trim()) delete updateData.productTitle;
+    if (!String(updateData.carrier || "").trim() && existing?.carrier) {
+      delete updateData.carrier;
+    }
 
     const payload = { ...updateData } as Record<string, string | Date>;
     if (existing) {
@@ -422,7 +472,7 @@ export async function action({ request }: ActionFunctionArgs) {
           field: key,
           oldValue: oldVal,
           newValue: newVal,
-          source: "oms",
+          source: activitySource,
           performedBy: actor,
         },
       });
@@ -441,7 +491,7 @@ export async function action({ request }: ActionFunctionArgs) {
           deliveryStatus: plannedSyncTargets.length > 0 ? "pending" : "internal",
           syncTargets: plannedSyncTargets.length > 0 ? plannedSyncTargets : undefined,
           metadata: {
-            source: "oms",
+            source: activitySource,
             pushMonday: pushNoteMonday,
             pushCin7: pushNoteCin7,
             pushShopify: pushNoteShopify,
@@ -459,22 +509,12 @@ export async function action({ request }: ActionFunctionArgs) {
     let notifyRecipients: number | undefined;
 
     try {
-      if (shopValue) {
-        updated = await prisma.orderLineItemOperationalData.upsert({
-          where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
-          update: payload,
-          create: { shop: shopValue, orderId, variantId, ...payload },
-        });
-      } else if (existing) {
-        updated = await prisma.orderLineItemOperationalData.update({
-          where: { id: existing.id },
-          data: payload,
-        });
-      } else {
-        updated = await prisma.orderLineItemOperationalData.create({
-          data: { shop: shopValue, orderId, variantId, ...payload },
-        });
-      }
+      // Always upsert on shop+orderId+variantId — OMS source of truth per line item.
+      updated = await prisma.orderLineItemOperationalData.upsert({
+        where: { shop_orderId_variantId: { shop: shopValue, orderId, variantId } },
+        update: payload,
+        create: { shop: shopValue, orderId, variantId, ...payload },
+      });
     } catch (opsErr) {
       console.error("[api.order-status] Ops save failed", opsErr);
       return Response.json(

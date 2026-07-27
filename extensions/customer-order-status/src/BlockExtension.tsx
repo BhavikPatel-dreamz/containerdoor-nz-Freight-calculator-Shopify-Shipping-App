@@ -42,7 +42,15 @@ type ApiResponse = {
 // ─── Config ───────────────────────────────────────────────────────────────────
 
 const TARGET = "customer-account.order-status.cart-line-item.render-after";
-const APP_URL = "https://containerdoor-nz-freight-calculator.vercel.app";
+
+/** Build-time: Shopify CLI injects APP_URL / SHOPIFY_APP_URL from app config. */
+const APP_URL = String(
+  (typeof process !== "undefined" &&
+    (process.env.SHOPIFY_APP_URL || process.env.APP_URL)) ||
+    "",
+)
+  .trim()
+  .replace(/\/+$/, "");
 
 // ─── Root Extension ───────────────────────────────────────────────────────────
 
@@ -97,6 +105,11 @@ function CartLineFreightStatus() {
     setError(null);
 
     try {
+      if (!APP_URL) {
+        throw new Error(
+          "App URL not set — set SHOPIFY_APP_URL / APP_URL (or application_url in shopify.app.toml) before building the extension",
+        );
+      }
       const ts = Date.now();
       const res = await fetch(
         `${APP_URL}/api/order-status?orderId=${numericOrderId}&_ts=${ts}`,
