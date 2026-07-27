@@ -35,6 +35,8 @@ export type FreightLineItem = {
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
   mondayItemId?: string;
+  /** Shopify order + letter, e.g. `#CDL215347A` — also Monday pulse name */
+  mondayItemName?: string;
   /** Full Monday pulse URL from MONDAY_BOARD_LINK + MONDAY_BOARD_ID */
   mondayItemUrl?: string;
   mondayStatus?: "match" | "mismatch" | "missing";

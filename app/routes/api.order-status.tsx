@@ -197,6 +197,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         balanceDue: true,
         notes: true,
         mondayItemId: true,
+        mondayItemName: true,
       },
     });
 
@@ -866,10 +867,11 @@ export async function action({ request }: ActionFunctionArgs) {
         const newMondayId = await createMondayItem(itemName, mondayRow);
         updated = await prisma.orderLineItemOperationalData.update({
           where: { id: updated.id },
-          data: { mondayItemId: newMondayId },
+          data: { mondayItemId: newMondayId, mondayItemName: itemName },
         });
         mondayDebug.action = "created";
         mondayDebug.mondayItemId = newMondayId;
+        mondayDebug.mondayItemName = itemName;
       } else {
         try {
           await updateMondayItem(updated.mondayItemId, mondayRow);
@@ -877,17 +879,23 @@ export async function action({ request }: ActionFunctionArgs) {
           await renameMondayItem(updated.mondayItemId, itemName).catch((e) =>
             console.error("[api.order-status] Monday rename failed", e),
           );
+          updated = await prisma.orderLineItemOperationalData.update({
+            where: { id: updated.id },
+            data: { mondayItemName: itemName },
+          });
           mondayDebug.action = "updated";
           mondayDebug.mondayItemId = updated.mondayItemId;
+          mondayDebug.mondayItemName = itemName;
         } catch (mErr) {
           if (isStaleMondayItemError(mErr)) {
             const newMondayId = await createMondayItem(itemName, mondayRow);
             updated = await prisma.orderLineItemOperationalData.update({
               where: { id: updated.id },
-              data: { mondayItemId: newMondayId },
+              data: { mondayItemId: newMondayId, mondayItemName: itemName },
             });
             mondayDebug.action = "recreated-stale";
             mondayDebug.mondayItemId = newMondayId;
+            mondayDebug.mondayItemName = itemName;
           } else {
             throw mErr;
           }

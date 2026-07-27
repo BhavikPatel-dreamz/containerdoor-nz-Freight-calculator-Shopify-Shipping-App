@@ -182,6 +182,7 @@ export function buildRowFromSnapshot(
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
       mondayItemId: ops?.mondayItemId ?? "",
+      mondayItemName: ops?.mondayItemName || "",
       mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
@@ -267,6 +268,7 @@ export function buildRow(
         ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
         : [],
       mondayItemId: ops?.mondayItemId ?? "",
+      mondayItemName: ops?.mondayItemName || "",
       mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
       mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
         ? (ops.mondayCachedStatus.trim().toLowerCase() as any)

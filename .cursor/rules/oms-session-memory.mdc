@@ -62,6 +62,7 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
 - Monday item URL: `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{mondayItemId}` via `buildMondayItemUrl()` in `monday.server.ts`.
 - Monday pulse **name** = Shopify order name + line letter (`#CDL215347A`) via `buildMondayPulseName()` — never product title. Rename on sync if old name was product title.
+- Store both: `mondayItemId` (Monday numeric pulse id) + `mondayItemName` (`#CDL215347A`) on `OrderLineItemOperationalData` for OMS ↔ Shopify ↔ Monday matching.
 - If EDD updates do not appear in Monday, check `syncTrace.monday.error` first; a different status-column label error can block EDD in the same mutation.
 
 ## Order amendments (CS)
