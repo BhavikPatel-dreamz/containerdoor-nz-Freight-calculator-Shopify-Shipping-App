@@ -42,6 +42,30 @@ type ApiResponse = {
 
 const TARGET = "admin.order-details.block.render";
 
+/**
+ * Admin UI extensions: relative fetch paths resolve against the app's
+ * configured `application_url` (shopify.app.toml / Partner Dashboard / SHOPIFY_APP_URL).
+ * CLI also injects APP_URL / SHOPIFY_APP_URL at build time during `shopify app dev`.
+ */
+function resolveAppBaseUrl(api: any): string {
+  const fromApi =
+    api?.extension?.appUrl ||
+    api?.appUrl ||
+    "";
+  const fromEnv =
+    (typeof process !== "undefined" &&
+      (process.env.SHOPIFY_APP_URL || process.env.APP_URL)) ||
+    "";
+  const raw = String(fromApi || fromEnv || "").trim().replace(/\/+$/, "");
+  // Empty = use relative `/api/...` (Shopify resolves to application_url)
+  return raw;
+}
+
+function apiUrl(appBase: string, path: string): string {
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return appBase ? `${appBase}${p}` : p;
+}
+
 const CUSTOMER_STATUS_OPTIONS = [
   { value: "", label: "— Select —" },
   { value: "Pending", label: "Pending" },
@@ -77,7 +101,27 @@ const DELIVERY_STATUS_OPTIONS = [
   { value: "Failed", label: "Failed" },
 ];
 
+const EMPTY_LINE: Omit<LineItemRecord, "variantId" | "productTitle"> = {
+  carrier: "",
+  customerStatus: "",
+  deliveryStatus: "",
+  trackingNumber: "",
+  eddDate: "",
+  dispatchStatus: "",
+  warehouseStatus: "",
+  supplierContainer: "",
+  portArrivalDate: "",
+  inTransitDate: "",
+  depositPaid: "",
+  balanceDue: "",
+  notes: "",
+};
+
 export default reactExtension(TARGET, () => <FreightStatusBlock />);
+
+function stripGid(id: string, resource: "Order" | "ProductVariant"): string {
+  return String(id || "").replace(`gid://shopify/${resource}/`, "").trim();
+}
 
 function FreightStatusBlock() {
   const api = useApi(TARGET);
@@ -88,22 +132,10 @@ function FreightStatusBlock() {
     (api as any)?.orderId ??
     "";
 
-  const numericOrderId = rawOrderId.replace("gid://shopify/Order/", "");
+  const numericOrderId = stripGid(rawOrderId, "Order");
+  const appUrl = resolveAppBaseUrl(api);
 
-  const shopDomain: string =
-    (api as any)?.data?.shop?.myshopifyDomain ??
-    (api as any)?.shop?.myshopifyDomain ??
-    (api as any)?.extension?.shop?.myshopifyDomain ??
-    (api as any)?.data?.initialState?.shop?.domain ??
-    "";
-
-  const appUrl: string =
-    (api as any)?.extension?.appUrl ??
-    (api as any)?.appUrl ??
-    // Use production Vercel deployment by default
-    // "https://dd-75.dynamicdreamz.com";
-    "https://containerdoor-nz-freight-calculator.vercel.app";
-
+  const [shopDomain, setShopDomain] = useState<string>("");
   const [records, setRecords] = useState<LineItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -111,6 +143,7 @@ function FreightStatusBlock() {
   useEffect(() => {
     if (!numericOrderId) {
       setLoading(false);
+      setError("No order selected");
       return;
     }
 
@@ -118,20 +151,75 @@ function FreightStatusBlock() {
 
     (async () => {
       try {
-        const qs = new URLSearchParams({ orderId: numericOrderId });
-        if (shopDomain) qs.set("shop", shopDomain);
+        // Admin block API does not expose shop on data — resolve via GraphQL.
+        let shop = "";
+        try {
+          const shopRes = await (api as any).query(`query { shop { myshopifyDomain } }`);
+          shop = shopRes?.data?.shop?.myshopifyDomain ?? "";
+        } catch (e) {
+          console.error("[FreightStatusBlock] shop query failed", e);
+        }
+        if (cancelled) return;
+        if (!shop) {
+          setError("Unable to resolve shop domain — cannot load OMS data");
+          setLoading(false);
+          return;
+        }
+        setShopDomain(shop);
 
-        const res = await fetch(`${appUrl}/api/order-status?${qs}`);
+        const qs = new URLSearchParams({
+          orderId: numericOrderId,
+          shop,
+        });
+
+        const res = await fetch(apiUrl(appUrl, `/api/order-status?${qs}`));
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data: ApiResponse = await res.json();
 
-        if (!cancelled) {
-          if (data.ok) {
-            setRecords(data.lineItems);
-          } else {
-            setError(data.error ?? "Failed to load");
+        if (cancelled) return;
+
+        if (!data.ok) {
+          setError(data.error ?? "Failed to load");
+          return;
+        }
+
+        // If OMS has no rows yet, seed editable cards from live Shopify line items
+        // so Save can create OrderLineItemOperationalData rows.
+        let lineItems = data.lineItems ?? [];
+        if (lineItems.length === 0) {
+          try {
+            const orderRes = await (api as any).query(
+              `query OrderLines($id: ID!) {
+                order(id: $id) {
+                  lineItems(first: 50) {
+                    nodes {
+                      title
+                      variant { id }
+                    }
+                  }
+                }
+              }`,
+              { variables: { id: `gid://shopify/Order/${numericOrderId}` } },
+            );
+            const nodes: Array<{ title?: string; variant?: { id?: string } }> =
+              orderRes?.data?.order?.lineItems?.nodes ?? [];
+            lineItems = nodes
+              .map((n) => {
+                const variantId = stripGid(n.variant?.id ?? "", "ProductVariant");
+                if (!variantId) return null;
+                return {
+                  variantId,
+                  productTitle: n.title ?? "",
+                  ...EMPTY_LINE,
+                } as LineItemRecord;
+              })
+              .filter(Boolean) as LineItemRecord[];
+          } catch (e) {
+            console.error("[FreightStatusBlock] order lines query failed", e);
           }
         }
+
+        setRecords(lineItems);
       } catch (e) {
         if (!cancelled) setError("Unable to load: " + String(e));
       } finally {
@@ -139,12 +227,14 @@ function FreightStatusBlock() {
       }
     })();
 
-    return () => { cancelled = true; };
-  }, [numericOrderId, shopDomain, appUrl]);
+    return () => {
+      cancelled = true;
+    };
+  }, [numericOrderId, appUrl, api]);
 
   const handleSaved = (variantId: string, updated: Partial<LineItemRecord>) => {
     setRecords((prev) =>
-      prev.map((r) => (r.variantId === variantId ? { ...r, ...updated } : r))
+      prev.map((r) => (r.variantId === variantId ? { ...r, ...updated } : r)),
     );
   };
 
@@ -157,7 +247,7 @@ function FreightStatusBlock() {
       ) : error ? (
         <Text tone="critical">{error}</Text>
       ) : records.length === 0 ? (
-        <Text tone="subdued">No freight data saved for this order yet.</Text>
+        <Text tone="subdued">No freight line items found for this order.</Text>
       ) : (
         <BlockStack gap="base">
           {records.map((r, index) => (
@@ -248,27 +338,6 @@ function recordToFormState(r: LineItemRecord): EditableState {
     notes: r.notes ?? "",
   };
 }
-const FIELD_LABELS: Partial<Record<keyof EditableState, string>> = {
-  customerStatus: "Customer status",
-  warehouseStatus: "Warehouse status",
-  dispatchStatus: "Dispatch status",
-  deliveryStatus: "Delivery status",
-  trackingNumber: "Tracking #",
-  eddDate: "EDD",
-  portArrivalDate: "Port arrival date",
-  inTransitDate: "In transit date",
-  supplierContainer: "Supplier / container",
-  depositPaid: "Deposit paid",
-  balanceDue: "Balance due",
-};
-
-function formatNoteDateTime(d = new Date()): string {
-  return `${d.toLocaleDateString("en-NZ", { day: "numeric", month: "short" })} ${d.toLocaleTimeString("en-NZ", { hour: "2-digit", minute: "2-digit" })}`;
-}
-
-function buildSystemNote(text: string): string {
-  return `[system|SY|${formatNoteDateTime()}] ${text}`;
-}
 
 function ItemCard({
   record,
@@ -288,7 +357,6 @@ function ItemCard({
   const productName = record.productTitle || `Variant #${record.variantId}`;
   const badge = resolveBadge(record.customerStatus, record.deliveryStatus);
 
-  // Collapsed by default — this is the key change to reduce block height
   const [isExpanded, setIsExpanded] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState<EditableState>(() => recordToFormState(record));
@@ -312,44 +380,33 @@ function ItemCard({
   };
 
   const handleSave = async () => {
+    if (!shop) {
+      setSaveError("Shop domain missing — cannot save to OMS");
+      return;
+    }
     setSaving(true);
     setSaveError(null);
     try {
-      // Diff against the original record to find which tracked fields changed
-      const before = recordToFormState(record);
-      const changedFields: (keyof EditableState)[] = (Object.keys(FIELD_LABELS) as (keyof EditableState)[])
-        .filter((key) => (before[key] ?? "") !== (form[key] ?? ""));
+      // Field changes → OMS OrderLineItemOperationalData + CommunicationLog via API.
+      // Do NOT append system notes into the notes blob (Activity Log is source of truth).
+      const nextData = { ...form };
 
-      // Build one separate system note per changed field
-      const systemNotes = changedFields.map((key) => {
-        const oldVal = before[key] || "—";
-        const newVal = form[key] || "—";
-        return buildSystemNote(`${FIELD_LABELS[key]} changed from "${oldVal}" to "${newVal}".`);
-      });
-
-      let notesToSend = form.notes;
-      if (systemNotes.length > 0) {
-        const appended = systemNotes.join("\n\n");
-        notesToSend = notesToSend ? `${notesToSend}\n\n${appended}` : appended;
-      }
-
-      const nextData = { ...form, notes: notesToSend };
-
-      // Plain-text summary (no [tag] prefixes) to also push into Shopify's native order timeline
-      // One separate plain-text note per changed field, so each shows individually in the Shopify timeline
-      const fieldNotes = changedFields.map(
-        (key) => `Updated via order block — ${FIELD_LABELS[key]}: "${before[key] || "—"}" → "${form[key] || "—"}".`
-      );
-
-      const res = await fetch(`${appUrl}/api/order-status`, {
+      const res = await fetch(apiUrl(appUrl, "/api/order-status"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shop,
           orderId,
           variantId: record.variantId,
-          data: nextData,
-          newNotes: fieldNotes,
+          data: {
+            ...nextData,
+            // Keep product title so new rows are identifiable in OMS
+            productTitle: record.productTitle || "",
+            carrier: record.carrier || "",
+          },
+          performedBy: "Shopify Admin",
+          // Mark source so API can tag CommunicationLog metadata
+          source: "shopify_admin_block",
         }),
       });
       const json = await res.json();
@@ -363,7 +420,6 @@ function ItemCard({
     }
   };
 
-  // ─── Read-only rows ───────────────────────────────────────────────────────
   const dispatchDateLabel =
     record.dispatchStatus === "Dispatched" ? "Dispatched Date" : "Est. Dispatch Date";
   const dispatchDateValue =
@@ -389,16 +445,12 @@ function ItemCard({
 
   return (
     <BlockStack gap="tight">
-
-      {/* ── Header row: always visible ── */}
       <InlineStack gap="small" blockAlignment="center" inlineAlignment="space-between">
-        {/* Left: name + badge */}
         <InlineStack gap="small" blockAlignment="center">
           <Text fontWeight="bold">{productName}</Text>
           <Badge tone={badge.tone}>{badge.label}</Badge>
         </InlineStack>
 
-        {/* Right: action buttons */}
         <InlineStack gap="small">
           {isEditing ? (
             <>
@@ -420,7 +472,6 @@ function ItemCard({
 
       {saveError ? <Text tone="critical">{saveError}</Text> : null}
 
-      {/* ── Expandable body ── */}
       {isExpanded && (
         isEditing ? (
           <BlockStack gap="base">
@@ -583,5 +634,7 @@ function formatDate(d: string): string {
     return new Date(d).toLocaleDateString("en-NZ", {
       day: "numeric", month: "short", year: "numeric",
     });
-  } catch { return d; }
+  } catch {
+    return d;
+  }
 }

@@ -199,6 +199,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
     return {
       id: r.gid || `gid://shopify/Order/${r.orderId}`,
+      // Must equal OrderSnapshot.orderId / OrderLineItemOperationalData.orderId
+      // so `/app/order/:orderId` loads ops from DB.
       shopifyOrderId: String(r.orderId),
       shopifyOrderName: r.orderName || "",
       currency: r.currency || "NZD",
