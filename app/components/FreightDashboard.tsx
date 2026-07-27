@@ -98,6 +98,10 @@ export default function FreightDashboard({
   const [isSavingAmend, setIsSavingAmend] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
+  const logSyncTrace = (source: string, payload: any) => {
+    if (!payload?.syncTrace) return;
+    console.log(`[SYNC TRACE][${source}]`, payload.syncTrace);
+  };
   const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
   const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
   const [mondayFixingId, setMondayFixingId] = useState<string | null>(null);
@@ -483,6 +487,7 @@ export default function FreightDashboard({
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
+      logSyncTrace("EDD modal", payload);
       const cin7Exists = Boolean(payload.cin7Exists);
       if (payload.activityLogged === 0 && oldEdd !== newEdd) {
         console.warn("[EDD] Saved but no CommunicationLog row — check api.order-status field logging");
@@ -676,6 +681,7 @@ export default function FreightDashboard({
       });
       if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
       const payload = await response.json();
+      logSyncTrace("Tracking modal", payload);
       const cin7Exists = Boolean(payload.cin7Exists);
       if (payload.activityLogged === 0) {
         console.warn("[Tracking] Saved but no CommunicationLog row — check api.order-status field logging");
@@ -716,7 +722,7 @@ export default function FreightDashboard({
       if (Object.keys(data).length === 0) { setEditDispatchModal(false); return; }
       const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
-      const payload = await res.json(); const cin7Exists = Boolean(payload.cin7Exists);
+      const payload = await res.json(); logSyncTrace("Dispatch edit", payload); const cin7Exists = Boolean(payload.cin7Exists);
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, eddDate: data.eddDate || li.eddDate, originalEddDate: data.originalEddDate || li.originalEddDate, company: data.carrier || li.company, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
       setRows((prev) => prev.map(apply));
       if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
@@ -880,6 +886,8 @@ export default function FreightDashboard({
       if (Object.keys(data).length === 0) { setEditOpsModal(false); return; }
       const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
+      const payload = await res.json();
+      logSyncTrace("Operational edit", payload);
       const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, customerStatus: data.customerStatus ?? li.customerStatus, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, warehouseTags: data.warehouseTags ?? li.warehouseTags, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
       setRows((prev) => prev.map(apply));
       if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);

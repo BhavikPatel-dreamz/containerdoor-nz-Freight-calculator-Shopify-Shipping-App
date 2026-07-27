@@ -433,6 +433,7 @@ export async function action({ request }: ActionFunctionArgs) {
     for (const key of EDITABLE_FIELDS) {
       if (key in data) updateData[key] = String(data[key] ?? "");
     }
+    const requestedFieldKeys = Object.keys(updateData);
 
     let updated;
 
@@ -1035,6 +1036,29 @@ export async function action({ request }: ActionFunctionArgs) {
       }),
     }).catch((e) => console.error("[webhook] failed to send", e));
 
+    const syncTrace = {
+      source: activitySource,
+      performedBy: actor,
+      shop: resolvedShop,
+      orderId,
+      variantId,
+      requestedFields: requestedFieldKeys,
+      monday: mondayDebug,
+      shopify: {
+        eddSync: shopifyEddSync ?? { ok: true, skipped: true },
+      },
+      cin7: {
+        exists: cin7Exists,
+        noteSync: cin7SyncResults.cin7 ?? null,
+      },
+      notify: {
+        jobId: notifyJobId ?? null,
+        recipients: notifyRecipients ?? 0,
+      },
+      at: new Date().toISOString(),
+    };
+    debug("SYNC_TRACE", "Order status save sync results", syncTrace);
+
     return Response.json(
       {
         ok: true,
@@ -1045,6 +1069,7 @@ export async function action({ request }: ActionFunctionArgs) {
         notifyJobId,
         notifyRecipients,
         shopifyEddSync,
+        syncTrace,
       },
       { headers: CORS_HEADERS },
     );
