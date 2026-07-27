@@ -132,6 +132,7 @@ export function buildRowFromSnapshot(
   snap: any,
   opsMap: Map<string, any>,
   orderCin7Map: Map<string, boolean>,
+  orderPoMap?: Map<string, string>,
 ) {
   if (!snap.carriers || !snap.shippingCode) return null;
 
@@ -140,6 +141,7 @@ export function buildRowFromSnapshot(
 
   const lineItems = itemSnaps.map((it) => {
     const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
+    const opsPayment = String(ops?.paymentStatus ?? "").trim();
     return {
       id: `${snap.orderId}-${it.idx}`,
       variantId: it.variantId,
@@ -148,16 +150,28 @@ export function buildRowFromSnapshot(
       vendor: it.vendor,
       sku: it.sku,
       productId: it.productId,
-      company: it.company,
+      // Prefer OMS carrier override when set
+      company: (ops?.carrier && String(ops.carrier).trim()) || it.company,
       boxes: it.boxes,
       amount: it.amount,
       letterSuffix: it.letterSuffix,
       customerStatus: ops?.customerStatus ?? "",
-      paymentStatus: normalizePaymentStatus(snap.financialStatus),
+      paymentStatus: opsPayment || normalizePaymentStatus(snap.financialStatus),
       trackingNumber: ops?.trackingNumber ?? "",
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
+      warehouseStatus: ops?.warehouseStatus ?? "",
+      warehouseTags: ops?.warehouseTags ?? "",
+      dispatchStatus: ops?.dispatchStatus ?? "",
+      deliveryStatus: ops?.deliveryStatus ?? "",
+      depositPaid: ops?.depositPaid ?? "",
+      balanceDue: ops?.balanceDue ?? "",
+      supplierContainer: ops?.supplierContainer ?? "",
+      receivedDate: ops?.receivedDate ?? "",
+      portArrivalDate: ops?.portArrivalDate ?? "",
+      inTransitDate: ops?.inTransitDate ?? "",
+      poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
       cin7Exists: orderCin7Map.get(snap.orderId) ?? false,
       cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
         ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
