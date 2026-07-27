@@ -95,9 +95,9 @@ export async function action({ request }: ActionFunctionArgs) {
     mondayItemId = await createMondayItem(itemName, fullRow);
     await prisma.orderLineItemOperationalData.update({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
-      data: { mondayItemId },
+      data: { mondayItemId, mondayItemName: itemName },
     });
-    console.log("[Monday][Sync] Created and saved mondayItemId:", mondayItemId);
+    console.log("[Monday][Sync] Created and saved mondayItemId:", mondayItemId, "name:", itemName);
   } else {
     // ── Conflict check: only for customerStatus and eddDate/originalEddDate.
     // Everything else (tracking, warehouse, dispatch, delivery, deposit, balance)
@@ -157,13 +157,17 @@ export async function action({ request }: ActionFunctionArgs) {
       await renameMondayItem(mondayItemId, itemName).catch((e) =>
         console.error("[Monday][Sync] rename failed", e),
       );
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        data: { mondayItemName: itemName },
+      });
     } catch (updateError) {
       if (isStaleMondayItemError(updateError)) {
         console.log(`[Monday][Sync] Stale/inactive mondayItemId ${mondayItemId}, creating a fresh item`);
         mondayItemId = await createMondayItem(itemName, fullRow);
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId } },
-          data: { mondayItemId, notesPushedCount: 0 },
+          data: { mondayItemId, mondayItemName: itemName, notesPushedCount: 0 },
         });
       } else {
         throw updateError;
@@ -302,5 +306,5 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Sync] Failed to persist cache status", cacheErr);
   }
 
-  return Response.json({ ok: true, mondayItemId, updated }, { headers: getCorsHeaders(request) });
+  return Response.json({ ok: true, mondayItemId, mondayItemName: itemName, updated }, { headers: getCorsHeaders(request) });
 }

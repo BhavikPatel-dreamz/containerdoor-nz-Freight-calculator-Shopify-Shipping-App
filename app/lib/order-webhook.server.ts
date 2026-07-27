@@ -500,7 +500,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       try {
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
-          data: { mondayItemId, mondayCachedStatus: "match", mondayCachedMismatches: "" },
+          data: { mondayItemId, mondayItemName: itemName, mondayCachedStatus: "match", mondayCachedMismatches: "" },
         });
         createdCount++;
       } catch (dbErr) {

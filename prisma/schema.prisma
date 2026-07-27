@@ -188,6 +188,8 @@ model OrderLineItemOperationalData {
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")
   mondayItemId      String   @default("")
+  /// Human Monday pulse name = Shopify order + letter, e.g. `#CDL215347A`
+  mondayItemName    String   @default("")
   depositPaid       String   @default("")
   balanceDue        String   @default("")
   notes             String   @default("")
