@@ -79,6 +79,7 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - **Carrier source of truth (display):** `ops.carrier` if set, else freight-code `company` from `OrderLineItemIndex` / shipping line. Same on list (`app._index.tsx`) and detail (`freight-orders.server.ts` / `order-api.ts`).
 - **At order create:** webhook writes per-variant carrier from shipping code into ops + index. Human labels via `companyLabels` (`app/lib/freight.ts`).
 - **Carrier is NOT editable** in OMS Tracking modal, Dispatch edit, or Shopify `order-status-block` for now — show read-only (“set at checkout”). Re-enable carrier edit later when product decides.
+- **Lock rule:** after create, do **not** update carrier from Monday/Cin7/Shopify sync callbacks. Carrier remains checkout-set unless product explicitly reopens carrier editing.
 - **Launch editable fields only:** Tracking # + Freight ref (per `orderId` + `variantId` — multi-line safe).
   - OMS: Tracking modal / header **Update Tracking**; Dispatch & Operational panel Edit buttons hidden for now.
   - Shopify admin block: Edit form = Tracking # + Freight ref only; API strips other fields when `source: shopify_admin_block`.
