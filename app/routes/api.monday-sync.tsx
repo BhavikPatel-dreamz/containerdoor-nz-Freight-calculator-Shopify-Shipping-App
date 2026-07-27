@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, buildMondayPulseName, renameMondayItem } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 function getCorsHeaders(request: Request) {
@@ -26,8 +26,8 @@ export async function action({ request }: ActionFunctionArgs) {
     return new Response(null, { status: 204, headers: getCorsHeaders(request) });
   }
   const { default: prisma } = await import("../db.server");
-  const { shop, orderId, variantId, itemName, row } = await request.json();
-  console.log("[Monday][Sync] Request received:", { shop, orderId, variantId, itemName, row });
+  const { shop, orderId, variantId, itemName: rawItemName, row } = await request.json();
+  console.log("[Monday][Sync] Request received:", { shop, orderId, variantId, itemName: rawItemName, row });
 
   let existing = await prisma.orderLineItemOperationalData.findUnique({
     where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -36,6 +36,29 @@ export async function action({ request }: ActionFunctionArgs) {
     console.log("[Monday][Sync] Line item not found in DB, aborting");
     return Response.json({ error: "Line item not found" }, { status: 404, headers: getCorsHeaders(request) });
   }
+
+  // Always prefer OMS order name + line letter (never product title).
+  const lineIndex = await prisma.orderLineItemIndex.findFirst({
+    where: { shop, orderId, variantId },
+    select: { orderName: true, letterSuffix: true },
+  });
+  const snapMeta = !lineIndex?.orderName
+    ? await prisma.orderSnapshot.findFirst({
+        where: { shop, orderId },
+        select: { orderName: true },
+      })
+    : null;
+  const nameSource = String(lineIndex?.orderName || snapMeta?.orderName || "").trim();
+  const clientName = String(rawItemName || "").trim();
+  const clientLooksLikeOrder =
+    Boolean(clientName) &&
+    (clientName.startsWith("#") || (!clientName.includes(" - ") && clientName.length <= 32));
+  const itemName = buildMondayPulseName(
+    nameSource || (clientLooksLikeOrder ? clientName : ""),
+    lineIndex?.letterSuffix,
+    orderId,
+  );
+  console.log("[Monday][Sync] Resolved pulse name:", itemName);
 
   const resolvedPaymentStatus = normalizePaymentStatus(
     String(existing.paymentStatus || "").trim() || String(row?.paymentStatus || "").trim(),
@@ -131,6 +154,9 @@ export async function action({ request }: ActionFunctionArgs) {
     console.log("[Monday][Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
     try {
       await updateMondayItem(mondayItemId, fullRow);
+      await renameMondayItem(mondayItemId, itemName).catch((e) =>
+        console.error("[Monday][Sync] rename failed", e),
+      );
     } catch (updateError) {
       if (isStaleMondayItemError(updateError)) {
         console.log(`[Monday][Sync] Stale/inactive mondayItemId ${mondayItemId}, creating a fresh item`);

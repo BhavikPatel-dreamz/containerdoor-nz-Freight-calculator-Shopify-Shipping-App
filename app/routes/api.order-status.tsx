@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
-import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl, buildMondayPulseName, renameMondayItem } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
@@ -841,7 +841,26 @@ export async function action({ request }: ActionFunctionArgs) {
         depositPaid: updated.depositPaid ?? "",
         balanceDue: updated.balanceDue ?? "",
       };
-      const itemName = mondayRow.productTitle || `Order ${orderId} - ${variantId}`;
+      const lineIndex = await prisma.orderLineItemIndex.findFirst({
+        where: {
+          orderId,
+          variantId,
+          ...(shopValue ? { shop: shopValue } : {}),
+        },
+        select: { orderName: true, letterSuffix: true },
+      });
+      const snapMeta = !lineIndex?.orderName
+        ? await prisma.orderSnapshot.findFirst({
+            where: { orderId, ...(shopValue ? { shop: shopValue } : {}) },
+            select: { orderName: true },
+          })
+        : null;
+      const itemName = buildMondayPulseName(
+        lineIndex?.orderName || snapMeta?.orderName,
+        lineIndex?.letterSuffix,
+        orderId,
+      );
+      mondayDebug.itemName = itemName;
 
       if (!updated.mondayItemId || updated.mondayItemId === "pending") {
         const newMondayId = await createMondayItem(itemName, mondayRow);
@@ -854,6 +873,10 @@ export async function action({ request }: ActionFunctionArgs) {
       } else {
         try {
           await updateMondayItem(updated.mondayItemId, mondayRow);
+          // Keep pulse name aligned with Shopify order + line letter (fixes old product-title names).
+          await renameMondayItem(updated.mondayItemId, itemName).catch((e) =>
+            console.error("[api.order-status] Monday rename failed", e),
+          );
           mondayDebug.action = "updated";
           mondayDebug.mondayItemId = updated.mondayItemId;
         } catch (mErr) {

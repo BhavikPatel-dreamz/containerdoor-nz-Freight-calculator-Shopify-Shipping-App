@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
-import { createMondayItem } from "./monday.server";
+import { createMondayItem, buildMondayPulseName } from "./monday.server";
 import { createCin7SalesOrder } from "./cin7.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
@@ -447,7 +447,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       }
 
       const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
-      const itemName = `${order.name ?? orderId}${letterSuffix}`;
+      const itemName = buildMondayPulseName(order.name, letterSuffix, orderId);
 
       let claimed = false;
       try {

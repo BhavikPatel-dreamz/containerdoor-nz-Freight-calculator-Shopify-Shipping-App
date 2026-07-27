@@ -61,6 +61,7 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Payment status: OMS UI often shows Shopify financial status when `ops.paymentStatus` is empty. Monday sync must send display payment (`Paid`/`Partial`/`Pending`/`Overdue`) and persist it if DB empty. Never push labels Monday board lacks (e.g. Refunded) — omit instead of failing whole mutation.
 - OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
 - Monday item URL: `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{mondayItemId}` via `buildMondayItemUrl()` in `monday.server.ts`.
+- Monday pulse **name** = Shopify order name + line letter (`#CDL215347A`) via `buildMondayPulseName()` — never product title. Rename on sync if old name was product title.
 - If EDD updates do not appear in Monday, check `syncTrace.monday.error` first; a different status-column label error can block EDD in the same mutation.
 
 ## Order amendments (CS)
