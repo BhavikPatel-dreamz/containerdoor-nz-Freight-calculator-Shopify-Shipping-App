@@ -138,10 +138,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
     console.log("[Monday][Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
     try {
+      // updateMondayItem also sets pulse `name` from lineOrderName (#CDL215347A)
       await updateMondayItem(mondayItemId, fullRow);
-      await renameMondayItem(mondayItemId, itemName).catch((e) =>
-        console.error("[Monday][Sync] rename failed", e),
-      );
+      await renameMondayItem(mondayItemId, itemName);
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
         data: { mondayItemName: itemName },

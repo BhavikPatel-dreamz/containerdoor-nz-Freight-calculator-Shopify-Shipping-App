@@ -217,7 +217,31 @@ export async function buildMondayRowFromOms(args: {
 export async function renameMondayItem(itemId: string, newName: string) {
   const name = String(newName || "").trim();
   if (!itemId || !name) return;
+  // Never allow product-title style names as the Monday pulse name.
+  if (name.includes(" - ") && name.length > 40) {
+    console.warn("[Monday] renameMondayItem refused product-title-like name:", name);
+    return;
+  }
   console.log("[Monday] renameMondayItem:", itemId, "→", name);
+
+  // Prefer change_multiple_column_values on the built-in "name" column
+  // (change_name_on_board is flaky / deprecated on some API versions).
+  try {
+    await mondayRequest(
+      `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id name }
+      }`,
+      {
+        boardId: process.env.MONDAY_BOARD_ID,
+        itemId,
+        columnValues: JSON.stringify({ name }),
+      },
+    );
+    return;
+  } catch (err) {
+    console.warn("[Monday] rename via name column failed, trying change_name_on_board", err);
+  }
+
   await mondayRequest(
     `mutation ($boardId: ID!, $itemId: ID!, $newName: String!) {
       change_name_on_board(board_id: $boardId, item_id: $itemId, new_name: $newName) { id name }
@@ -637,6 +661,12 @@ async function buildColumnValues(row: MondayRow) {
     return m ? m[1] : s.slice(0, 10);
   };
 
+  // Always set Monday pulse Name to Line Order # (e.g. #CDL215347A) — never product title.
+  const pulseName = String(row.lineOrderName || "").trim();
+  if (pulseName && !(pulseName.includes(" - ") && pulseName.length > 40)) {
+    values.name = pulseName;
+  }
+
   for (const key of Object.keys(FIELD_DEFS) as (keyof MondayRow)[]) {
     const colId = colIds[key];
     if (!colId) {
@@ -749,19 +779,28 @@ export async function findExistingMondayItemId(
 }
 
 export async function createMondayItem(itemName: string, row: MondayRow) {
-  console.log("[Monday] createMondayItem called:", itemName, row);
+  const safeName =
+    String(row.lineOrderName || itemName || "").trim() ||
+    buildMondayPulseName(null, null, row.orderId);
+  // Guard: never create with a product-title-like pulse name.
+  const pulseName =
+    safeName.includes(" - ") && safeName.length > 40
+      ? buildMondayPulseName(null, null, row.orderId)
+      : safeName;
+  console.log("[Monday] createMondayItem called:", pulseName, row);
   const groupId = await getValidGroupId();
   const query = `mutation ($boardId: ID!, $groupId: String, $itemName: String!, $columnValues: JSON!) {
     create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues) { id }
   }`;
 
-  let columnValues = await buildColumnValues(row);
+  const rowWithName = { ...row, lineOrderName: pulseName };
+  let columnValues = await buildColumnValues(rowWithName);
   let data;
   try {
     data = await mondayRequest(query, {
       boardId: process.env.MONDAY_BOARD_ID,
       groupId,
-      itemName,
+      itemName: pulseName,
       columnValues: JSON.stringify(columnValues),
     });
   } catch (err) {
@@ -770,18 +809,18 @@ export async function createMondayItem(itemName: string, row: MondayRow) {
         "[Monday] Stale column ID cache detected on create, clearing cache and retrying once",
       );
       columnIdCache = null;
-      columnValues = await buildColumnValues(row);
+      columnValues = await buildColumnValues(rowWithName);
       data = await mondayRequest(query, {
         boardId: process.env.MONDAY_BOARD_ID,
         groupId,
-        itemName,
+        itemName: pulseName,
         columnValues: JSON.stringify(columnValues),
       });
     } else {
       throw err;
     }
   }
-  console.log("[Monday] Item created with id:", data.create_item.id);
+  console.log("[Monday] Item created with id:", data.create_item.id, "name:", pulseName);
   return data.create_item.id as string;
 }
 
