@@ -1,0 +1,67 @@
+---
+description: Cin7 architecture — operational line item → adapter → Sales Order (per-line preferred)
+alwaysApply: true
+---
+
+# Cin7 architecture (ContainerDoor OMS)
+
+## Principle
+OMS domain = **Operational Line Items** (A/B/C…), never “Shopify order as the unit of fulfilment”.
+
+```
+Operational Line Item → Integration adapter → External system
+```
+
+Monday already follows this (one pulse per line). **Cin7 must too.**
+
+## Preferred mapping
+```
+Shopify #1001
+  Line A → Monday pulse A → Cin7 Sales Order A
+  Line B → Monday pulse B → Cin7 Sales Order B
+  Line C → Monday pulse C → Cin7 Sales Order C
+```
+
+## Cin7 API validation (Omni v1 SalesOrders)
+
+| Question | Answer |
+|----------|--------|
+| Can we create one SO per operational line? | **Yes.** `POST /v1/SalesOrders` accepts an array; each object is an independent Sales Order. |
+| API limitation that forces one SO per Shopify order? | **None found.** |
+| Why split anyway? | Cin7 has **one `trackingCode` per Sales Order** (max 50). One SO for multi-line OMS breaks independent tracking/dispatch. |
+| Can multiple SOs reference same Shopify order? | **Yes.** Use shared `customerOrderNo` = Shopify order name (`#CDL215347`). Unique `reference` per line (max **30** chars) e.g. `#CDL215347A` (same as Monday pulse name). |
+| Relationship keys | Shopify `orderId` + `variantId` → OMS line ops → `mondayItemId` + `cin7SalesOrderId` |
+
+Other useful fields: `logisticsCarrier`, `estimatedDeliveryDate`, `internalComments`, `deliveryInstructions`, `freightDescription`. No first-class “freight ref” field — put consignment ref in `freightDescription` / comments / custom field if needed later.
+
+## Adapter (do not hardcode grouping in OMS)
+- Module: `app/lib/cin7-adapter.server.ts`
+- Env: `CIN7_SO_STRATEGY=per_line` (default) | `grouped` (legacy only)
+- Helpers: `buildCin7SalesOrderReference`, `buildCin7CustomerOrderNo`, `resolveCin7SalesOrderId`, `saveCin7LineLink`
+- **Resolve order:** line `cin7SalesOrderId` first → fall back to order-level legacy id
+- Changing strategy later = adapter + create path only; OMS line-item CRUD stays unchanged
+
+## Schema
+| Location | Field | Role |
+|----------|-------|------|
+| `OrderLineItemOperationalData` | `cin7SalesOrderId` | **Canonical** Cin7 SO id for the line |
+| same | `cin7SalesOrderCode` | Cin7 returned `code` |
+| same | `cin7SalesOrderRef` | Our `reference` sent on create |
+| `OrderOperationalData` | `cin7SalesOrderId` | **Legacy** grouped SO / “any link” mirror — do not use as source of truth for line sync |
+
+## Current code debt (migrate toward adapter)
+- Webhook `createCin7EntryForOrder` still creates **one grouped** SO (all SKUs) + writes order-level id only.
+- `api.cin7-create`, `api.cin7-update`, `api.cin7-status`, `sync-middleware`, `api.order-status` still resolve order-level id (middleware should use `resolveCin7SalesOrderId`).
+- `extractCarrierFromOrder` broken (returns shipping title) — fix when touching create.
+- Notes / bulk Cin7 UI still Coming Soon.
+
+## Implementation order
+1. Schema meta fields + adapter + `resolveCin7SalesOrderId` everywhere (sync/status/update).
+2. Webhook + `/api/cin7-create`: create **per freight line** SO; store on line ops; `customerOrderNo` = order name; `reference` = `#OrderLetter`.
+3. Status/diff/update per line against that line’s SO.
+4. Enable notes → `appendCin7InternalComment` on **line** SO.
+5. Legacy: keep reading order-level id until backfill; optional backfill script later.
+6. Never teach OMS UI to edit “the order’s Cin7 id” as the operational unit.
+
+## Auth / env
+`CIN7_USERNAME` + `CIN7_SYNC_TOKEN` (Basic) + `CIN7_SYNC_URL` or `CIN7_BASE_URL` + optional `CIN7_SO_STRATEGY`.

@@ -23,7 +23,9 @@ import { syncChangesToShopify } from "./shopify-sync.server";
 import {
   syncCin7EstimatedDispatchDate,
   syncCin7TrackingNumber,
+  syncCin7Carrier,
 } from "./cin7.server";
+import { resolveCin7SalesOrderId } from "./cin7-adapter.server";
 
 // ─── Source identifiers ──────────────────────────────────────────────────────
 export type SyncSource = "shopify" | "monday" | "cin7" | "admin" | "webhook";
@@ -143,15 +145,12 @@ export async function pushLineItemToAllSystems(
     }
   }
 
-  // ── Push to Cin7 (skip if source is cin7) ──
+  // ── Push to Cin7 (skip if source is cin7) — resolve per operational line ──
   if (source !== "cin7") {
     try {
-      const orderRecord = await prisma.orderOperationalData.findUnique({
-        where: { shop_orderId: { shop, orderId } },
-        select: { cin7SalesOrderId: true },
-      });
-      const salesOrderId = orderRecord?.cin7SalesOrderId?.trim();
-      if (salesOrderId && salesOrderId !== "pending") {
+      const link = await resolveCin7SalesOrderId({ shop, orderId, variantId });
+      const salesOrderId = link.salesOrderId;
+      if (salesOrderId) {
         if (fields.eddDate !== undefined) {
           await syncCin7EstimatedDispatchDate({
             salesOrderId,
@@ -164,6 +163,12 @@ export async function pushLineItemToAllSystems(
             salesOrderId,
             trackingNumber: fields.trackingNumber,
             reference: orderId,
+          });
+        }
+        if (fields.carrier !== undefined) {
+          await syncCin7Carrier({
+            salesOrderId,
+            carrier: fields.carrier,
           });
         }
         log("cin7", true);

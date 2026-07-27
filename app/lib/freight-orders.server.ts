@@ -174,7 +174,10 @@ export function buildRowFromSnapshot(
       portArrivalDate: ops?.portArrivalDate ?? "",
       inTransitDate: ops?.inTransitDate ?? "",
       poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
-      cin7Exists: orderCin7Map.get(snap.orderId) ?? false,
+      // Prefer per-line Cin7 link; fall back to legacy order-level SO
+      cin7Exists:
+        Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
+        (orderCin7Map?.get(snap.orderId) ?? false),
       cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
         ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
         : undefined,
@@ -259,7 +262,9 @@ export function buildRow(
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
-      cin7Exists: orderCin7Map.get(numericOrderId) ?? false,
+      cin7Exists:
+        Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
+        (orderCin7Map.get(numericOrderId) ?? false),
       // Restore persisted cached statuses so the UI shows DB values after a reload
       cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
         ? (ops.cin7CachedStatus.trim().toLowerCase() as any)

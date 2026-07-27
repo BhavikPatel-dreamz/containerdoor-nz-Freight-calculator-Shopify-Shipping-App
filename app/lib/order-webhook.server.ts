@@ -3,6 +3,13 @@ import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms } from "./monday.server";
 import { createCin7SalesOrder } from "./cin7.server";
+import {
+  buildCin7CustomerOrderNo,
+  buildCin7SalesOrderReference,
+  getCin7SoStrategy,
+  isLinkedCin7Id,
+  saveCin7LineLink,
+} from "./cin7-adapter.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -98,9 +105,13 @@ export function extractPhoneFromOrder(order: OrderPayload): string {
 export function extractCarrierFromOrder(order: OrderPayload): string {
   const shippingLines = order.shipping_lines ?? [];
   const code = shippingLines.find((l) => l?.code)?.code ?? "";
-  const carrier = isFreightShippingCode(code) ? "" : "";
-
-  if (carrier) return carrier;
+  if (isFreightShippingCode(code)) {
+    // Format: "standard_delivery::TGE,MAINFREIGHT::4boxes::..."
+    const parts = code.split("::");
+    const carriers = parts[1]?.split(",") ?? [];
+    const first = carriers[0]?.trim() ?? "";
+    if (first) return first;
+  }
   return shippingLines.find((l) => l?.title)?.title ?? "";
 }
 
@@ -321,10 +332,211 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
 }
 
 // ─── Cin7 order creation ─────────────────────────────────────────────────────
+// Preferred: one Cin7 Sales Order per operational freight line (CIN7_SO_STRATEGY=per_line).
+// Legacy grouped mode kept behind CIN7_SO_STRATEGY=grouped — see oms-cin7-architecture.mdc.
 
 export async function createCin7EntryForOrder(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
-  console.log(`[Cin7][Webhook][${orderId}] START for order ${order.name}`);
+  const strategy = getCin7SoStrategy();
+  console.log(`[Cin7][Webhook][${orderId}] START strategy=${strategy} for order ${order.name}`);
+
+  if (strategy === "per_line") {
+    return createCin7EntriesPerLine(shop, order);
+  }
+  return createCin7EntryGroupedLegacy(shop, order);
+}
+
+async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+
+  try {
+    const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    if (!freightLine) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - no freight shipping line`);
+      return;
+    }
+
+    const breakdown = parseFreightCode(
+      freightLine.code,
+      order.line_items?.map((li) => ({
+        variant_id: li.variant_id,
+        title: li.title,
+        sku: li.sku,
+      })),
+    );
+    if (!breakdown?.lineItems?.length) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - could not parse freight lines`);
+      return;
+    }
+
+    const shipping = getShippingAddress(order);
+    const billing = getBillingAddress(order);
+    const customer = getCustomer(order);
+    const customerOrderNo = buildCin7CustomerOrderNo(order.name, orderId);
+    const currencyCode =
+      order.current_total_price_set?.presentment_money?.currency_code ?? "NZD";
+
+    // Ensure order-ops row exists (claim marker for UI "has Cin7 work").
+    await prisma.orderOperationalData.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      create: { shop, orderId, cin7SalesOrderId: "pending" },
+      update: {},
+    });
+
+    let created = 0;
+    let skipped = 0;
+    let failed = 0;
+
+    for (const [idx, li] of breakdown.lineItems.entries()) {
+      if (!li.variantId) {
+        skipped++;
+        continue;
+      }
+
+      const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
+      const reference = buildCin7SalesOrderReference({
+        orderName: order.name,
+        letterSuffix,
+        orderId,
+        variantId: li.variantId,
+      });
+
+      let ops = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+      });
+      if (!ops) {
+        try {
+          ops = await prisma.orderLineItemOperationalData.create({
+            data: {
+              shop,
+              orderId,
+              variantId: li.variantId,
+              productTitle: li.title ?? "",
+              carrier: li.company ?? "",
+              cin7SalesOrderId: "pending",
+            },
+          });
+        } catch {
+          ops = await prisma.orderLineItemOperationalData.findUnique({
+            where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+          });
+        }
+      }
+      if (!ops) {
+        failed++;
+        console.error(`[Cin7][Webhook][${orderId}] No ops row for variant ${li.variantId}`);
+        continue;
+      }
+
+      if (isLinkedCin7Id(ops.cin7SalesOrderId)) {
+        skipped++;
+        continue;
+      }
+
+      const shopifyLine = (order.line_items ?? []).find(
+        (x) => String(x.variant_id) === String(li.variantId),
+      );
+      const sku = String(li.sku || shopifyLine?.sku || "").trim();
+      if (!sku) {
+        console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
+        skipped++;
+        continue;
+      }
+
+      await prisma.orderLineItemOperationalData.update({
+        where: { id: ops.id },
+        data: {
+          cin7SalesOrderId: "pending",
+          cin7SalesOrderRef: reference,
+          productTitle: li.title ?? ops.productTitle,
+          carrier: li.company || ops.carrier,
+        },
+      });
+
+      try {
+        const qty = Number(shopifyLine?.quantity ?? 1) || 1;
+        const unitPrice = Number(
+          shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
+        );
+        const result = await createCin7SalesOrder({
+          reference,
+          firstName: shipping.first_name ?? customer.first_name ?? "",
+          lastName: shipping.last_name ?? customer.last_name ?? "",
+          company: shipping.company ?? "",
+          email: order.email ?? customer.email ?? "",
+          phone: extractPhoneFromOrder(order),
+          deliveryAddress1: shipping.address1 ?? "",
+          deliveryCity: shipping.city ?? "",
+          deliveryState: shipping.province ?? "",
+          deliveryPostalCode: shipping.zip ?? "",
+          deliveryCountry: shipping.country ?? shipping.country_code ?? "",
+          billingFirstName: billing.first_name ?? shipping.first_name ?? customer.first_name ?? "",
+          billingLastName: billing.last_name ?? shipping.last_name ?? customer.last_name ?? "",
+          billingCompany: billing.company ?? shipping.company ?? "",
+          billingAddress1: billing.address1 ?? shipping.address1 ?? "",
+          billingCity: billing.city ?? shipping.city ?? "",
+          billingState: billing.province ?? shipping.province ?? "",
+          billingPostalCode: billing.zip ?? shipping.zip ?? "",
+          billingCountry:
+            billing.country ?? billing.country_code ?? shipping.country ?? shipping.country_code ?? "",
+          logisticsCarrier: li.company || extractCarrierFromOrder(order),
+          currencyCode,
+          customerOrderNo,
+          internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
+          taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
+          taxStatus: order.taxes_included ? "Incl" : "Excl",
+          lineItems: [
+            {
+              code: sku,
+              name: li.title ?? shopifyLine?.title ?? "",
+              qty,
+              unitPrice,
+            },
+          ],
+        });
+
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: String(result.id),
+          salesOrderCode: result.code || "",
+          salesOrderRef: reference,
+          mirrorToOrder: true,
+        });
+        created++;
+        console.log(
+          `[Cin7][Webhook][${orderId}] line ${letterSuffix} OK id=${result.id} ref=${reference}`,
+        );
+      } catch (e: any) {
+        failed++;
+        if (e?.isDuplicate) {
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { cin7SalesOrderId: "duplicate" },
+          });
+        } else {
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { cin7SalesOrderId: "" },
+          });
+        }
+        console.error(`[Cin7][Webhook][${orderId}] line ${letterSuffix} FAILED`, e);
+      }
+    }
+
+    console.log(
+      `[Cin7][Webhook][${orderId}] DONE per_line created=${created} skipped=${skipped} failed=${failed}`,
+    );
+  } catch (error) {
+    console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
+  }
+}
+
+/** Legacy: one Cin7 SO containing all SKUs for the Shopify order. */
+async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  console.log(`[Cin7][Webhook][${orderId}] START grouped (legacy) for order ${order.name}`);
 
   try {
     let claimed = false;
@@ -359,7 +571,7 @@ export async function createCin7EntryForOrder(shop: string, order: OrderPayload)
     const customer = getCustomer(order);
 
     const result = await createCin7SalesOrder({
-      reference: `Shopify-${order.name ?? orderId}`,
+      reference: `Shopify-${order.name ?? orderId}`.slice(0, 30),
       firstName: shipping.first_name ?? customer.first_name ?? "",
       lastName: shipping.last_name ?? customer.last_name ?? "",
       company: shipping.company ?? "",
@@ -381,7 +593,7 @@ export async function createCin7EntryForOrder(shop: string, order: OrderPayload)
       logisticsCarrier: extractCarrierFromOrder(order),
       currencyCode: order.current_total_price_set?.presentment_money?.currency_code ?? "NZD",
       customerOrderNo: order.name ?? orderId,
-      internalComments: `Auto-created from Shopify order ${order.name ?? orderId}`,
+      internalComments: `Auto-created from Shopify order ${order.name ?? orderId} (grouped legacy)`,
       freightTotal: Number(
         (order as any).shipping_lines?.[0]?.discounted_price_set?.presentment_money?.amount ??
           (order as any).current_shipping_price_set?.presentment_money?.amount ?? 0,
@@ -399,7 +611,7 @@ export async function createCin7EntryForOrder(shop: string, order: OrderPayload)
       data: { cin7SalesOrderId: String(result.id) },
     });
 
-    console.log(`[Cin7][Webhook][${orderId}] SUCCESS - id=${result.id}, code=${result.code}`);
+    console.log(`[Cin7][Webhook][${orderId}] SUCCESS grouped id=${result.id}, code=${result.code}`);
   } catch (error) {
     console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
   }

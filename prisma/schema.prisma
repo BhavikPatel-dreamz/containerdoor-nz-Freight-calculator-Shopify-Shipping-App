@@ -156,6 +156,9 @@ model OrderOperationalData {
   receivedDate        String   @default("")
   portArrivalDate     String   @default("")
   inTransitDate       String   @default("")
+  /// LEGACY: one SO for whole Shopify order (grouped strategy). Prefer
+  /// OrderLineItemOperationalData.cin7SalesOrderId (per-line). Kept for
+  /// backwards compat + "order has any Cin7 link" UI. See oms-cin7-architecture.mdc.
   cin7SalesOrderId    String   @default("")
   cin7StatusCheckedAt DateTime?
   mondayStatusCheckedAt DateTime?
@@ -200,7 +203,12 @@ model OrderLineItemOperationalData {
   receivedDate      String   @default("")
   portArrivalDate   String   @default("")
   inTransitDate     String   @default("")
+  /// Canonical Cin7 Sales Order id for THIS operational line (preferred).
   cin7SalesOrderId  String   @default("")
+  /// Cin7 API `code` returned on create (human-readable SO code).
+  cin7SalesOrderCode String  @default("")
+  /// Reference we sent to Cin7 (`reference`, ≤30 chars) e.g. `#CDL215347A`.
+  cin7SalesOrderRef  String  @default("")
   cin7CachedStatus  String   @default("")
   cin7CachedMismatches String @default("")
   mondayCachedStatus  String   @default("")
