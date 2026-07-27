@@ -69,6 +69,7 @@ export function mergeStatusLineIntoItem<T extends Record<string, any>>(
     depositPaid: line.depositPaid ?? item.depositPaid,
     balanceDue: line.balanceDue ?? item.balanceDue,
     company: (line.carrier && String(line.carrier).trim()) || item.company,
+    mondayItemId: line.mondayItemId ?? item.mondayItemId,
   };
 }
 

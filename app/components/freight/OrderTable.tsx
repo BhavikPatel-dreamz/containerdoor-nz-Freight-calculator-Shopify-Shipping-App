@@ -237,7 +237,10 @@ export function OrderTable({
                         {!hiddenColumns.has("monday") && (() => {
                           const status = item.mondayStatus ?? "missing";
                           const cellKey = `${order.id}-${item.variantId}-monday`;
-                          if (status === "match") return <span className="fo-sync-pill green">Monday ✓</span>;
+                          if (status === "match") {
+                            const mUrl = item.mondayItemId && item.mondayBoardId ? `https://monday.com/boards/${item.mondayBoardId}/pulses/${item.mondayItemId}` : null;
+                            return mUrl ? <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }}>Monday ✓</a> : <span className="fo-sync-pill green">Monday ✓</span>;
+                          }
                           if (status === "mismatch") {
                             return (
                               <button

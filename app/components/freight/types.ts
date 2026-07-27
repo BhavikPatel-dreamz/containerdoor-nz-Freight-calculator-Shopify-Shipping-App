@@ -34,6 +34,8 @@ export type FreightLineItem = {
   cin7Exists?: boolean;
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
+  mondayItemId?: string;
+  mondayBoardId?: string;
   mondayStatus?: "match" | "mismatch" | "missing";
   mondayMismatches?: string[];
 };

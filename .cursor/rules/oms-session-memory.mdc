@@ -55,6 +55,12 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Customer Account freight block also reads live OMS via `GET /api/order-status`.
 - Internal notes do not sync to Shopify automatically.
 
+## Monday sync guardrails
+- Monday `change_multiple_column_values` fails the whole mutation if one status label is invalid; normalize labels before push.
+- Always map incoming status casing to exact Monday labels for `warehouseStatus`, `dispatchStatus`, `deliveryStatus`, `customerStatus`, and `paymentStatus`.
+- OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
+- If EDD updates do not appear in Monday, check `syncTrace.monday.error` first; a different status-column label error can block EDD in the same mutation.
+
 ## Order amendments (CS)
 - Detail → Customer → **Amend** (full-screen panel).
 - Done: contact, address, delivery instructions, soft cancel line/order + audit + Shopify/Monday where applicable.
