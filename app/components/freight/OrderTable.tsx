@@ -52,14 +52,14 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line order #</th><th>Customer</th><th>Product / Variant / SKU / ID</th>
+            <th>Line #</th><th>Customer</th><th>Product</th>
             {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th>EDD (current / orig)</th><th>Customer status</th>
+            <th>EDD</th><th>Status</th>
             {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
-            {!hiddenColumns.has("payment") && <th>Payment status</th>}
+            {!hiddenColumns.has("payment") && <th>Payment</th>}
             {!hiddenColumns.has("carrier") && <th>Carrier</th>}
-            {!hiddenColumns.has("tracking") && <th>Tracking #</th>}
-            {!hiddenColumns.has("freightRef") && <th>Freight ref</th>}
+            {!hiddenColumns.has("tracking") && <th>Tracking</th>}
+            {!hiddenColumns.has("freightRef") && <th>Ref</th>}
             {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && <th>Sync</th>}
             <th>Actions</th>
           </tr>
@@ -103,17 +103,17 @@ export function OrderTable({
                     <div className="fo-cust-email">{order.email}</div>
                   </td>
                   <td className="fo-td fo-td-product">
-                    <div className="fo-prod-name">
-                      {item.title || "—"}
-                      {/* {" "} */}
-                      {/* <span style={{ color: "#6b7280", fontWeight: 400 }}>x {item.boxes || 1}</span> */}
+                    <div className="fo-prod-stack">
+                      <div className="fo-prod-name" title={item.title || undefined}>{item.title || "—"}</div>
+                      {item.variantTitle ? (
+                        <div className="fo-prod-variant" title={item.variantTitle}>{item.variantTitle}</div>
+                      ) : null}
+                      <div className="fo-prod-meta">
+                        {item.sku ? <span className="fo-prod-sku" title={item.sku}>SKU {item.sku}</span> : null}
+                        {item.productId ? <span className="fo-prod-id" title={item.productId}>ID {item.productId}</span> : null}
+                        {!item.sku && !item.productId ? <span className="fo-prod-sku">—</span> : null}
+                      </div>
                     </div>
-                    {item.variantTitle && (
-                      <span style={{ display: "block", fontSize: "11px", color: "#374151" }}>{item.variantTitle}</span>
-                    )}
-                    <span className="fo-prod-sku" style={{ display: "block", fontFamily: "monospace", fontSize: "11px", color: "#6b7280" }}>
-                      {item.sku || "—"}{item.productId ? ` · ID ${item.productId}` : ""}
-                    </span>
                   </td>
                   {!hiddenColumns.has("supplier") && (
                     <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
