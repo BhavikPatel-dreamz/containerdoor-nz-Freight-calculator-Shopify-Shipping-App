@@ -20,7 +20,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const records = await prisma.orderLineItemOperationalData.findMany({
       where: { shop, orderId: { in: orders.map((o) => o.orderId) } },
-      select: { orderId: true, variantId: true, mondayItemId: true, trackingNumber: true, eddDate: true, customerStatus: true, mondayCachedStatus: true, mondayCachedMismatches: true },
+      select: { orderId: true, variantId: true, mondayItemId: true, trackingNumber: true, eddDate: true, customerStatus: true, paymentStatus: true, mondayCachedStatus: true, mondayCachedMismatches: true },
     });
     const recordMap = new Map(records.map((r) => [`${r.orderId}::${r.variantId}`, r]));
 
@@ -83,6 +83,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           const wantStatus = (rec.customerStatus || "").toLowerCase();
           const haveStatus = (mondayData.customerStatus || "").toLowerCase();
           if (wantStatus && wantStatus !== haveStatus) mismatches.push("customerStatus");
+          const wantPayment = (rec.paymentStatus || "").trim().toLowerCase();
+          const havePayment = (mondayData.paymentStatus || "").trim().toLowerCase();
+          if (wantPayment && wantPayment !== havePayment) mismatches.push("paymentStatus");
 
           results.push({ variantId: li.variantId, status: mismatches.length ? "mismatch" : "match", mismatches });
         }

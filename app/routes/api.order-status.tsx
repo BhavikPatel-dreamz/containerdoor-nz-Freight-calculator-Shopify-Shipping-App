@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl } from "../lib/monday.server";
+import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
@@ -463,6 +464,9 @@ export async function action({ request }: ActionFunctionArgs) {
     if (!String(updateData.carrier || "").trim() && existing?.carrier) {
       delete updateData.carrier;
     }
+    if (Object.prototype.hasOwnProperty.call(updateData, "paymentStatus")) {
+      updateData.paymentStatus = normalizePaymentStatus(updateData.paymentStatus);
+    }
 
     const payload = { ...updateData } as Record<string, string | Date>;
     if (existing) {
@@ -826,7 +830,7 @@ export async function action({ request }: ActionFunctionArgs) {
         sku: "",
         boxes: "",
         customerStatus: updated.customerStatus ?? "",
-        paymentStatus: updated.paymentStatus ?? "",
+        paymentStatus: normalizePaymentStatus(updated.paymentStatus ?? ""),
         shop: shopValue || updated.shop || "",
         orderId,
         variantId,

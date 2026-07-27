@@ -329,7 +329,7 @@ const paymentStatusLabelMap: Record<string, string> = {
   partial: "Partial",
   pending: "Pending",
   overdue: "Overdue",
-  refunded: "Refunded",
+  // Shopify financial statuses
   complete: "Paid",
   fully_paid: "Paid",
   authorized: "Paid",
@@ -340,7 +340,36 @@ const paymentStatusLabelMap: Record<string, string> = {
   unpaid: "Pending",
   authorized_pending_capture: "Pending",
   outstanding: "Pending",
+  // spaced variants
+  "fully paid": "Paid",
+  "partially paid": "Partial",
+  "partially refunded": "Partial",
+  "pending payment": "Pending",
 };
+
+/** Monday Payment Status board labels only — omit unknown to avoid whole-mutation fail. */
+const MONDAY_PAYMENT_LABELS = new Set(["Paid", "Partial", "Pending", "Overdue"]);
+
+function resolveMondayPaymentLabel(raw: string): string | null {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const key = v.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const underscored = v.toLowerCase().replace(/[\s-]+/g, "_");
+  const mapped =
+    paymentStatusLabelMap[key] ||
+    paymentStatusLabelMap[underscored] ||
+    paymentStatusLabelMap[v.toLowerCase()] ||
+    null;
+  if (mapped && MONDAY_PAYMENT_LABELS.has(mapped)) return mapped;
+  // Already a valid Monday label (exact casing)
+  if (MONDAY_PAYMENT_LABELS.has(v)) return v;
+  const titleCase = MONDAY_PAYMENT_LABELS.has(
+    v.charAt(0).toUpperCase() + v.slice(1).toLowerCase(),
+  )
+    ? v.charAt(0).toUpperCase() + v.slice(1).toLowerCase()
+    : null;
+  return titleCase;
+}
 
 const warehouseStatusLabelMap: Record<string, string> = {
   pending: "Not received",
@@ -402,10 +431,8 @@ async function buildColumnValues(row: MondayRow) {
         };
     } else if (key === "paymentStatus") {
       const paymentStatusVal = val as string;
-      if (paymentStatusVal)
-        values[colId] = {
-          label: paymentStatusLabelMap[paymentStatusVal.toLowerCase()] ?? paymentStatusVal,
-        };
+      const label = resolveMondayPaymentLabel(paymentStatusVal);
+      if (label) values[colId] = { label };
     } else if (key === "warehouseStatus") {
       const statusVal = val as string;
       if (statusVal)

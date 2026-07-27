@@ -915,7 +915,7 @@ export default function FreightDashboard({
     const key = `${order.id}-${item.variantId}-monday`;
     if (mondayFixingId) return; setMondayFixingId(key);
     try {
-      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId, variantId: item.variantId, itemName: `${order.shopifyOrderName}${item.letterSuffix}`, row: { customerName: order.customerName, email: order.email, carriers: item.company, trackingNumber: item.trackingNumber, eddDate: item.eddDate, originalEddDate: item.originalEddDate, productTitle: item.title ?? "", sku: item.sku ?? "", boxes: item.boxes ?? "", customerStatus: item.customerStatus } }) });
+      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId, variantId: item.variantId, itemName: `${order.shopifyOrderName}${item.letterSuffix}`, row: { customerName: order.customerName, email: order.email, carriers: item.company, trackingNumber: item.trackingNumber, eddDate: item.eddDate, originalEddDate: item.originalEddDate, productTitle: item.title ?? "", sku: item.sku ?? "", boxes: item.boxes ?? "", customerStatus: item.customerStatus, paymentStatus: item.paymentStatus ?? "" } }) });
       if (!res.ok) throw new Error("Failed to sync Monday");
       const json = await res.json();
       const updated = json.updated || {};
@@ -983,7 +983,7 @@ export default function FreightDashboard({
   const handleSync = async () => {
     if (!detailView) return; setIsSyncing(true);
     try {
-      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, itemName: `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix}`, row: { customerName: detailView.order.customerName, email: detailView.order.email, carriers: detailView.item.company, trackingNumber: detailView.item.trackingNumber, eddDate: detailView.item.eddDate, originalEddDate: detailView.item.originalEddDate, productTitle: detailView.item.title ?? "", sku: detailView.item.sku ?? "", boxes: detailView.item.boxes ?? "", customerStatus: detailView.item.customerStatus } }) });
+      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, itemName: `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix}`, row: { customerName: detailView.order.customerName, email: detailView.order.email, carriers: detailView.item.company, trackingNumber: detailView.item.trackingNumber, eddDate: detailView.item.eddDate, originalEddDate: detailView.item.originalEddDate, productTitle: detailView.item.title ?? "", sku: detailView.item.sku ?? "", boxes: detailView.item.boxes ?? "", customerStatus: detailView.item.customerStatus, paymentStatus: detailView.item.paymentStatus ?? "" } }) });
       if (!res.ok) throw new Error("Sync failed");
       const json = await res.json();
       const applySync = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }) };
