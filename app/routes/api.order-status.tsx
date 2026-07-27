@@ -302,6 +302,24 @@ export async function loader({ request }: LoaderFunctionArgs) {
       lineItems = lineItems.filter((r) => r.productTitle !== "");
     }
 
+    // Carrier: prefer OMS ops override, else freight code on line index (per variant).
+    try {
+      const indexRows = await prisma.orderLineItemIndex.findMany({
+        where: { orderId, ...(shop ? { shop } : {}) },
+        select: { variantId: true, company: true },
+      });
+      const indexCarrier = new Map(indexRows.map((r) => [r.variantId, r.company]));
+      lineItems = lineItems.map((r) => ({
+        ...r,
+        carrier:
+          (r.carrier && String(r.carrier).trim()) ||
+          indexCarrier.get(r.variantId) ||
+          "",
+      }));
+    } catch (e) {
+      console.error("[api.order-status] index carrier lookup failed", e);
+    }
+
     // ── Fetch activity log (line-item scoped when variantId present) ──
     let communications: Awaited<ReturnType<typeof getCommunicationLogForOrder>> = [];
     try {
@@ -436,6 +454,13 @@ export async function action({ request }: ActionFunctionArgs) {
     const updateData: Record<string, string> = {};
     for (const key of EDITABLE_FIELDS) {
       if (key in data) updateData[key] = String(data[key] ?? "");
+    }
+    // Shopify admin block: launch phase — tracking # + freight ref only (per line item).
+    if (activitySource === "shopify_admin_block") {
+      const allowed = new Set(["productTitle", "trackingNumber", "freightRef"]);
+      for (const key of Object.keys(updateData)) {
+        if (!allowed.has(key)) delete updateData[key];
+      }
     }
     const requestedFieldKeys = Object.keys(updateData);
 

@@ -145,7 +145,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
-      ops."customerStatus", ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
+      ops."customerStatus", ops."carrier" AS ops_carrier, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
       ops."warehouseStatus", ops."warehouseTags", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
       ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
@@ -175,7 +175,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       vendor: r.vendor || "",
       sku: r.sku || "",
       productId: r.productId || "",
-      company: r.company || "",
+      // Prefer OMS carrier override; fall back to freight code on index (same as detail page)
+      company: (r.ops_carrier && String(r.ops_carrier).trim()) || r.company || "",
       boxes: Number(r.boxes ?? 0),
       amount: Number(r.amount ?? 0),
       letterSuffix: r.letterSuffix || "",

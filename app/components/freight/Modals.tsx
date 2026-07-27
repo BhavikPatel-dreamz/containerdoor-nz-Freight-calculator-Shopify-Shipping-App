@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { getRefPrefix } from "./helpers";
+import { companyLabels } from "../../lib/freight";
 import {
   CUSTOMER_STATUS_OPTIONS,
   WAREHOUSE_STATUS_OPTIONS,
@@ -46,28 +46,18 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
         </div>
         <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
           {trackingError && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{trackingError}</div>}
+          {tm.item.company ? (
+            <div style={{ fontSize: "13px", color: "#475569" }}>
+              Carrier: <strong style={{ color: "#2563eb" }}>{companyLabels[tm.item.company as keyof typeof companyLabels] ?? tm.item.company}</strong>
+              <span style={{ display: "block", fontSize: "11px", marginTop: "4px" }}>Set at checkout — not editable here</span>
+            </div>
+          ) : null}
+          {/* Carrier edit — future phase
           <div>
             <label className="fo-field-label" htmlFor="t-carrier">Carrier</label>
-            <div style={{ position: "relative" }}>
-              <select id="t-carrier" className="fo-input" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: "36px", cursor: "pointer" }}
-                value={trackingForm.carrier}
-                onChange={(e) => {
-                  const carrier = e.target.value;
-                  setTrackingForm((p) => {
-                    const prevPrefix = getRefPrefix(p.carrier);
-                    const newPrefix = getRefPrefix(carrier);
-                    const shouldUpdateRef = !p.freightRef || p.freightRef === prevPrefix;
-                    return { ...p, carrier, freightRef: shouldUpdateRef ? newPrefix : p.freightRef };
-                  });
-                }}>
-                <option value="">Select carrier...</option>
-                <option value="MAINFREIGHT">Mainfreight</option><option value="NZP">NZ Post</option>
-                <option value="TGE">Team Global Express</option><option value="FLIWAY">Fliway - Linehaul</option>
-                <option value="CASTLE">Castle</option><option value="M2H">M2H</option>
-              </select>
-              <svg style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#6b7280" }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
-            </div>
+            ...
           </div>
+          */}
           <div>
             <label className="fo-field-label" htmlFor="t-num">Tracking number</label>
             <input id="t-num" className="fo-input" placeholder="e.g. MF8821003" value={trackingForm.trackingNumber} onChange={(e) => setTrackingForm((p) => ({ ...p, trackingNumber: e.target.value }))} />
@@ -76,16 +66,7 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
             <label className="fo-field-label" htmlFor="t-ref">Freight / consignment reference</label>
             <input id="t-ref" className="fo-input" placeholder="Optional" value={trackingForm.freightRef} onChange={(e) => setTrackingForm((p) => ({ ...p, freightRef: e.target.value }))} />
           </div>
-          <div>
-            <label className="fo-field-label" htmlFor="t-method">Delivery method</label>
-            <div style={{ position: "relative" }}>
-              <select id="t-method" className="fo-input" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: "36px", cursor: "pointer" }}
-                value={trackingForm.deliveryMethod} onChange={(e) => setTrackingForm((p) => ({ ...p, deliveryMethod: e.target.value }))}>
-                <option>Standard</option><option>Express</option><option>Overnight</option><option>Depot pickup</option>
-              </select>
-              <svg style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#6b7280" }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
-            </div>
-          </div>
+          {/* Delivery method edit — future phase */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", padding: "14px 16px", borderRadius: "8px", background: "#f0fdf4", border: "1px solid #bbf7d0" }}>
             <div>
               <div style={{ fontSize: "13px", fontWeight: 600, color: "#111827" }}>Queue customer email</div>
@@ -350,7 +331,7 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             <span style={{ fontSize: "16px" }}>📦</span>
             <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
-              Edit Dispatch &amp; Freight — <span style={{ color: "#2563eb" }}>{order.shopifyOrderName}</span>{item.letterSuffix}
+              Edit Tracking &amp; Freight ref — <span style={{ color: "#2563eb" }}>{order.shopifyOrderName}</span>{item.letterSuffix}
             </span>
           </div>
           <button className="fo-modal-close" onClick={onClose}>✕</button>
@@ -363,23 +344,12 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
         </div>
         <div style={{ padding: "18px 20px", display: "flex", flexDirection: "column", gap: "14px" }}>
           {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{error}</div>}
-          <div>
-            <label className="fo-field-label" htmlFor="de-edd">Current EDD</label>
-            <input id="de-edd" type="date" className="fo-input" value={form.eddDate} onChange={(e) => setForm((p) => ({ ...p, eddDate: e.target.value }))} />
-          </div>
-          <div>
-            <label className="fo-field-label" htmlFor="de-carrier">Carrier</label>
-            <div style={{ position: "relative" }}>
-              <select id="de-carrier" className="fo-input" style={{ appearance: "none", WebkitAppearance: "none", paddingRight: "36px", cursor: "pointer" }}
-                value={form.carrier} onChange={(e) => setForm((p) => ({ ...p, carrier: e.target.value }))}>
-                <option value="">Select carrier...</option>
-                <option value="MAINFREIGHT">Mainfreight</option><option value="NZP">NZ Post</option>
-                <option value="TGE">Team Global Express</option><option value="FLIWAY">Fliway</option>
-                <option value="CASTLE">Castle</option><option value="M2H">M2H</option>
-              </select>
-              <svg style={{ position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)", pointerEvents: "none", color: "#6b7280" }} width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="6 9 12 15 18 9" /></svg>
+          {item.company ? (
+            <div style={{ fontSize: "13px", color: "#475569" }}>
+              Carrier: <strong style={{ color: "#2563eb" }}>{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</strong>
             </div>
-          </div>
+          ) : null}
+          {/* EDD + carrier edit — future phase */}
           <div>
             <label className="fo-field-label" htmlFor="de-tracking">Tracking number</label>
             <input id="de-tracking" className="fo-input" placeholder="e.g. MF8821003" value={form.trackingNumber} onChange={(e) => setForm((p) => ({ ...p, trackingNumber: e.target.value }))} />

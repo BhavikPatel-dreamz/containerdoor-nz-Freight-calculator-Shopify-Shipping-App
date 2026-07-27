@@ -74,6 +74,17 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Not yet: variant swap (`orderEdit`), hard `orderCancel`, Cin7 address/void.
 - Migration: `prisma/migrations/20260725140000_order_amendment_fields/` (`shippingAddress2`, `deliveryInstructions`).
 
+## Carrier + tracking (launch phase)
+- **Carrier source of truth (display):** `ops.carrier` if set, else freight-code `company` from `OrderLineItemIndex` / shipping line. Same on list (`app._index.tsx`) and detail (`freight-orders.server.ts` / `order-api.ts`).
+- **At order create:** webhook writes per-variant carrier from shipping code into ops + index. Human labels via `companyLabels` (`app/lib/freight.ts`).
+- **Carrier is NOT editable** in OMS Tracking modal, Dispatch edit, or Shopify `order-status-block` for now — show read-only (“set at checkout”). Re-enable carrier edit later when product decides.
+- **Launch editable fields only:** Tracking # + Freight ref (per `orderId` + `variantId` — multi-line safe).
+  - OMS: Tracking modal / header **Update Tracking**; Dispatch & Operational panel Edit buttons hidden for now.
+  - Shopify admin block: Edit form = Tracking # + Freight ref only; API strips other fields when `source: shopify_admin_block`.
+- **Shopify sync:** Tracking → metafield `containerdoor_ops.tracking_{variantId}` (per line). **Carrier does not sync to Shopify.** Freight ref = OMS + Monday only (not Shopify metafield yet).
+- **Monday:** carrier / tracking / freight ref still push via `buildMondayRowFromOms()`.
+- Future: re-enable carrier + EDD + delivery method + full ops edits in Modals / BlockExtension (commented / gated).
+
 ## Detail page UX (`/app/order/:orderId`)
 - **Separate route** — `app.order_.$orderId.tsx` + `FreightOrderDetail` with `viewMode="detail"`.
 - Never flash list: detail resolves on first paint (`resolveDetailTarget`); list chrome gated by `isDetailPage`.
