@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { buildMondayItemUrl } from "./monday.server";
+import { buildCin7SalesOrderUrl } from "./cin7-adapter.server";
 
 // Shared freight-order row builder. Used by both the list loader
 // (app.freight-orders.tsx) and the detail loader (app.freight-orders_.$orderId.tsx)
@@ -173,6 +174,8 @@ export function buildRowFromSnapshot(
       receivedDate: ops?.receivedDate ?? "",
       portArrivalDate: ops?.portArrivalDate ?? "",
       inTransitDate: ops?.inTransitDate ?? "",
+      cin7SalesOrderId: ops?.cin7SalesOrderId ?? "",
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(ops?.cin7SalesOrderId) ?? "",
       poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
       // Prefer per-line Cin7 link; fall back to legacy order-level SO
       cin7Exists:
@@ -262,6 +265,8 @@ export function buildRow(
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
+      cin7SalesOrderId: ops?.cin7SalesOrderId ?? "",
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(ops?.cin7SalesOrderId) ?? "",
       cin7Exists:
         Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
         (orderCin7Map.get(numericOrderId) ?? false),

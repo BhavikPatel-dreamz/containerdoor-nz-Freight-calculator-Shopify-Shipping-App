@@ -6,6 +6,7 @@ import prisma from "../db.server";
 import FreightDashboard from "../components/FreightDashboard";
 import { NavUserAvatar } from "../components/freight/NavUserAvatar";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
+import { buildCin7SalesOrderUrl } from "../lib/cin7-adapter.server";
 
 const PAGE_SIZE = 25;
 
@@ -191,6 +192,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       freightRef: r.freightRef ?? "",
       eddDate: r.eddDate ?? "",
       originalEddDate: r.originalEddDate ?? "",
+      cin7SalesOrderId: lineCin7 || "",
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",
       warehouseTags: r.warehouseTags ?? "",
       dispatchStatus: r.dispatchStatus ?? "",

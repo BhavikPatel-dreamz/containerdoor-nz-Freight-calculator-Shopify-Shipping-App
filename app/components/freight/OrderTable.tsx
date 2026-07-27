@@ -195,9 +195,14 @@ export function OrderTable({
                         {!hiddenColumns.has("cin7") && (() => {
                           const status = getCin7CellStatus(item);
                           const cellKey = `${order.id}-${item.variantId}`;
+                          const cin7Url = item.cin7SalesOrderUrl || null;
 
                           if (status === "match") {
-                            return <span className="fo-sync-pill green">CIN7 ✓</span>;
+                            return cin7Url ? (
+                              <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }} title="Open Cin7 Sales Order">CIN7 ✓</a>
+                            ) : (
+                              <span className="fo-sync-pill green">CIN7 ✓</span>
+                            );
                           }
                           if (status === "error") {
                             return (
