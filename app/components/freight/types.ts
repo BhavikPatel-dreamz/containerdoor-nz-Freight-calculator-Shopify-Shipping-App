@@ -35,7 +35,8 @@ export type FreightLineItem = {
   cin7Status?: "match" | "mismatch" | "missing" | "error";
   cin7Mismatches?: string[];
   mondayItemId?: string;
-  mondayBoardId?: string;
+  /** Full Monday pulse URL from MONDAY_BOARD_LINK + MONDAY_BOARD_ID */
+  mondayItemUrl?: string;
   mondayStatus?: "match" | "mismatch" | "missing";
   mondayMismatches?: string[];
 };
