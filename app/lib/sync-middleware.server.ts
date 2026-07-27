@@ -18,6 +18,7 @@
  */
 
 import prisma from "../db.server";
+import { normalizePaymentStatus } from "./freight-orders.server";
 import { syncChangesToShopify } from "./shopify-sync.server";
 import { updateMondayItem } from "./monday.server";
 import {
@@ -123,7 +124,7 @@ export async function pushLineItemToAllSystems(
           sku: "",
           boxes: "",
           customerStatus: fields.customerStatus ?? record.customerStatus ?? "",
-          paymentStatus: fields.paymentStatus ?? record.paymentStatus ?? "",
+          paymentStatus: normalizePaymentStatus(fields.paymentStatus ?? record.paymentStatus ?? ""),
           shop,
           orderId,
           variantId,

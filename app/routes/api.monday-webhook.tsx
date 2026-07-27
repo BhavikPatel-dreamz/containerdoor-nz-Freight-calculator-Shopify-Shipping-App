@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { fetchMondayItem, fetchMondayUpdates } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
+import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Monday.com fires this webhook whenever a column value changes on an item
@@ -134,7 +135,7 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.balanceDue = newBalanceDue;
       }
 
-      const newPaymentStatus = (mondayData.paymentStatus ?? "").trim();
+      const newPaymentStatus = normalizePaymentStatus(mondayData.paymentStatus ?? "");
       if (newPaymentStatus && newPaymentStatus !== (record.paymentStatus ?? "")) {
         updates.paymentStatus = newPaymentStatus;
       }

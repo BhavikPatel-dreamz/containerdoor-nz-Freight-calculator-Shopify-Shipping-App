@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates } from "../lib/monday.server";
+import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 function getCorsHeaders(request: Request) {
   const origin = request.headers.get("origin");
@@ -28,7 +29,7 @@ export async function action({ request }: ActionFunctionArgs) {
   const { shop, orderId, variantId, itemName, row } = await request.json();
   console.log("[Monday][Sync] Request received:", { shop, orderId, variantId, itemName, row });
 
-  const existing = await prisma.orderLineItemOperationalData.findUnique({
+  let existing = await prisma.orderLineItemOperationalData.findUnique({
     where: { shop_orderId_variantId: { shop, orderId, variantId } },
   });
   if (!existing) {
@@ -36,12 +37,17 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Line item not found" }, { status: 404, headers: getCorsHeaders(request) });
   }
 
+  const resolvedPaymentStatus = normalizePaymentStatus(
+    String(existing.paymentStatus || "").trim() || String(row?.paymentStatus || "").trim(),
+  );
+
   const fullRow = {
     ...row,
     shop,
     orderId,
     variantId,
-    paymentStatus: existing.paymentStatus ?? "",
+    // Prefer persisted OMS payment; fall back to UI/Shopify-derived value from client row.
+    paymentStatus: resolvedPaymentStatus,
     warehouseStatus: existing.warehouseStatus ?? "",
     warehouseTags: existing.warehouseTags ?? "",
     dispatchStatus: existing.dispatchStatus ?? "",
@@ -49,6 +55,15 @@ export async function action({ request }: ActionFunctionArgs) {
     depositPaid: existing.depositPaid ?? "",
     balanceDue: existing.balanceDue ?? "",
   };
+
+  // Persist display payment into OMS when DB was empty (so later Monday syncs stay in sync).
+  if (resolvedPaymentStatus && !String(existing.paymentStatus || "").trim()) {
+    await prisma.orderLineItemOperationalData.update({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+      data: { paymentStatus: resolvedPaymentStatus },
+    });
+    existing = { ...existing, paymentStatus: resolvedPaymentStatus };
+  }
 
   let mondayItemId = existing.mondayItemId;
 
@@ -157,7 +172,7 @@ export async function action({ request }: ActionFunctionArgs) {
       ...(mondayDeliveryStatus ? { deliveryStatus: mondayDeliveryStatus } : {}),
       ...(mondayDepositPaid ? { depositPaid: mondayDepositPaid } : {}),
       ...(mondayBalanceDue ? { balanceDue: mondayBalanceDue } : {}),
-      ...(mondayPaymentStatus ? { paymentStatus: mondayPaymentStatus } : {}),
+      ...(mondayPaymentStatus ? { paymentStatus: normalizePaymentStatus(mondayPaymentStatus) } : {}),
     },
   });
   console.log("[Monday][Sync] DB updated with Monday data:", updated);
