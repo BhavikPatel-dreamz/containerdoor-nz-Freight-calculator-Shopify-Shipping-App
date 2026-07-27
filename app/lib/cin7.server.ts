@@ -1,6 +1,20 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const CIN7_API_URL = process.env.CIN7_SYNC_URL || `${process.env.CIN7_BASE_URL}/SalesOrders`;
 
+/**
+ * Cin7 Omni update endpoint:
+ * - GET single order:    /v1/SalesOrders/{id}
+ * - PUT updates (array): /v1/SalesOrders
+ */
+function getCin7UpdateUrl(): string {
+  // If env already points to /SalesOrders/{id}, normalize to /SalesOrders.
+  return String(CIN7_API_URL || "").replace(/\/\d+$/, "");
+}
+
+function getCin7OrderUrl(salesOrderId: string): string {
+  return `${getCin7UpdateUrl()}/${encodeURIComponent(salesOrderId)}`;
+}
+
 // Simple debug helper for terminal logging
 const debug = (namespace: string, message: string, data?: any) => {
   const timestamp = new Date().toLocaleTimeString();
@@ -78,7 +92,7 @@ export async function syncCin7EstimatedDispatchDate(input: {
   }
 
   try {
-    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const url = getCin7UpdateUrl();
     
     // Cin7 expects EstimatedDeliveryDate in ISO 8601 format with time
     let eddFormatted = "";
@@ -130,7 +144,12 @@ export async function syncCin7EstimatedDispatchDate(input: {
 
     if (result?.success === false) {
       debug("Cin7", `PUT success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
-      return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for EDD update (salesOrderId=${salesOrderId})`,
+      };
     }
 
     if (res.ok) {
@@ -168,7 +187,7 @@ export async function syncCin7TrackingNumber(input: {
   }
 
   try {
-    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const url = getCin7UpdateUrl();
     const body = [{
       id: parseInt(salesOrderId, 10) || 0,
       trackingCode: input.trackingNumber ?? "",
@@ -206,7 +225,12 @@ export async function syncCin7TrackingNumber(input: {
 
     if (result?.success === false) {
       debug("Cin7", `PUT tracking success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
-      return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for tracking update (salesOrderId=${salesOrderId})`,
+      };
     }
 
     if (res.ok) {
@@ -243,7 +267,7 @@ export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7Ord
   if (!id || id === "pending" || !CIN7_API_URL) return null;
 
   try {
-    const url = `${CIN7_API_URL}/${encodeURIComponent(id)}`;
+    const url = getCin7OrderUrl(id);
     const res = await fetch(url, {
       method: "GET",
       headers: { Authorization: getCin7AuthHeader() },
@@ -310,7 +334,7 @@ export async function syncCin7Carrier(input: {
   if (!CIN7_API_URL) return { exists: true, updated: false, salesOrderId };
 
   try {
-    const url = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const url = getCin7UpdateUrl();
     const body = [{ id: parseInt(salesOrderId, 10) || 0, logisticsCarrier: input.carrier ?? "" }];
     const res = await fetch(url, {
       method: "PUT",
@@ -323,7 +347,14 @@ export async function syncCin7Carrier(input: {
     const result = Array.isArray(json) ? json[0] : json;
 
     if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
-    if (result?.success === false) return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    if (result?.success === false) {
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for carrier update (salesOrderId=${salesOrderId})`,
+      };
+    }
     if (res.ok) return { exists: true, updated: true, salesOrderId };
     return { exists: true, updated: false, salesOrderId, error: responseText };
   } catch (error) {
@@ -343,14 +374,14 @@ export async function appendCin7InternalComment(input: {
 
   try {
     // Fetch existing internal comments so we append instead of overwriting
-    const getUrl = `${CIN7_API_URL}/${encodeURIComponent(salesOrderId)}`;
+    const getUrl = getCin7OrderUrl(salesOrderId);
     const getRes = await fetch(getUrl, { method: "GET", headers: { Authorization: getCin7AuthHeader() } });
     const existingJson: any = getRes.ok ? await getRes.json().catch(() => null) : null;
     const existingComments = existingJson?.internalComments ?? "";
     const nextComments = existingComments ? `${existingComments}\n${comment}` : comment;
 
     const body = [{ id: parseInt(salesOrderId, 10) || 0, internalComments: nextComments }];
-    const res = await fetch(getUrl, {
+    const res = await fetch(getCin7UpdateUrl(), {
       method: "PUT",
       headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
       body: JSON.stringify(body),
@@ -361,7 +392,14 @@ export async function appendCin7InternalComment(input: {
     const result = Array.isArray(json) ? json[0] : json;
 
     if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
-    if (result?.success === false) return { exists: false, updated: false, salesOrderId, error: "Cin7 returned success: false" };
+    if (result?.success === false) {
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for comment update (salesOrderId=${salesOrderId})`,
+      };
+    }
     if (res.ok) return { exists: true, updated: true, salesOrderId };
     return { exists: true, updated: false, salesOrderId, error: responseText };
   } catch (error) {

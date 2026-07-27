@@ -122,6 +122,24 @@ export function isLinkedCin7Id(id?: string | null): boolean {
   return Boolean(v && v !== "pending" && v !== "duplicate");
 }
 
+/** Build a clickable Cin7 Sales Order URL for UI badges. */
+export function buildCin7SalesOrderUrl(salesOrderId?: string | null): string | null {
+  const id = String(salesOrderId || "").trim();
+  if (!isLinkedCin7Id(id)) return null;
+
+  // Preferred: full template, e.g. https://app.example/orders/{id}
+  const template = String(process.env.CIN7_SALES_ORDER_URL_TEMPLATE || "").trim();
+  if (template) {
+    return template.includes("{id}") ? template.replace("{id}", encodeURIComponent(id)) : `${template.replace(/\/$/, "")}/${encodeURIComponent(id)}`;
+  }
+
+  // Fallback: Cin7 API order endpoint (JSON view, still useful for direct access).
+  const apiBase = String(process.env.CIN7_SYNC_URL || "").trim() || `${String(process.env.CIN7_BASE_URL || "").trim().replace(/\/$/, "")}/SalesOrders`;
+  if (!apiBase) return null;
+  const normalized = apiBase.replace(/\/\d+$/, "");
+  return `${normalized.replace(/\/$/, "")}/${encodeURIComponent(id)}`;
+}
+
 /**
  * Persist Cin7 link on the operational line (canonical).
  * Optionally mirrors first linked id onto order-level for legacy UI that still

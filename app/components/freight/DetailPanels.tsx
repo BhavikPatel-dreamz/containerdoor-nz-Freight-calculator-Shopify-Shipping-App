@@ -131,7 +131,7 @@ export function DetailPanels({ order, item, onEditDispatch: _onEditDispatch, onE
             {(["Cin7", "Monday"] as const).map((lbl) => {
               const isCin7 = lbl === "Cin7";
               const isOk = isCin7 ? Boolean(item.cin7Exists) : (item.mondayStatus === "match");
-              const mondayUrl = !isCin7 ? item.mondayItemUrl || null : null;
+              const targetUrl = isCin7 ? item.cin7SalesOrderUrl || null : item.mondayItemUrl || null;
               const badge = (
                 <span style={{ display: "inline-flex", alignItems: "center", gap: "3px", fontSize: "11px", fontWeight: 600, color: isOk ? "#16a34a" : "#dc2626" }}>
                   {isOk ? (
@@ -142,8 +142,17 @@ export function DetailPanels({ order, item, onEditDispatch: _onEditDispatch, onE
                   {lbl}
                 </span>
               );
-              return mondayUrl ? (
-                <a key={lbl} href={mondayUrl} target="_blank" rel="noopener noreferrer" style={{ textDecoration: "none" }}>{badge}</a>
+              return targetUrl ? (
+                <a
+                  key={lbl}
+                  href={targetUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ textDecoration: "none" }}
+                  title={isCin7 ? "Open Cin7 Sales Order" : "Open Monday item"}
+                >
+                  {badge}
+                </a>
               ) : (
                 <span key={lbl}>{badge}</span>
               );
