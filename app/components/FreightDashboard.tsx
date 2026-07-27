@@ -1241,9 +1241,12 @@ export default function FreightDashboard({
                 toggleSelectAll={toggleSelectAll}
                 toggleSelect={toggleSelect}
                 onOpenDetail={(order, item) => {
-                  // URL orderId MUST equal OMS OrderSnapshot.orderId (Shopify numeric).
-                  const dbOrderId = String(order.shopifyOrderId || "").replace(/^gid:\/\/shopify\/Order\//, "").trim();
-                  navigate(`/app/order/${encodeURIComponent(dbOrderId)}?variantId=${encodeURIComponent(item.variantId)}`);
+                  // Clean URL: `/app/order/{OrderLineItemIndex.id}` — variantId lives in DB.
+                  const pathId =
+                    (item.lineIndexId || "").trim() ||
+                    (order.snapshotId || "").trim() ||
+                    order.shopifyOrderId;
+                  navigate(`/app/order/${encodeURIComponent(pathId)}`);
                 }}
                 onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
                 onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}

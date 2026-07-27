@@ -176,6 +176,7 @@ export function buildRowFromSnapshot(
 
   return {
     id: `gid://shopify/Order/${snap.orderId}`,
+    snapshotId: String(snap.id || ""),
     shopifyOrderId: snap.orderId,
     shopifyOrderName: snap.orderName,
     currency: snap.currencyCode,
@@ -256,12 +257,22 @@ export function buildRow(
     };
   });
   return {
-    id: order.id, shopifyOrderId: numericOrderId, shopifyOrderName: order.name, currency: order.currencyCode,
+    id: order.id,
+    snapshotId: "",
+    shopifyOrderId: numericOrderId,
+    shopifyOrderName: order.name,
+    currency: order.currencyCode,
     totalFreight: Number(shippingLine.originalPriceSet.shopMoney.amount ?? 0),
-    city: order.shippingAddress?.city ?? null, postalCode: order.shippingAddress?.zip ?? null,
-    createdAt: order.createdAt, carriers, packageCount, shippingTitle: shippingLine.title, lineItems,
+    city: order.shippingAddress?.city ?? null,
+    postalCode: order.shippingAddress?.zip ?? null,
+    createdAt: order.createdAt,
+    carriers,
+    packageCount,
+    shippingTitle: shippingLine.title,
+    lineItems,
     customerName: `${order.shippingAddress?.firstName ?? ""} ${order.shippingAddress?.lastName ?? ""}`.trim() || "—",
-    email: order.email ?? "—", phone: order.phone ?? "—",
+    email: order.email ?? "—",
+    phone: order.phone ?? "—",
     financialStatus: order.displayFinancialStatus ?? "—",
     fulfillmentStatus: order.displayFulfillmentStatus ?? "UNFULFILLED",
     fullAddress: [order.shippingAddress?.address1, order.shippingAddress?.city, order.shippingAddress?.province, order.shippingAddress?.zip, order.shippingAddress?.country].filter(Boolean).join(", "),

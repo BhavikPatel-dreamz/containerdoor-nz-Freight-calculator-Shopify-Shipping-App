@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { unauthenticated } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
@@ -25,6 +25,63 @@ const debug = (namespace: string, message: string, data?: any) => {
     console.log(`${prefix}: ${message}`);
   }
 };
+
+/** Decode Shopify session-token JWT payload (no verify — used only to read `dest` shop). */
+function shopFromBearerJwt(request: Request): string {
+  const auth = request.headers.get("Authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m?.[1]) return "";
+  try {
+    const part = m[1].split(".")[1];
+    if (!part) return "";
+    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json) as { dest?: string };
+    const dest = String(payload.dest || "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "")
+      .trim();
+    return dest.includes(".") ? dest : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Resolve myshopify shop for OMS writes:
+ * 1) explicit body/query shop
+ * 2) authenticate.admin session (extension Bearer)
+ * 3) JWT `dest` claim (same token, no session round-trip)
+ * 4) OrderSnapshot by orderId
+ */
+async function resolveShopDomain(
+  request: Request,
+  explicitShop: string,
+  orderId: string,
+): Promise<string> {
+  let shop = String(explicitShop || "").trim();
+  if (shop) return shop;
+
+  if (request.headers.get("Authorization")?.match(/^Bearer\s+/i)) {
+    try {
+      const { session } = await authenticate.admin(request);
+      shop = String(session?.shop || "").trim();
+      if (shop) return shop;
+    } catch (e) {
+      debug("auth", "authenticate.admin failed — falling back to JWT dest", String(e));
+    }
+    shop = shopFromBearerJwt(request);
+    if (shop) return shop;
+  }
+
+  if (orderId) {
+    const snap = await prisma.orderSnapshot.findFirst({
+      where: { orderId },
+      select: { shop: true },
+    });
+    shop = snap?.shop ?? "";
+  }
+  return shop;
+}
 
 // ── NEW: pushes a staff note into Shopify's native order timeline ──
 // Uses orderEditBegin/orderEditCommit purely to attach a staffNote — no
@@ -72,21 +129,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const rawOrderId = url.searchParams.get("orderId") ?? "";
   const orderId = rawOrderId.replace(/^gid:\/\/shopify\/Order\//, "").trim();
-  let shop = url.searchParams.get("shop") ?? "";
+  const shopParam = url.searchParams.get("shop") ?? "";
 
   if (!orderId) {
     return Response.json({ error: "Missing orderId" }, { status: 400, headers: CORS_HEADERS });
   }
 
   try {
-    // If shop omitted (admin extension quirk), resolve from OrderSnapshot by Shopify order id.
-    if (!shop) {
-      const snap = await prisma.orderSnapshot.findFirst({
-        where: { orderId },
-        select: { shop: true },
-      });
-      shop = snap?.shop ?? "";
-    }
+    const shop = await resolveShopDomain(request, shopParam, orderId);
 
     const records = await prisma.orderLineItemOperationalData.findMany({
       where: { orderId, ...(shop ? { shop } : {}) },
@@ -296,18 +346,16 @@ export async function action({ request }: ActionFunctionArgs) {
     const orderId = String(body.orderId || "")
       .replace(/^gid:\/\/shopify\/Order\//, "")
       .trim();
-    let shopValue = typeof body.shop === "string" ? body.shop.trim() : "";
     const actor = (performedBy || "SY").trim() || "SY";
     const activitySource = String(body.source || "oms").trim() || "oms";
 
-    // Resolve shop from OMS snapshot when extension omits it.
-    if (!shopValue && orderId) {
-      const snap = await prisma.orderSnapshot.findFirst({
-        where: { orderId },
-        select: { shop: true },
-      });
-      shopValue = snap?.shop ?? "";
-    }
+    // Extension often sends shop:"" — resolve from Bearer JWT / session / OrderSnapshot.
+    const shopValue = await resolveShopDomain(
+      request,
+      typeof body.shop === "string" ? body.shop : "",
+      orderId,
+    );
+    debug("shop", `resolved shop="${shopValue}" from body.shop="${body.shop || ""}" orderId=${orderId}`);
     const pushNoteMonday = Boolean(syncNotes?.monday);
     const pushNoteCin7 = Boolean(syncNotes?.cin7) || (Array.isArray(newCin7Notes) && newCin7Notes.length > 0);
     const pushNoteShopify = Boolean(syncNotes?.shopify);

@@ -35,7 +35,7 @@ export function FreightOrderDetail({
       noteAuthor={noteAuthor}
       navbarRight={navbarRight}
       viewMode="detail"
-      initialDetailOrderId={order.shopifyOrderId}
+      initialDetailOrderId={order.snapshotId || order.shopifyOrderId}
       initialDetailVariantId={variantId}
       detailBackHref={backHref}
     />

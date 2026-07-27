@@ -139,6 +139,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const rows = await prisma.$queryRaw<any[]>`
     SELECT
+      idx."id" AS line_index_id,
       idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
       idx."letterSuffix", idx."customerName", idx."email", idx."phone", idx."city", idx."zip",
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
@@ -148,12 +149,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."warehouseStatus", ops."warehouseTags", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
       ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
-      ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po
+      ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
+      snap."id" AS snapshot_id
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
     LEFT JOIN "OrderOperationalData" ood
       ON idx."shop" = ood."shop" AND idx."orderId" = ood."orderId"
+    LEFT JOIN "OrderSnapshot" snap
+      ON idx."shop" = snap."shop" AND idx."orderId" = snap."orderId"
     WHERE ${rowWhere}
     ORDER BY idx."createdAt" DESC, idx."orderId" DESC, idx."letterSuffix" ASC
     LIMIT ${PAGE_SIZE} OFFSET ${offset}
@@ -164,6 +168,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const cin7Exists = Boolean(r.ood_cin7 && r.ood_cin7 !== "pending");
     const item = {
       id: `${r.orderId}-${variantId}`,
+      lineIndexId: String(r.line_index_id || ""),
       variantId,
       title: r.productTitle || "",
       variantTitle: r.variantTitle || "",
@@ -199,8 +204,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     };
     return {
       id: r.gid || `gid://shopify/Order/${r.orderId}`,
+      // OrderSnapshot.id (cuid) — detail URL `/app/order/:snapshotId`
+      snapshotId: String(r.snapshot_id || ""),
       // Must equal OrderSnapshot.orderId / OrderLineItemOperationalData.orderId
-      // so `/app/order/:orderId` loads ops from DB.
+      // so API calls still hit Shopify numeric order id.
       shopifyOrderId: String(r.orderId),
       shopifyOrderName: r.orderName || "",
       currency: r.currency || "NZD",

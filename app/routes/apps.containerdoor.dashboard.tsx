@@ -282,6 +282,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
   });
   return {
     id: order.id,
+    snapshotId: "",
     shopifyOrderId: numericOrderId,
     shopifyOrderName: order.name,
     currency: order.currencyCode,
