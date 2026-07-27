@@ -98,6 +98,11 @@ export default function FreightDashboard({
   const [isSavingAmend, setIsSavingAmend] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncNotification, setSyncNotification] = useState<string | null>(null);
+  /** Detail Sync button result popup — Monday + Cin7 actions */
+  const [syncResultModal, setSyncResultModal] = useState<{
+    title: string;
+    lines: Array<{ system: string; ok: boolean; summary: string; details?: string[] }>;
+  } | null>(null);
   const logSyncTrace = (source: string, payload: any) => {
     if (!payload?.syncTrace) return;
     console.log(`[SYNC TRACE][${source}]`, payload.syncTrace);
@@ -978,40 +983,220 @@ export default function FreightDashboard({
   };
 
   const handleSync = async () => {
-    if (!detailView) return; setIsSyncing(true);
+    if (!detailView) return;
+    setIsSyncing(true);
+    setSyncResultModal(null);
+
+    const lines: Array<{ system: string; ok: boolean; summary: string; details?: string[] }> = [];
+    const orderLabel = `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix || ""}`;
+
     try {
-      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, itemName: `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix}`, row: { customerName: detailView.order.customerName, email: detailView.order.email, carriers: detailView.item.company, trackingNumber: detailView.item.trackingNumber, eddDate: detailView.item.eddDate, originalEddDate: detailView.item.originalEddDate, productTitle: detailView.item.title ?? "", sku: detailView.item.sku ?? "", boxes: detailView.item.boxes ?? "", customerStatus: detailView.item.customerStatus, paymentStatus: detailView.item.paymentStatus ?? "" } }) });
-      if (!res.ok) throw new Error("Sync failed");
-      const json = await res.json();
-      const applySync = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated }) };
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, ...json.updated } } : prev);
-      setRows((prevRows = []) => prevRows.map(applySync));
-      if (allRows) setAllRows((prev) => prev ? prev.map(applySync) : prev);
-      // Cin7 sync
+      // ── Monday ──
+      try {
+        const res = await fetch("/api/monday-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop,
+            orderId: detailView.order.shopifyOrderId,
+            variantId: detailView.item.variantId,
+            itemName: `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix}`,
+            row: {
+              customerName: detailView.order.customerName,
+              email: detailView.order.email,
+              carriers: detailView.item.company,
+              trackingNumber: detailView.item.trackingNumber,
+              eddDate: detailView.item.eddDate,
+              originalEddDate: detailView.item.originalEddDate,
+              productTitle: detailView.item.title ?? "",
+              sku: detailView.item.sku ?? "",
+              boxes: detailView.item.boxes ?? "",
+              customerStatus: detailView.item.customerStatus,
+              paymentStatus: detailView.item.paymentStatus ?? "",
+            },
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.ok === false) {
+          lines.push({
+            system: "Monday",
+            ok: false,
+            summary: json.error || `Sync failed (HTTP ${res.status})`,
+          });
+        } else {
+          const syncedKeys = json.syncedFields && typeof json.syncedFields === "object"
+            ? Object.keys(json.syncedFields)
+            : [];
+          const blankKeys = Array.isArray(json.blankFields) ? json.blankFields : [];
+          const pulse = json.mondayItemName || orderLabel;
+          const details = [
+            `Pulse: ${pulse}`,
+            json.mondayItemId ? `Item id: ${json.mondayItemId}` : null,
+            syncedKeys.length ? `Fields pushed: ${syncedKeys.slice(0, 12).join(", ")}${syncedKeys.length > 12 ? ` (+${syncedKeys.length - 12} more)` : ""}` : "Fields pushed: (none reported)",
+            blankKeys.length ? `Blank on Monday: ${blankKeys.slice(0, 8).join(", ")}${blankKeys.length > 8 ? "…" : ""}` : null,
+          ].filter(Boolean) as string[];
+          lines.push({
+            system: "Monday",
+            ok: true,
+            summary: json.syncStatus === "created" ? "Created / linked pulse" : "Updated pulse from OMS",
+            details,
+          });
+          const applySync = (o: FreightOrderRow): FreightOrderRow =>
+            o.id !== detailView.order.id
+              ? o
+              : {
+                  ...o,
+                  lineItems: o.lineItems.map((li: any) =>
+                    li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated },
+                  ),
+                };
+          setDetailView((prev) =>
+            prev ? { ...prev, item: { ...prev.item, ...json.updated } } : prev,
+          );
+          setRows((prevRows = []) => prevRows.map(applySync));
+          if (allRows) setAllRows((prev) => (prev ? prev.map(applySync) : prev));
+        }
+      } catch (e) {
+        lines.push({
+          system: "Monday",
+          ok: false,
+          summary: e instanceof Error ? e.message : "Monday sync failed",
+        });
+      }
+
+      // ── Cin7 ──
       try {
         if (!detailView.item.cin7Exists) {
-          const cin7Res = await fetch("/api/cin7-create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId }) });
-          if (cin7Res.ok) {
-            const cin7Payload = await cin7Res.json();
-            const cin7Exists = Boolean(cin7Payload.cin7SalesOrderId && cin7Payload.cin7SalesOrderId !== "pending");
-            const applyCin7Created = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => ({ ...li, cin7Exists, cin7Status: cin7Exists ? "match" as const : "missing" as const, cin7Mismatches: [] })) };
+          const cin7Res = await fetch("/api/cin7-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId }),
+          });
+          const cin7Payload = await cin7Res.json().catch(() => ({}));
+          if (cin7Res.ok && cin7Payload.ok !== false) {
+            const cin7Exists = Boolean(
+              cin7Payload.cin7SalesOrderId && cin7Payload.cin7SalesOrderId !== "pending",
+            );
+            lines.push({
+              system: "Cin7",
+              ok: cin7Exists,
+              summary: cin7Exists
+                ? "Created Sales Order (linked)"
+                : cin7Payload.error || "Create returned no Sales Order id",
+              details: cin7Exists
+                ? [`Sales Order id: ${cin7Payload.cin7SalesOrderId}`]
+                : undefined,
+            });
+            const applyCin7Created = (o: FreightOrderRow): FreightOrderRow =>
+              o.id !== detailView.order.id
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) => ({
+                      ...li,
+                      cin7Exists,
+                      cin7Status: cin7Exists ? ("match" as const) : ("missing" as const),
+                      cin7Mismatches: [],
+                    })),
+                  };
             setRows((prev) => prev.map(applyCin7Created));
-            if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7Created) : prev);
-            setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists } } : prev);
+            if (allRows) setAllRows((prev) => (prev ? prev.map(applyCin7Created) : prev));
+            setDetailView((prev) =>
+              prev ? { ...prev, item: { ...prev.item, cin7Exists } } : prev,
+            );
+          } else {
+            lines.push({
+              system: "Cin7",
+              ok: false,
+              summary: cin7Payload.error || `Create failed (HTTP ${cin7Res.status})`,
+            });
           }
         } else {
-          const cin7Res = await fetch("/api/cin7-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, trackingNumber: detailView.item.trackingNumber, eddDate: detailView.item.eddDate, carrier: detailView.item.company, fields: ["trackingNumber", "eddDate", "carrier"], forceCarrier: true }) });
+          const cin7Res = await fetch("/api/cin7-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop,
+              orderId: detailView.order.shopifyOrderId,
+              variantId: detailView.item.variantId,
+              trackingNumber: detailView.item.trackingNumber,
+              eddDate: detailView.item.eddDate,
+              carrier: detailView.item.company,
+              fields: ["trackingNumber", "eddDate", "carrier"],
+              forceCarrier: true,
+            }),
+          });
           const cin7Payload = await cin7Res.json().catch(() => ({}));
           if (cin7Res.ok && cin7Payload.ok) {
             const pulled = cin7Payload.updated || {};
-            const applyCin7Updated = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, trackingNumber: pulled.trackingNumber ?? li.trackingNumber, eddDate: pulled.eddDate ?? li.eddDate, company: pulled.carrier ?? li.company, cin7Status: "match" as const, cin7Mismatches: [] }) };
+            const direction = cin7Payload.direction === "pushed" ? "Pushed OMS → Cin7" : "Pulled Cin7 → OMS";
+            const fieldBits = [
+              pulled.trackingNumber !== undefined ? `tracking=${pulled.trackingNumber || "—"}` : null,
+              pulled.eddDate !== undefined ? `edd=${pulled.eddDate || "—"}` : null,
+              pulled.carrier !== undefined ? `carrier=${pulled.carrier || "—"}` : null,
+            ].filter(Boolean) as string[];
+            lines.push({
+              system: "Cin7",
+              ok: true,
+              summary: direction,
+              details: [
+                "Compared: tracking #, EDD, carrier",
+                fieldBits.length ? `Updated fields: ${fieldBits.join(", ")}` : "No field values changed",
+              ],
+            });
+            const applyCin7Updated = (o: FreightOrderRow): FreightOrderRow =>
+              o.id !== detailView.order.id
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) =>
+                      li.variantId !== detailView.item.variantId
+                        ? li
+                        : {
+                            ...li,
+                            trackingNumber: pulled.trackingNumber ?? li.trackingNumber,
+                            eddDate: pulled.eddDate ?? li.eddDate,
+                            company: pulled.carrier ?? li.company,
+                            cin7Status: "match" as const,
+                            cin7Mismatches: [],
+                          },
+                    ),
+                  };
             setRows((prev) => prev.map(applyCin7Updated));
-            if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7Updated) : prev);
-            setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: pulled.trackingNumber ?? prev.item.trackingNumber, eddDate: pulled.eddDate ?? prev.item.eddDate, company: pulled.carrier ?? prev.item.company, cin7Status: "match", cin7Mismatches: [] } } : prev);
+            if (allRows) setAllRows((prev) => (prev ? prev.map(applyCin7Updated) : prev));
+            setDetailView((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    item: {
+                      ...prev.item,
+                      trackingNumber: pulled.trackingNumber ?? prev.item.trackingNumber,
+                      eddDate: pulled.eddDate ?? prev.item.eddDate,
+                      company: pulled.carrier ?? prev.item.company,
+                      cin7Status: "match",
+                      cin7Mismatches: [],
+                    },
+                  }
+                : prev,
+            );
+          } else {
+            lines.push({
+              system: "Cin7",
+              ok: false,
+              summary: cin7Payload.error || `Update failed (HTTP ${cin7Res.status})`,
+            });
           }
         }
-      } catch (cin7Err) { console.error("Cin7 sync failed", cin7Err); }
-      // Refresh notes
+      } catch (cin7Err) {
+        console.error("Cin7 sync failed", cin7Err);
+        lines.push({
+          system: "Cin7",
+          ok: false,
+          summary: cin7Err instanceof Error ? cin7Err.message : "Cin7 sync failed",
+        });
+      }
+
+      // Refresh activity
       const notesJson = await fetchOrderStatus(
         shop,
         detailView.order.shopifyOrderId,
@@ -1022,7 +1207,28 @@ export default function FreightDashboard({
         const line = findStatusLine(notesJson, detailView.item.variantId);
         setNotes(parseNotesString(line?.notes ?? ""));
       }
-    } catch (e) { console.error("Monday sync failed", e); } finally { setIsSyncing(false); }
+
+      const anyFail = lines.some((l) => !l.ok);
+      setSyncResultModal({
+        title: anyFail ? `Sync finished with errors — ${orderLabel}` : `Sync complete — ${orderLabel}`,
+        lines,
+      });
+      console.log("[SYNC RESULT]", { orderLabel, lines });
+    } catch (e) {
+      console.error("Sync failed", e);
+      setSyncResultModal({
+        title: `Sync failed — ${orderLabel}`,
+        lines: [
+          {
+            system: "OMS",
+            ok: false,
+            summary: e instanceof Error ? e.message : "Unexpected sync error",
+          },
+        ],
+      });
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   return (
@@ -1369,6 +1575,75 @@ export default function FreightDashboard({
       </div>
 
       {/* Modals */}
+      {syncResultModal && (
+        <div
+          className="fo-overlay"
+          onClick={() => setSyncResultModal(null)}
+          style={{ zIndex: 80 }}
+        >
+          <div
+            className="fo-modal"
+            style={{ width: "520px", maxWidth: "95vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="fo-modal-hdr" style={{ borderBottom: "1px solid #e5e7eb", padding: "16px 20px" }}>
+              <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
+                {syncResultModal.title}
+              </span>
+              <button className="fo-modal-close" type="button" onClick={() => setSyncResultModal(null)}>✕</button>
+            </div>
+            <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                Actions run for this line item (Monday pulse + Cin7 Sales Order).
+              </div>
+              {syncResultModal.lines.map((line) => (
+                <div
+                  key={line.system}
+                  style={{
+                    border: `1px solid ${line.ok ? "#bbf7d0" : "#fecaca"}`,
+                    background: line.ok ? "#f0fdf4" : "#fef2f2",
+                    borderRadius: "8px",
+                    padding: "12px 14px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>{line.system}</span>
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "2px 8px",
+                        borderRadius: "999px",
+                        background: line.ok ? "#dcfce7" : "#fee2e2",
+                        color: line.ok ? "#166534" : "#991b1b",
+                      }}
+                    >
+                      {line.ok ? "OK" : "Failed"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "13px", color: "#374151", marginTop: "6px" }}>{line.summary}</div>
+                  {line.details && line.details.length > 0 ? (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: "18px", color: "#4b5563", fontSize: "12px" }}>
+                      {line.details.map((d) => (
+                        <li key={d} style={{ marginBottom: "2px" }}>{d}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="fo-modal-ftr" style={{ padding: "12px 20px" }}>
+              <button
+                type="button"
+                className="fo-btn-ghost"
+                onClick={() => setSyncResultModal(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {trackingModal && (
         <TrackingModal trackingModal={trackingModal} trackingForm={trackingForm} trackingError={trackingError} isSavingTracking={isSavingTracking} setTrackingForm={setTrackingForm} setTrackingModal={setTrackingModal} setTrackingError={setTrackingError} onSave={handleTrackingSave} />
       )}

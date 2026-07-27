@@ -13,6 +13,7 @@ Read these rules before changing OMS freight dashboard / email / sync:
 | Nav avatar + queue chip | `.cursor/rules/oms-nav-user.mdc` |
 | EDD → Shopify sync | `.cursor/rules/oms-edd-shopify-sync.mdc` |
 | Order amendments | `.cursor/rules/oms-order-amendments.mdc` |
+| Cin7 architecture (per-line SO) | `.cursor/rules/oms-cin7-architecture.mdc` |
 
 ---
 
@@ -84,6 +85,15 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - **Shopify sync:** Tracking → metafield `containerdoor_ops.tracking_{variantId}` (per line). **Carrier does not sync to Shopify.** Freight ref = OMS + Monday only (not Shopify metafield yet).
 - **Monday:** carrier / tracking / freight ref still push via `buildMondayRowFromOms()`.
 - Future: re-enable carrier + EDD + delivery method + full ops edits in Modals / BlockExtension (commented / gated).
+
+## Cin7 (per-line Sales Orders)
+- Full architecture: `.cursor/rules/oms-cin7-architecture.mdc`.
+- **Preferred:** one Cin7 SO per operational line (A/B/C), same as Monday pulses — Cin7 allows only one `trackingCode` per SO.
+- Adapter: `app/lib/cin7-adapter.server.ts`; env `CIN7_SO_STRATEGY=per_line` (default) | `grouped` (legacy).
+- Canonical id: `OrderLineItemOperationalData.cin7SalesOrderId` (+ `cin7SalesOrderCode` / `cin7SalesOrderRef`). Order-level id = legacy / mirror only.
+- Resolve: `resolveCin7SalesOrderId` (line first → order legacy fallback). Used by sync-middleware + `api.order-status`.
+- Webhook create: per freight line when `per_line`; shared `customerOrderNo` = Shopify order name; unique `reference` = `#OrderLetter` (≤30 chars).
+- Still TODO: `/api/cin7-create` + status/update APIs fully per-line UI; notes/bulk Cin7 enable; freight-ref field mapping.
 
 ## Detail page UX (`/app/order/:orderId`)
 - **Separate route** — `app.order_.$orderId.tsx` + `FreightOrderDetail` with `viewMode="detail"`.

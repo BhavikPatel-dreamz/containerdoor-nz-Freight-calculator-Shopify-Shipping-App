@@ -7,6 +7,7 @@ import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
 import { syncCin7EstimatedDispatchDate, syncCin7TrackingNumber, appendCin7InternalComment } from "../lib/cin7.server";
+import { resolveCin7SalesOrderId } from "../lib/cin7-adapter.server";
 import {
   getActivityLogForLineItem,
   getCommunicationLogForOrder,
@@ -792,18 +793,20 @@ export async function action({ request }: ActionFunctionArgs) {
       );
     }
 
-    const orderOperationalData = shopValue
-      ? await prisma.orderOperationalData.findUnique({
-          where: { shop_orderId: { shop: shopValue, orderId } },
-        })
-      : null;
-
-    const cin7SalesOrderId = orderOperationalData?.cin7SalesOrderId?.trim() || "";
-    let cin7Exists = Boolean(cin7SalesOrderId && cin7SalesOrderId !== "pending");
-    debug("Cin7", `orderId=${orderId}, cin7SalesOrderId=${cin7SalesOrderId}, eddDateChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}, newEdd=${updateData.eddDate}`);
-    // ── NEW: push note to Cin7 internal comments if checkbox was ticked ──
+    const cin7Link = await resolveCin7SalesOrderId({
+      shop: shopValue,
+      orderId,
+      variantId,
+    });
+    const cin7SalesOrderId = cin7Link.salesOrderId;
+    let cin7Exists = Boolean(cin7SalesOrderId);
+    debug(
+      "Cin7",
+      `orderId=${orderId}, variantId=${variantId}, cin7SalesOrderId=${cin7SalesOrderId}, source=${cin7Link.source}, strategy=${cin7Link.strategy}, eddChanged=${Object.prototype.hasOwnProperty.call(updateData, "eddDate")}, trackingChanged=${Object.prototype.hasOwnProperty.call(updateData, "trackingNumber")}`,
+    );
+    // ── Push note to Cin7 internal comments if checkbox was ticked ──
     const cin7SyncResults: SyncResultMap = {};
-    if (newNotesForCin7.length > 0 && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+    if (newNotesForCin7.length > 0 && cin7SalesOrderId) {
       for (const note of newNotesForCin7) {
         try {
           await appendCin7InternalComment({ salesOrderId: cin7SalesOrderId, comment: note });
@@ -816,7 +819,7 @@ export async function action({ request }: ActionFunctionArgs) {
     } else if (pushNoteCin7 && staffNoteTexts.length > 0) {
       cin7SyncResults.cin7 = { ok: false, error: "Cin7 sales order not linked" };
     }
-    if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+    if (Object.prototype.hasOwnProperty.call(updateData, "eddDate") && cin7SalesOrderId) {
       debug("Cin7", `Syncing EDD to Cin7: salesOrderId=${cin7SalesOrderId}, eddDate=${updateData.eddDate}`);
       const cin7Update = await syncCin7EstimatedDispatchDate({
         salesOrderId: cin7SalesOrderId,
@@ -825,7 +828,8 @@ export async function action({ request }: ActionFunctionArgs) {
       });
       debug("Cin7", `EDD sync result:`, cin7Update);
       cin7Exists = cin7Update.exists;
-    } else if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && cin7SalesOrderId && cin7SalesOrderId !== "pending") {
+    }
+    if (Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") && cin7SalesOrderId) {
       debug("Cin7", `Syncing tracking to Cin7: salesOrderId=${cin7SalesOrderId}, trackingNumber=${updateData.trackingNumber}`);
       const cin7Update = await syncCin7TrackingNumber({
         salesOrderId: cin7SalesOrderId,
@@ -833,8 +837,13 @@ export async function action({ request }: ActionFunctionArgs) {
         reference: orderId,
       });
       debug("Cin7", `Tracking sync result:`, cin7Update);
-      cin7Exists = cin7Update.exists;
-    } else {
+      cin7Exists = cin7Update.exists || cin7Exists;
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(updateData, "eddDate") &&
+      !Object.prototype.hasOwnProperty.call(updateData, "trackingNumber") &&
+      newNotesForCin7.length === 0
+    ) {
       debug("Cin7", `SKIP - no relevant Cin7 update needed`);
     }
 

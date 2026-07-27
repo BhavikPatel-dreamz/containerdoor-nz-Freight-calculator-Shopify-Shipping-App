@@ -105,6 +105,7 @@ Both customer extensions:
 - Commit/PR only when asked. Branch off `main`.
 - en-NZ formatting / NZD currency for customer-facing freight display.
 - **OMS memory (always read):** `.cursor/rules/oms-session-memory.mdc` — index of product decisions.
+- **Cin7:** per-line Sales Orders preferred — `.cursor/rules/oms-cin7-architecture.mdc`.
 - **OMS top nav:** background bulk queue status in `fo-nav-right` via `NavQueueJobs` (next to avatar). Avatar/`noteAuthor` from `currentUserFromSession`. See `.cursor/rules/oms-nav-user.mdc`.
 - **Central Activity Log + email queue:** `CommunicationLog` only in UI; emails enqueue → cron sends. Field updates logged but hidden (`SHOW_FIELD_CHANGE_LOGS`). Notes sync Monday/Shopify only if checked. See `.cursor/rules/oms-activity-log.mdc`.
 - **Email cron:** Vercel Hobby cannot run `* * * * *` — `vercel.json` crons disabled. AWS/self-host: PM2 `ecosystem.config.cjs` has `oms-web` (react-router-serve) + `oms-email-queue-cron`. `pm2 start ecosystem.config.cjs` after `pnpm build`. Needs `APP_URL`/`EMAIL_CRON_APP_URL` + `CRON_SECRET`.

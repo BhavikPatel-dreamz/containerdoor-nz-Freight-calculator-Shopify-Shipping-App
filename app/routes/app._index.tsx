@@ -148,7 +148,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."customerStatus", ops."carrier" AS ops_carrier, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
       ops."warehouseStatus", ops."warehouseTags", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
-      ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
+      ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
       snap."id" AS snapshot_id
     FROM "OrderLineItemIndex" idx
@@ -165,7 +165,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
   const orders = rows.map((r) => {
     const variantId = String(r.variantId);
-    const cin7Exists = Boolean(r.ood_cin7 && r.ood_cin7 !== "pending");
+    const lineCin7 = String(r.ops_cin7 || "").trim();
+    const orderCin7 = String(r.ood_cin7 || "").trim();
+    const cin7Exists = Boolean(
+      (lineCin7 && lineCin7 !== "pending" && lineCin7 !== "duplicate") ||
+        (orderCin7 && orderCin7 !== "pending" && orderCin7 !== "duplicate"),
+    );
     const item = {
       id: `${r.orderId}-${variantId}`,
       lineIndexId: String(r.line_index_id || ""),
