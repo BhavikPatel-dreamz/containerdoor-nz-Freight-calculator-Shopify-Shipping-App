@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
-import { createMondayItem, buildMondayPulseName } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms } from "./monday.server";
 import { createCin7SalesOrder } from "./cin7.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
@@ -469,27 +469,24 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
 
       let mondayItemId: string;
       try {
-        mondayItemId = await createMondayItem(itemName, {
-          customerName,
-          email,
-          carriers: li.company,
-          trackingNumber: "",
-          eddDate: "",
-          originalEddDate: "",
-          productTitle: li.title ?? "",
-          sku: li.sku ?? "",
-          boxes: li.boxes ?? "",
-          customerStatus: "",
+        const { row: mondayRow, itemName: pulseName } = await buildMondayRowFromOms({
           shop,
           orderId,
           variantId: li.variantId,
-          warehouseStatus: "",
-          warehouseTags: "",
-          dispatchStatus: "",
-          deliveryStatus: "",
-          depositPaid: "",
-          balanceDue: "",
-          paymentStatus: "",
+          ops: {
+            productTitle: li.title ?? "",
+            carrier: li.company,
+          },
+        });
+        // Prefer webhook-built name (same helper) but use OMS-enriched row.
+        mondayItemId = await createMondayItem(itemName || pulseName, {
+          ...mondayRow,
+          carriers: li.company,
+          productTitle: li.title ?? "",
+          sku: li.sku ?? mondayRow.sku,
+          boxes: li.boxes ?? mondayRow.boxes,
+          customerName,
+          email,
         });
       } catch {
         failedCount++;

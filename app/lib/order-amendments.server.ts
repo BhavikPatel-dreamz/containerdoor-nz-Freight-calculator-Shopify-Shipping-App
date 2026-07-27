@@ -9,7 +9,7 @@
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { logActivity } from "./communication-log.server";
-import { updateMondayItem } from "./monday.server";
+import { updateMondayItem, buildMondayRowFromOms } from "./monday.server";
 
 export type ContactAmendment = {
   firstName?: string;
@@ -399,30 +399,22 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
     for (const line of lines) {
       if (!line.mondayItemId || line.mondayItemId === "pending") continue;
       try {
-        await updateMondayItem(line.mondayItemId, {
-          customerName: `${first} ${last}`.trim(),
-          email,
-          carriers: line.carrier ?? "",
-          trackingNumber: line.trackingNumber ?? "",
-          eddDate: line.eddDate ?? "",
-          originalEddDate: line.originalEddDate ?? "",
-          productTitle: line.productTitle ?? "",
-          sku: "",
-          boxes: "",
-          customerStatus:
-            cancelTargets.some((t) => t.variantId === line.variantId)
-              ? "cancelled"
-              : line.customerStatus ?? "",
-          paymentStatus: line.paymentStatus ?? "",
+        const { row } = await buildMondayRowFromOms({
           shop,
           orderId,
           variantId: line.variantId,
-          warehouseStatus: line.warehouseStatus ?? "",
-          warehouseTags: line.warehouseTags ?? "",
-          dispatchStatus: line.dispatchStatus ?? "",
-          deliveryStatus: line.deliveryStatus ?? "",
-          depositPaid: line.depositPaid ?? "",
-          balanceDue: line.balanceDue ?? "",
+          ops: {
+            ...line,
+            customerStatus:
+              cancelTargets.some((t) => t.variantId === line.variantId)
+                ? "cancelled"
+                : line.customerStatus ?? "",
+          },
+        });
+        await updateMondayItem(line.mondayItemId, {
+          ...row,
+          customerName: `${first} ${last}`.trim() || row.customerName,
+          email: email || row.email,
         });
       } catch (e) {
         mondayOk = false;

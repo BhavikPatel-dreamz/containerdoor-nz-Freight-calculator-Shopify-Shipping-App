@@ -109,7 +109,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
           <span className="fo-detail-label">Line order #</span>
           <span className="fo-detail-value">
             <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "2px 8px", borderRadius: "5px", background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe", fontSize: "11px", fontWeight: 700 }}>
-              #{order.shopifyOrderName} <span style={{ background: "#bfdbfe", borderRadius: "3px", padding: "0 4px", fontSize: "10px" }}>{item.letterSuffix}</span>
+              {String(order.shopifyOrderName || "").startsWith("#") ? order.shopifyOrderName : `#${order.shopifyOrderName}`} <span style={{ background: "#bfdbfe", borderRadius: "3px", padding: "0 4px", fontSize: "10px" }}>{item.letterSuffix}</span>
             </span>
           </span>
         </div>

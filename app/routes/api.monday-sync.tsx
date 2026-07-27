@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, buildMondayPulseName, renameMondayItem } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, renameMondayItem, buildMondayRowFromOms } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 function getCorsHeaders(request: Request) {
@@ -37,49 +37,10 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Line item not found" }, { status: 404, headers: getCorsHeaders(request) });
   }
 
-  // Always prefer OMS order name + line letter (never product title).
-  const lineIndex = await prisma.orderLineItemIndex.findFirst({
-    where: { shop, orderId, variantId },
-    select: { orderName: true, letterSuffix: true },
-  });
-  const snapMeta = !lineIndex?.orderName
-    ? await prisma.orderSnapshot.findFirst({
-        where: { shop, orderId },
-        select: { orderName: true },
-      })
-    : null;
-  const nameSource = String(lineIndex?.orderName || snapMeta?.orderName || "").trim();
-  const clientName = String(rawItemName || "").trim();
-  const clientLooksLikeOrder =
-    Boolean(clientName) &&
-    (clientName.startsWith("#") || (!clientName.includes(" - ") && clientName.length <= 32));
-  const itemName = buildMondayPulseName(
-    nameSource || (clientLooksLikeOrder ? clientName : ""),
-    lineIndex?.letterSuffix,
-    orderId,
-  );
-  console.log("[Monday][Sync] Resolved pulse name:", itemName);
-
+  // Full OMS detail → Monday columns (customer, address, EDD, ops, etc.)
   const resolvedPaymentStatus = normalizePaymentStatus(
     String(existing.paymentStatus || "").trim() || String(row?.paymentStatus || "").trim(),
   );
-
-  const fullRow = {
-    ...row,
-    shop,
-    orderId,
-    variantId,
-    // Prefer persisted OMS payment; fall back to UI/Shopify-derived value from client row.
-    paymentStatus: resolvedPaymentStatus,
-    warehouseStatus: existing.warehouseStatus ?? "",
-    warehouseTags: existing.warehouseTags ?? "",
-    dispatchStatus: existing.dispatchStatus ?? "",
-    deliveryStatus: existing.deliveryStatus ?? "",
-    depositPaid: existing.depositPaid ?? "",
-    balanceDue: existing.balanceDue ?? "",
-  };
-
-  // Persist display payment into OMS when DB was empty (so later Monday syncs stay in sync).
   if (resolvedPaymentStatus && !String(existing.paymentStatus || "").trim()) {
     await prisma.orderLineItemOperationalData.update({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
@@ -87,6 +48,24 @@ export async function action({ request }: ActionFunctionArgs) {
     });
     existing = { ...existing, paymentStatus: resolvedPaymentStatus };
   }
+
+  const { row: builtRow, itemName } = await buildMondayRowFromOms({
+    shop,
+    orderId,
+    variantId,
+    ops: {
+      ...existing,
+      ...(row?.carriers ? { carrier: row.carriers } : {}),
+      ...(row?.trackingNumber != null ? { trackingNumber: row.trackingNumber } : {}),
+      ...(row?.eddDate != null ? { eddDate: row.eddDate } : {}),
+      ...(row?.originalEddDate != null ? { originalEddDate: row.originalEddDate } : {}),
+      ...(row?.customerStatus != null ? { customerStatus: row.customerStatus } : {}),
+      ...(row?.productTitle ? { productTitle: row.productTitle } : {}),
+      paymentStatus: resolvedPaymentStatus || existing.paymentStatus,
+    },
+  });
+  const fullRow = { ...builtRow };
+  console.log("[Monday][Sync] Resolved pulse name:", itemName);
 
   let mondayItemId = existing.mondayItemId;
 
