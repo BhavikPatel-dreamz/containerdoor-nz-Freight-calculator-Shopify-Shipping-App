@@ -28,15 +28,17 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
 
   let shopifyOrderId = "";
   let focusVariantId: string | undefined;
+  let focusLineIndexId: string | undefined;
 
   // 1) Preferred: OrderLineItemIndex.id — has orderId + variantId in DB
   const lineIdx = await prisma.orderLineItemIndex.findFirst({
     where: { shop, id: paramId },
-    select: { orderId: true, variantId: true },
+    select: { id: true, orderId: true, variantId: true },
   });
   if (lineIdx) {
     shopifyOrderId = String(lineIdx.orderId);
     focusVariantId = String(lineIdx.variantId || "") || undefined;
+    focusLineIndexId = lineIdx.id;
   }
 
   // 2) OrderSnapshot.id (cuid)
@@ -61,9 +63,24 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
 
-  // If opened via snapshot/Shopify id (no line index), default to first line in DB.
+  // Attach OrderLineItemIndex.id on each line so client can fetch by single id.
+  const indexRows = await prisma.orderLineItemIndex.findMany({
+    where: { shop, orderId: shopifyOrderId },
+    select: { id: true, variantId: true },
+  });
+  const indexByVariant = new Map(
+    indexRows.map((r: { id: string; variantId: string }) => [String(r.variantId), r.id]),
+  );
+  row.lineItems = row.lineItems.map((li: any) => ({
+    ...li,
+    lineIndexId: indexByVariant.get(String(li.variantId)) || li.lineIndexId || "",
+  }));
+
   if (!focusVariantId) {
     focusVariantId = row.lineItems[0]?.variantId;
+  }
+  if (!focusLineIndexId && focusVariantId) {
+    focusLineIndexId = indexByVariant.get(String(focusVariantId));
   }
 
   return {
@@ -73,6 +90,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
     snapshotId: snap.id,
     orderId: shopifyOrderId,
     variantId: focusVariantId,
+    lineIndexId: focusLineIndexId,
   };
 }
 
@@ -99,7 +117,7 @@ async function buildOpsMapsForOrder(prisma: any, shop: string, orderId: string) 
 }
 
 export default function FreightOrderDetailPage() {
-  const { row, shop, currentUser, variantId } = useLoaderData<typeof loader>();
+  const { row, shop, currentUser, variantId, lineIndexId } = useLoaderData<typeof loader>();
 
   return (
     <FreightOrderDetail
@@ -107,6 +125,7 @@ export default function FreightOrderDetailPage() {
       shop={shop}
       noteAuthor={currentUser.noteAuthor}
       variantId={variantId}
+      lineIndexId={lineIndexId}
       backHref="/app"
       navbarRight={
         <NavUserAvatar

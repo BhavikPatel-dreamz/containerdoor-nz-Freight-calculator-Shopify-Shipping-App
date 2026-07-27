@@ -260,7 +260,12 @@ export default function FreightDashboard({
     const load = async () => {
       setNotesFetching(true);
       try {
-        const json = await fetchOrderStatus(shop, target.order.shopifyOrderId, target.item.variantId);
+        const json = await fetchOrderStatus(
+          shop,
+          target.order.shopifyOrderId,
+          target.item.variantId,
+          target.item.lineIndexId,
+        );
         if (!json) return;
         const line = findStatusLine(json, target.item.variantId);
         setNotes(parseNotesString(line?.notes ?? ""));
@@ -319,7 +324,9 @@ export default function FreightDashboard({
   }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
 
   // ── Polling for field changes pushed via webhook ──
+  // Skip on detail page — detail uses one lineIndexId fetch (avoids wrong-line race).
   useEffect(() => {
+    if (isDetailPage) return;
     if (!rows || rows.length === 0) return;
     let cancelled = false;
     const pollFieldUpdates = async () => {
@@ -347,18 +354,11 @@ export default function FreightDashboard({
         };
         setRows((prev) => prev.map(applyLatest));
         if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
-        setDetailView((prev) => {
-          if (!prev) return prev;
-          const updates = byOrder[prev.order.shopifyOrderId];
-          const match = updates?.find((u: any) => u.variantId === prev.item.variantId);
-          if (!match) return prev;
-          return { ...prev, item: { ...prev.item, eddDate: match.eddDate || prev.item.eddDate, originalEddDate: match.originalEddDate || prev.item.originalEddDate, trackingNumber: match.trackingNumber || prev.item.trackingNumber, freightRef: match.freightRef || prev.item.freightRef, customerStatus: match.customerStatus || prev.item.customerStatus, company: match.carrier || prev.item.company } };
-        });
       } catch (e) { console.error("Failed to poll line item field updates", e); }
     };
     const interval = setInterval(pollFieldUpdates, 15000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [rows.map((o) => o.id).join(","), shop]);
+  }, [isDetailPage, rows.map((o) => o.id).join(","), shop]);
 
   // Server-driven list already filtered by loader `q` — do not re-filter client-side
   // (re-filtering kept stale rows when search box was cleared before URL refreshed).
@@ -444,11 +444,13 @@ export default function FreightDashboard({
       if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: false });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) {
-          const j = await res.json();
-          setCommunications(j.communications ?? []);
-        }
+        const j = await fetchOrderStatus(
+          shop,
+          detailView.order.shopifyOrderId,
+          detailView.item.variantId,
+          detailView.item.lineIndexId,
+        );
+        if (j) setCommunications(j.communications ?? []);
       }
     } catch (e) { setEddError(e instanceof Error ? e.message : "Failed to save EDD"); } finally { setIsSavingEdd(false); }
   };
@@ -486,10 +488,12 @@ export default function FreightDashboard({
             }
             window.setTimeout(() => setSyncNotification(null), 8000);
             if (detailView) {
-              fetch(
-                `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+              fetchOrderStatus(
+                shop,
+                detailView.order.shopifyOrderId,
+                detailView.item.variantId,
+                detailView.item.lineIndexId,
               )
-                .then((r) => (r.ok ? r.json() : null))
                 .then((json) => {
                   if (json?.communications) setCommunications(json.communications);
                 })
@@ -567,14 +571,14 @@ export default function FreightDashboard({
       );
       if (touched) {
         try {
-          const logRes = await fetch(
-            `/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`,
+          const logJson = await fetchOrderStatus(
+            shop,
+            detailView.order.shopifyOrderId,
+            detailView.item.variantId,
+            detailView.item.lineIndexId,
           );
-          if (logRes.ok) {
-            const logJson = await logRes.json();
-            const line = (logJson.lineItems ?? []).find(
-              (item: any) => item.variantId === detailView.item.variantId,
-            );
+          if (logJson) {
+            const line = findStatusLine(logJson, detailView.item.variantId);
             setNotes(parseNotesString(line?.notes ?? ""));
             setCommunications(logJson.communications ?? []);
           }
@@ -633,11 +637,13 @@ export default function FreightDashboard({
       if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
       setTrackingModal(null); setTrackingForm({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
       if (detailView) {
-        const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
-        if (res.ok) {
-          const j = await res.json();
-          setCommunications(j.communications ?? []);
-        }
+        const j = await fetchOrderStatus(
+          shop,
+          detailView.order.shopifyOrderId,
+          detailView.item.variantId,
+          detailView.item.lineIndexId,
+        );
+        if (j) setCommunications(j.communications ?? []);
       }
     } catch (e) { setTrackingError(e instanceof Error ? e.message : "Failed to save tracking"); } finally { setIsSavingTracking(false); }
   };
@@ -936,8 +942,16 @@ export default function FreightDashboard({
         }
       } catch (cin7Err) { console.error("Cin7 sync failed", cin7Err); }
       // Refresh notes
-      const notesRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(detailView.order.shopifyOrderId)}&variantId=${encodeURIComponent(detailView.item.variantId)}&shop=${encodeURIComponent(shop)}`);
-      if (notesRes.ok) { const notesJson = await notesRes.json(); const line = (notesJson.lineItems ?? []).find((it: any) => it.variantId === detailView.item.variantId); setNotes(parseNotesString(line?.notes ?? "")); }
+      const notesJson = await fetchOrderStatus(
+        shop,
+        detailView.order.shopifyOrderId,
+        detailView.item.variantId,
+        detailView.item.lineIndexId,
+      );
+      if (notesJson) {
+        const line = findStatusLine(notesJson, detailView.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
+      }
     } catch (e) { console.error("Monday sync failed", e); } finally { setIsSyncing(false); }
   };
 
@@ -1367,9 +1381,13 @@ export default function FreightDashboard({
               if (payload.notifyJobId) {
                 watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
               }
-              const logRes = await fetch(`/api/order-status?orderId=${encodeURIComponent(activeNoteTarget.order.shopifyOrderId)}&variantId=${encodeURIComponent(activeNoteTarget.item.variantId)}&shop=${encodeURIComponent(shop)}`);
-              if (logRes.ok) {
-                const logJson = await logRes.json();
+              const logJson = await fetchOrderStatus(
+                shop,
+                activeNoteTarget.order.shopifyOrderId,
+                activeNoteTarget.item.variantId,
+                activeNoteTarget.item.lineIndexId,
+              );
+              if (logJson) {
                 setCommunications(logJson.communications ?? []);
               }
             } catch (error) {

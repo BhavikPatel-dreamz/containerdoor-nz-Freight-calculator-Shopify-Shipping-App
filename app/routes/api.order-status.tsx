@@ -127,19 +127,53 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
 
   const url = new URL(request.url);
-  const rawOrderId = url.searchParams.get("orderId") ?? "";
-  const orderId = rawOrderId.replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  const lineIndexId = (url.searchParams.get("lineIndexId") ?? "").trim();
   const shopParam = url.searchParams.get("shop") ?? "";
+  let rawOrderId = url.searchParams.get("orderId") ?? "";
+  let variantIdParam = (url.searchParams.get("variantId") ?? "").trim();
+
+  // Preferred: single OMS line-index id → resolve orderId + variantId from DB
+  if (lineIndexId) {
+    const idx = await prisma.orderLineItemIndex.findFirst({
+      where: {
+        id: lineIndexId,
+        ...(shopParam ? { shop: shopParam } : {}),
+      },
+      select: { shop: true, orderId: true, variantId: true },
+    });
+    if (!idx) {
+      return Response.json(
+        { ok: false, error: "Line item not found" },
+        { status: 404, headers: CORS_HEADERS },
+      );
+    }
+    rawOrderId = idx.orderId;
+    variantIdParam = idx.variantId;
+    if (!shopParam) {
+      // prefer index.shop when caller omitted shop
+      url.searchParams.set("shop", idx.shop);
+    }
+  }
+
+  const orderId = rawOrderId.replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  const shopFromParam = url.searchParams.get("shop") ?? shopParam;
 
   if (!orderId) {
-    return Response.json({ error: "Missing orderId" }, { status: 400, headers: CORS_HEADERS });
+    return Response.json(
+      { error: "Missing orderId or lineIndexId" },
+      { status: 400, headers: CORS_HEADERS },
+    );
   }
 
   try {
-    const shop = await resolveShopDomain(request, shopParam, orderId);
+    const shop = await resolveShopDomain(request, shopFromParam, orderId);
 
     const records = await prisma.orderLineItemOperationalData.findMany({
-      where: { orderId, ...(shop ? { shop } : {}) },
+      where: {
+        orderId,
+        ...(shop ? { shop } : {}),
+        ...(variantIdParam ? { variantId: variantIdParam } : {}),
+      },
       select: {
         variantId: true,
         productTitle: true,
@@ -151,7 +185,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         deliveryStatus: true,
         dispatchStatus: true,
         trackingNumber: true,
-        freightRef: true,     
+        freightRef: true,
         eddDate: true,
         originalEddDate: true,
         supplierContainer: true,
@@ -267,7 +301,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // ── Fetch activity log (line-item scoped when variantId present) ──
     let communications: Awaited<ReturnType<typeof getCommunicationLogForOrder>> = [];
     try {
-      const variantIdParam = url.searchParams.get("variantId") || "";
       if (variantIdParam) {
         communications = await getActivityLogForLineItem(shop || "", orderId, variantIdParam);
       } else {
@@ -277,7 +310,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       console.error("[api.order-status] CommunicationLog fetch failed", e);
     }
 
-    return Response.json({ ok: true, lineItems, communications }, { headers: CORS_HEADERS });
+    return Response.json(
+      {
+        ok: true,
+        lineItems,
+        communications,
+        lineIndexId: lineIndexId || undefined,
+        orderId,
+        variantId: variantIdParam || undefined,
+      },
+      { headers: CORS_HEADERS },
+    );
   } catch (err) {
     console.error("[api.order-status] DB error", err);
     return Response.json({ ok: false, error: String(err) }, { status: 500, headers: CORS_HEADERS });

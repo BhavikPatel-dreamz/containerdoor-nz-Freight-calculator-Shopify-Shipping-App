@@ -12,6 +12,8 @@ export type FreightOrderDetailProps = {
   shop: string;
   noteAuthor?: string;
   variantId?: string;
+  /** OrderLineItemIndex.id — preferred single id for status/notes fetch */
+  lineIndexId?: string;
   navbarRight: ReactNode;
   backHref?: string;
 };
@@ -21,6 +23,7 @@ export function FreightOrderDetail({
   shop,
   noteAuthor = "SP",
   variantId,
+  lineIndexId,
   navbarRight,
   backHref = "/app",
 }: FreightOrderDetailProps) {
@@ -35,7 +38,7 @@ export function FreightOrderDetail({
       noteAuthor={noteAuthor}
       navbarRight={navbarRight}
       viewMode="detail"
-      initialDetailOrderId={order.snapshotId || order.shopifyOrderId}
+      initialDetailOrderId={lineIndexId || order.snapshotId || order.shopifyOrderId}
       initialDetailVariantId={variantId}
       detailBackHref={backHref}
     />

@@ -10,17 +10,27 @@ export type OrderStatusLine = {
 export type OrderStatusPayload = {
   lineItems?: OrderStatusLine[];
   communications?: any[];
+  lineIndexId?: string;
+  orderId?: string;
+  variantId?: string;
   [key: string]: any;
 };
 
+/** Prefer lineIndexId (single OMS id). Falls back to orderId+variantId. */
 export async function fetchOrderStatus(
   shop: string,
   orderId: string,
   variantId: string,
+  lineIndexId?: string,
 ): Promise<OrderStatusPayload | null> {
-  const res = await fetch(
-    `/api/order-status?orderId=${encodeURIComponent(orderId)}&variantId=${encodeURIComponent(variantId)}&shop=${encodeURIComponent(shop)}`,
-  );
+  const qs = new URLSearchParams({ shop });
+  if (lineIndexId) {
+    qs.set("lineIndexId", lineIndexId);
+  } else {
+    qs.set("orderId", orderId);
+    if (variantId) qs.set("variantId", variantId);
+  }
+  const res = await fetch(`/api/order-status?${qs}`);
   if (!res.ok) return null;
   return res.json();
 }
@@ -29,7 +39,9 @@ export function findStatusLine(
   payload: OrderStatusPayload | null | undefined,
   variantId: string,
 ): OrderStatusLine | undefined {
-  return (payload?.lineItems ?? []).find((item) => item.variantId === variantId);
+  const items = payload?.lineItems ?? [];
+  if (variantId) return items.find((item) => item.variantId === variantId);
+  return items[0];
 }
 
 export async function postOrderStatus(body: {
