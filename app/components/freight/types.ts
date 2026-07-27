@@ -2,6 +2,8 @@ import React from "react";
 
 export type FreightLineItem = {
   id: string;
+  /** OrderLineItemIndex.id (cuid) — detail URL `/app/order/:lineIndexId` */
+  lineIndexId?: string;
   variantId: string;
   title?: string;
   variantTitle?: string;
@@ -38,6 +40,8 @@ export type FreightLineItem = {
 
 export type FreightOrderRow = {
   id: string;
+  /** OrderSnapshot.id (cuid) — use this in `/app/order/:id` URLs */
+  snapshotId: string;
   shopifyOrderId: string;
   shopifyOrderName: string;
   currency: string;

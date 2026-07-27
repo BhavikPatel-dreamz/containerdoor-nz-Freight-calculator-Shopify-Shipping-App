@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { LoaderFunctionArgs } from "react-router";
-import { useLoaderData, useSearchParams } from "react-router";
+import { useLoaderData } from "react-router";
 import { FreightOrderDetail } from "../components/freight/FreightOrderDetail";
 import { NavUserAvatar } from "../components/freight/NavUserAvatar";
 import {
@@ -8,8 +8,9 @@ import {
 } from "../lib/freight-orders.server";
 
 /**
- * Separate route: `/app/order/:orderId?variantId=`
- * Loader returns one order only — never the list.
+ * Detail route: `/app/order/:id`
+ * `id` = OrderLineItemIndex.id (preferred) or OrderSnapshot.id / Shopify orderId (legacy).
+ * variantId lives in DB on the index row — not required in the URL.
  */
 export async function loader({ request, params }: LoaderFunctionArgs) {
   const { authenticate } = await import("../shopify.server");
@@ -19,34 +20,60 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const currentUser = currentUserFromSession(session);
-  // URL must use OMS OrderSnapshot.orderId (= Shopify numeric order id).
-  // Accept accidental GID / whitespace from older links.
-  const orderId = String(params.orderId || "")
+  const paramId = String(params.orderId || "")
     .replace(/^gid:\/\/shopify\/Order\//, "")
     .trim();
 
-  // Prefer shop+orderId (canonical). Fallback: OrderSnapshot cuid if someone
-  // linked with primary key — still resolve to the same DB row.
-  let snap =
-    orderId
-      ? await prisma.orderSnapshot.findUnique({
-          where: { shop_orderId: { shop, orderId } },
-        })
-      : null;
-  if (!snap && orderId) {
-    snap = await prisma.orderSnapshot.findFirst({
-      where: { shop, OR: [{ id: orderId }, { orderId }] },
+  if (!paramId) throw new Response("Order not found", { status: 404 });
+
+  let shopifyOrderId = "";
+  let focusVariantId: string | undefined;
+
+  // 1) Preferred: OrderLineItemIndex.id — has orderId + variantId in DB
+  const lineIdx = await prisma.orderLineItemIndex.findFirst({
+    where: { shop, id: paramId },
+    select: { orderId: true, variantId: true },
+  });
+  if (lineIdx) {
+    shopifyOrderId = String(lineIdx.orderId);
+    focusVariantId = String(lineIdx.variantId || "") || undefined;
+  }
+
+  // 2) OrderSnapshot.id (cuid)
+  let snap = lineIdx
+    ? await prisma.orderSnapshot.findUnique({
+        where: { shop_orderId: { shop, orderId: shopifyOrderId } },
+      })
+    : await prisma.orderSnapshot.findFirst({
+        where: { shop, id: paramId },
+      });
+
+  // 3) Legacy: Shopify numeric orderId
+  if (!snap) {
+    snap = await prisma.orderSnapshot.findUnique({
+      where: { shop_orderId: { shop, orderId: paramId } },
     });
   }
   if (!snap) throw new Response("Order not found", { status: 404 });
 
-  // Always key ops by the snapshot's Shopify orderId (DB column), not URL quirks.
-  const dbOrderId = String(snap.orderId);
-  const { opsMap, orderCin7Map } = await buildOpsMapsForOrder(prisma, shop, dbOrderId);
+  shopifyOrderId = String(snap.orderId);
+  const { opsMap, orderCin7Map } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
   const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
 
-  return { row, shop, currentUser, orderId: dbOrderId };
+  // If opened via snapshot/Shopify id (no line index), default to first line in DB.
+  if (!focusVariantId) {
+    focusVariantId = row.lineItems[0]?.variantId;
+  }
+
+  return {
+    row,
+    shop,
+    currentUser,
+    snapshotId: snap.id,
+    orderId: shopifyOrderId,
+    variantId: focusVariantId,
+  };
 }
 
 /** Leaner than full-shop buildOpsMaps — detail page only needs this order. */
@@ -72,9 +99,7 @@ async function buildOpsMapsForOrder(prisma: any, shop: string, orderId: string) 
 }
 
 export default function FreightOrderDetailPage() {
-  const { row, shop, currentUser } = useLoaderData<typeof loader>();
-  const [searchParams] = useSearchParams();
-  const variantId = searchParams.get("variantId") ?? undefined;
+  const { row, shop, currentUser, variantId } = useLoaderData<typeof loader>();
 
   return (
     <FreightOrderDetail

@@ -103,7 +103,7 @@ export function normalizeShopifyOrderId(raw?: string | null): string {
     .trim();
 }
 
-/** Resolve order + line for `/app/order/:orderId?variantId=` — sync, no flash. */
+/** Resolve order + line for `/app/order/:id` — sync, no flash. */
 export function resolveDetailTarget(
   orders: FreightOrderRow[],
   orderId?: string | null,
@@ -111,13 +111,22 @@ export function resolveDetailTarget(
 ): { order: FreightOrderRow; item: FreightLineItem } | null {
   if (!orderId) return null;
   const want = normalizeShopifyOrderId(orderId);
-  const order = orders.find(
-    (o) =>
-      normalizeShopifyOrderId(o.shopifyOrderId) === want ||
-      normalizeShopifyOrderId(o.id) === want,
-  );
+
+  // Match by line-index cuid, snapshot cuid, Shopify order id, or GID.
+  let order =
+    orders.find((o) => o.lineItems.some((li) => li.lineIndexId && li.lineIndexId === want)) ??
+    orders.find(
+      (o) =>
+        (o.snapshotId && o.snapshotId === want) ||
+        normalizeShopifyOrderId(o.shopifyOrderId) === want ||
+        normalizeShopifyOrderId(o.id) === want,
+    );
   if (!order) return null;
+
   const item =
+    (want
+      ? order.lineItems.find((li) => li.lineIndexId === want)
+      : undefined) ??
     (variantId ? order.lineItems.find((li) => li.variantId === variantId) : undefined) ??
     order.lineItems[0];
   if (!item) return null;

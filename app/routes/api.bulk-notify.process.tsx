@@ -67,7 +67,7 @@ function renderTemplate(template: string, recipient: ClaimedRecipient, appUrl: s
   return template
     .replace(/\{name\}/g, recipient.name)
     .replace(/\{order\}/g, recipient.orderName)
-    .replace(/\{link\}/g, `${appUrl}/app/order/${recipient.orderId}?variantId=${recipient.variantId}`)
+    .replace(/\{link\}/g, `${appUrl}/app/order/${recipient.orderId}`)
     .replace(/\{supplier\}/g, od.supplier || "")
     .replace(/\{edd\}/g, od.edd || "")
     .replace(/\{carrier\}/g, od.carrier || "")
