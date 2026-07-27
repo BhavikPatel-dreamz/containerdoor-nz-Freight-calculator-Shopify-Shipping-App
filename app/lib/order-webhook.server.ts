@@ -433,8 +433,20 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
     }
 
     const shipping = getShippingAddress(order);
-    const customerName = [shipping.first_name, shipping.last_name].filter(Boolean).join(" ") || "—";
-    const email = order.email ?? "—";
+    const customerName =
+      [shipping.first_name, shipping.last_name].filter(Boolean).join(" ").trim() || "—";
+    const email = String(order.email || "").trim();
+    const phone = extractPhoneFromOrder(order);
+    const address = [
+      shipping.address1,
+      shipping.address2,
+      shipping.city,
+      shipping.province,
+      shipping.zip,
+      shipping.country || shipping.country_code,
+    ]
+      .filter(Boolean)
+      .join(", ");
 
     let createdCount = 0;
     let skippedCount = 0;
@@ -449,57 +461,118 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
       const itemName = buildMondayPulseName(order.name, letterSuffix, orderId);
 
-      let claimed = false;
-      try {
-        await prisma.orderLineItemOperationalData.create({
-          data: {
-            shop,
-            orderId,
-            variantId: li.variantId,
-            productTitle: li.title ?? "",
-            carrier: li.company,
-            mondayItemId: "pending",
-          },
-        });
-        claimed = true;
-      } catch {
-        skippedCount++;
+      // Ops row is usually already created by createOrderLineItemRecords — do NOT
+      // require a fresh create (that unique-key race was skipping Monday entirely).
+      let ops = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+      });
+      if (!ops) {
+        try {
+          ops = await prisma.orderLineItemOperationalData.create({
+            data: {
+              shop,
+              orderId,
+              variantId: li.variantId,
+              productTitle: li.title ?? "",
+              carrier: li.company ?? "",
+              mondayItemId: "pending",
+            },
+          });
+        } catch (createErr) {
+          ops = await prisma.orderLineItemOperationalData.findUnique({
+            where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+          });
+          if (!ops) {
+            failedCount++;
+            console.error(
+              `[Monday][Webhook][${orderId}] No ops row for variant ${li.variantId}`,
+              createErr,
+            );
+            continue;
+          }
+        }
       }
-      if (!claimed) continue;
+
+      if (ops.mondayItemId && ops.mondayItemId !== "pending") {
+        // Already linked — still rename pulse to #OrderLetter in case it was created with product title.
+        try {
+          const { renameMondayItem } = await import("./monday.server");
+          await renameMondayItem(ops.mondayItemId, itemName);
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { mondayItemName: itemName },
+          });
+        } catch (e) {
+          console.error(`[Monday][Webhook][${orderId}] rename existing failed`, e);
+        }
+        skippedCount++;
+        continue;
+      }
+
+      // Mark pending so concurrent webhooks don't double-create Monday items.
+      if (ops.mondayItemId !== "pending") {
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: li.company || ops.carrier },
+        });
+      }
 
       let mondayItemId: string;
       try {
-        const { row: mondayRow, itemName: pulseName } = await buildMondayRowFromOms({
+        const { row: mondayRow } = await buildMondayRowFromOms({
           shop,
           orderId,
           variantId: li.variantId,
           ops: {
-            productTitle: li.title ?? "",
-            carrier: li.company,
+            ...ops,
+            productTitle: li.title ?? ops.productTitle ?? "",
+            carrier: li.company || ops.carrier || "",
           },
         });
-        // Prefer webhook-built name (same helper) but use OMS-enriched row.
-        mondayItemId = await createMondayItem(itemName || pulseName, {
+        mondayItemId = await createMondayItem(itemName, {
           ...mondayRow,
-          carriers: li.company,
-          productTitle: li.title ?? "",
-          sku: li.sku ?? mondayRow.sku,
-          boxes: li.boxes ?? mondayRow.boxes,
-          customerName,
-          email,
+          lineOrderName: itemName,
+          carriers: li.company || mondayRow.carriers,
+          productTitle: li.title ?? mondayRow.productTitle,
+          sku: li.sku || mondayRow.sku,
+          boxes: li.boxes || mondayRow.boxes,
+          customerName: customerName !== "—" ? customerName : mondayRow.customerName,
+          email: email || mondayRow.email,
+          phone: phone || mondayRow.phone,
+          address: address || mondayRow.address,
         });
-      } catch {
+      } catch (err) {
         failedCount++;
-        console.error(`[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`);
+        console.error(
+          `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
+          err,
+        );
+        // Clear pending so a later sync can retry
+        await prisma.orderLineItemOperationalData
+          .update({
+            where: { id: ops.id },
+            data: { mondayItemId: "" },
+          })
+          .catch(() => {});
         continue;
       }
 
       try {
         await prisma.orderLineItemOperationalData.update({
-          where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
-          data: { mondayItemId, mondayItemName: itemName, mondayCachedStatus: "match", mondayCachedMismatches: "" },
+          where: { id: ops.id },
+          data: {
+            mondayItemId,
+            mondayItemName: itemName,
+            mondayCachedStatus: "match",
+            mondayCachedMismatches: "",
+            productTitle: li.title ?? ops.productTitle,
+            carrier: li.company || ops.carrier,
+          },
         });
         createdCount++;
+        console.log(
+          `[Monday][Webhook][${orderId}] Created pulse ${itemName} → ${mondayItemId} (variant ${li.variantId})`,
+        );
       } catch (dbErr) {
         failedCount++;
         console.error(
