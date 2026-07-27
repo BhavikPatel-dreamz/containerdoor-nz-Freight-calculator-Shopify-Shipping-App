@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, renameMondayItem, buildMondayRowFromOms } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, renameMondayItem, buildMondayRowFromOms, summarizeMondayRow } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 function getCorsHeaders(request: Request) {
@@ -61,9 +61,15 @@ export async function action({ request }: ActionFunctionArgs) {
       ...(row?.originalEddDate != null ? { originalEddDate: row.originalEddDate } : {}),
       ...(row?.customerStatus != null ? { customerStatus: row.customerStatus } : {}),
       ...(row?.productTitle ? { productTitle: row.productTitle } : {}),
+      ...(row?.customerName ? { customerName: row.customerName } : {}),
+      ...(row?.email ? { email: row.email } : {}),
+      ...(row?.boxes != null && row.boxes !== "" ? { boxes: row.boxes } : {}),
       paymentStatus: resolvedPaymentStatus || existing.paymentStatus,
     },
   });
+  // Client may pass customer/email even when index is empty — apply after build.
+  if (row?.customerName && !builtRow.customerName) builtRow.customerName = String(row.customerName);
+  if (row?.email && !builtRow.email) builtRow.email = String(row.email);
   const fullRow = { ...builtRow };
   console.log("[Monday][Sync] Resolved pulse name:", itemName);
 
@@ -132,10 +138,9 @@ export async function action({ request }: ActionFunctionArgs) {
 
     console.log("[Monday][Sync] Updating Monday item:", mondayItemId, "with resolved row:", fullRow);
     try {
+      // updateMondayItem also sets pulse `name` from lineOrderName (#CDL215347A)
       await updateMondayItem(mondayItemId, fullRow);
-      await renameMondayItem(mondayItemId, itemName).catch((e) =>
-        console.error("[Monday][Sync] rename failed", e),
-      );
+      await renameMondayItem(mondayItemId, itemName);
       await prisma.orderLineItemOperationalData.update({
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
         data: { mondayItemName: itemName },
@@ -285,5 +290,23 @@ export async function action({ request }: ActionFunctionArgs) {
     console.error("[Monday][Sync] Failed to persist cache status", cacheErr);
   }
 
-  return Response.json({ ok: true, mondayItemId, mondayItemName: itemName, updated }, { headers: getCorsHeaders(request) });
+  const fieldSummary = summarizeMondayRow(fullRow);
+  console.log(
+    "[Monday][Sync] Field summary filled:",
+    Object.keys(fieldSummary.filled),
+    "blank:",
+    fieldSummary.blank,
+  );
+
+  return Response.json(
+    {
+      ok: true,
+      mondayItemId,
+      mondayItemName: itemName,
+      syncedFields: fieldSummary.filled,
+      blankFields: fieldSummary.blank,
+      updated,
+    },
+    { headers: getCorsHeaders(request) },
+  );
 }

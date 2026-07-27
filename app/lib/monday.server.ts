@@ -94,12 +94,11 @@ export async function buildMondayRowFromOms(args: {
   const { normalizePaymentStatus } = await import("./freight-orders.server");
   const { shop, orderId, variantId, ops: opsOverride } = args;
 
-  const [opsDb, lineIndex, snap, orderOps] = await Promise.all([
-    opsOverride
-      ? Promise.resolve(null)
-      : prisma.orderLineItemOperationalData.findUnique({
-          where: { shop_orderId_variantId: { shop, orderId, variantId } },
-        }),
+  // Always load OMS rows, then overlay overrides (never skip DB when override is passed).
+  let [opsDb, lineIndex, snap, orderOps] = await Promise.all([
+    prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    }),
     prisma.orderLineItemIndex.findFirst({
       where: { shop, orderId, variantId },
     }),
@@ -112,12 +111,34 @@ export async function buildMondayRowFromOms(args: {
     }),
   ]);
 
+  // Fallback without shop if shop mismatch left index/snapshot empty.
+  if (!lineIndex || !snap) {
+    const [lineFb, snapFb] = await Promise.all([
+      !lineIndex
+        ? prisma.orderLineItemIndex.findFirst({ where: { orderId, variantId } })
+        : Promise.resolve(lineIndex),
+      !snap
+        ? prisma.orderSnapshot.findFirst({ where: { orderId } })
+        : Promise.resolve(snap),
+    ]);
+    lineIndex = lineFb;
+    snap = snapFb;
+  }
+  if (!opsDb) {
+    opsDb = await prisma.orderLineItemOperationalData.findFirst({
+      where: { orderId, variantId },
+    });
+  }
+
   const ops = { ...(opsDb || {}), ...(opsOverride || {}) } as Record<string, any>;
   const customerName =
     String(lineIndex?.customerName || "").trim() ||
-    `${snap?.shippingFirstName || ""} ${snap?.shippingLastName || ""}`.trim();
+    `${snap?.shippingFirstName || ""} ${snap?.shippingLastName || ""}`.trim() ||
+    String(opsOverride?.customerName || "").trim();
   const email =
-    String(lineIndex?.email || "").trim() || String(snap?.email || "").trim();
+    String(lineIndex?.email || "").trim() ||
+    String(snap?.email || "").trim() ||
+    String(opsOverride?.email || "").trim();
   const phone =
     String(lineIndex?.phone || "").trim() || String(snap?.phone || "").trim();
   const address =
@@ -148,7 +169,9 @@ export async function buildMondayRowFromOms(args: {
   const boxes =
     lineIndex?.boxes != null && Number(lineIndex.boxes) > 0
       ? Number(lineIndex.boxes)
-      : ops.boxes ?? "";
+      : ops.boxes != null && ops.boxes !== ""
+        ? Number(ops.boxes) || ops.boxes
+        : "";
 
   const row: MondayRow = {
     customerName,
@@ -167,8 +190,10 @@ export async function buildMondayRowFromOms(args: {
     productId: String(lineIndex?.productId || "").trim(),
     boxes,
     customerStatus: String(ops.customerStatus || "").trim(),
-    paymentStatus: normalizePaymentStatus(ops.paymentStatus || lineIndex?.financialStatus || ""),
-    shop,
+    paymentStatus: normalizePaymentStatus(
+      ops.paymentStatus || lineIndex?.financialStatus || "",
+    ),
+    shop: shop || String(ops.shop || snap?.shop || lineIndex?.shop || ""),
     orderId,
     variantId,
     lineOrderName: itemName,
@@ -192,7 +217,31 @@ export async function buildMondayRowFromOms(args: {
 export async function renameMondayItem(itemId: string, newName: string) {
   const name = String(newName || "").trim();
   if (!itemId || !name) return;
+  // Never allow product-title style names as the Monday pulse name.
+  if (name.includes(" - ") && name.length > 40) {
+    console.warn("[Monday] renameMondayItem refused product-title-like name:", name);
+    return;
+  }
   console.log("[Monday] renameMondayItem:", itemId, "→", name);
+
+  // Prefer change_multiple_column_values on the built-in "name" column
+  // (change_name_on_board is flaky / deprecated on some API versions).
+  try {
+    await mondayRequest(
+      `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id name }
+      }`,
+      {
+        boardId: process.env.MONDAY_BOARD_ID,
+        itemId,
+        columnValues: JSON.stringify({ name }),
+      },
+    );
+    return;
+  } catch (err) {
+    console.warn("[Monday] rename via name column failed, trying change_name_on_board", err);
+  }
+
   await mondayRequest(
     `mutation ($boardId: ID!, $itemId: ID!, $newName: String!) {
       change_name_on_board(board_id: $boardId, item_id: $itemId, new_name: $newName) { id name }
@@ -578,9 +627,25 @@ const carrierLabelMap: Record<string, string> = {
   mainfreight: "Mainfreight",
 };
 
+const MONDAY_CARRIER_LABELS = new Set(Object.values(carrierLabelMap));
+
+function resolveMappedLabel(
+  raw: string,
+  map: Record<string, string>,
+): string | null {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const lower = v.toLowerCase();
+  if (map[lower]) return map[lower];
+  // Already a valid label value in the map
+  if (Object.values(map).includes(v)) return v;
+  return null;
+}
+
 async function buildColumnValues(row: MondayRow) {
   const colIds = await getOrCreateColumnIds();
   const values: Record<string, any> = {};
+  const skipped: string[] = [];
   const dateKeys = new Set<keyof MondayRow>([
     "eddDate",
     "originalEddDate",
@@ -592,65 +657,83 @@ async function buildColumnValues(row: MondayRow) {
   const toDate = (raw: unknown) => {
     const s = String(raw || "").trim();
     if (!s) return "";
-    // Monday wants YYYY-MM-DD
     const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
     return m ? m[1] : s.slice(0, 10);
   };
 
+  // Always set Monday pulse Name to Line Order # (e.g. #CDL215347A) — never product title.
+  const pulseName = String(row.lineOrderName || "").trim();
+  if (pulseName && !(pulseName.includes(" - ") && pulseName.length > 40)) {
+    values.name = pulseName;
+  }
+
   for (const key of Object.keys(FIELD_DEFS) as (keyof MondayRow)[]) {
     const colId = colIds[key];
+    if (!colId) {
+      skipped.push(`${key}:no-column`);
+      continue;
+    }
     const val = row[key];
     if (dateKeys.has(key)) {
       const d = toDate(val);
       if (d) values[colId] = { date: d };
+      else if (val) skipped.push(`${key}:bad-date`);
     } else if (key === "customerStatus") {
-      const statusVal = val as string;
-      if (statusVal)
-        values[colId] = {
-          label: statusLabelMap[statusVal.toLowerCase()] ?? statusVal,
-        };
+      const label = resolveMappedLabel(String(val || ""), statusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
     } else if (key === "carriers") {
       const carrierVal = String(val || "").trim();
       if (carrierVal) {
         const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
-        values[colId] = {
-          label:
-            carrierLabelMap[carrierVal.toLowerCase()] ||
-            carrierLabelMap[keyNorm] ||
-            carrierVal,
-        };
+        const label =
+          carrierLabelMap[carrierVal.toLowerCase()] ||
+          carrierLabelMap[keyNorm] ||
+          (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        if (label) values[colId] = { label };
+        else skipped.push(`${key}:bad-label:${carrierVal}`);
       }
     } else if (key === "paymentStatus") {
-      const paymentStatusVal = val as string;
-      const label = resolveMondayPaymentLabel(paymentStatusVal);
+      const label = resolveMondayPaymentLabel(String(val || ""));
       if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
     } else if (key === "warehouseStatus") {
-      const statusVal = String(val || "").trim();
-      if (statusVal)
-        values[colId] = {
-          label: warehouseStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
-        };
+      const label = resolveMappedLabel(String(val || ""), warehouseStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
     } else if (key === "dispatchStatus") {
-      const statusVal = String(val || "").trim();
-      if (statusVal)
-        values[colId] = {
-          label: dispatchStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
-        };
+      const label = resolveMappedLabel(String(val || ""), dispatchStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
     } else if (key === "deliveryStatus") {
-      const statusVal = String(val || "").trim();
-      if (statusVal)
-        values[colId] = {
-          label: deliveryStatusLabelMap[statusVal.toLowerCase()] ?? statusVal,
-        };
+      const label = resolveMappedLabel(String(val || ""), deliveryStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
     } else if (key === "email") {
       if (val) values[colId] = { email: val, text: val };
-    } else if (key === "productTitle" || key === "boxes") {
-      if (val !== "" && val != null) values[colId] = val;
-    } else {
-      if (val !== "" && val != null) values[colId] = val;
+    } else if (val !== "" && val != null) {
+      values[colId] = val;
     }
   }
+  if (skipped.length) {
+    console.log("[Monday] buildColumnValues skipped:", skipped);
+  }
   return values;
+}
+
+/** Which MondayRow fields are non-empty (for sync debug responses). */
+export function summarizeMondayRow(row: MondayRow): {
+  filled: Record<string, string | number>;
+  blank: string[];
+} {
+  const filled: Record<string, string | number> = {};
+  const blank: string[] = [];
+  for (const key of Object.keys(FIELD_DEFS) as (keyof MondayRow)[]) {
+    const val = row[key];
+    if (val !== "" && val != null) filled[key] = val as string | number;
+    else blank.push(key);
+  }
+  return { filled, blank };
 }
 
 export async function findExistingMondayItemId(
@@ -696,19 +779,28 @@ export async function findExistingMondayItemId(
 }
 
 export async function createMondayItem(itemName: string, row: MondayRow) {
-  console.log("[Monday] createMondayItem called:", itemName, row);
+  const safeName =
+    String(row.lineOrderName || itemName || "").trim() ||
+    buildMondayPulseName(null, null, row.orderId);
+  // Guard: never create with a product-title-like pulse name.
+  const pulseName =
+    safeName.includes(" - ") && safeName.length > 40
+      ? buildMondayPulseName(null, null, row.orderId)
+      : safeName;
+  console.log("[Monday] createMondayItem called:", pulseName, row);
   const groupId = await getValidGroupId();
   const query = `mutation ($boardId: ID!, $groupId: String, $itemName: String!, $columnValues: JSON!) {
     create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues) { id }
   }`;
 
-  let columnValues = await buildColumnValues(row);
+  const rowWithName = { ...row, lineOrderName: pulseName };
+  let columnValues = await buildColumnValues(rowWithName);
   let data;
   try {
     data = await mondayRequest(query, {
       boardId: process.env.MONDAY_BOARD_ID,
       groupId,
-      itemName,
+      itemName: pulseName,
       columnValues: JSON.stringify(columnValues),
     });
   } catch (err) {
@@ -717,18 +809,18 @@ export async function createMondayItem(itemName: string, row: MondayRow) {
         "[Monday] Stale column ID cache detected on create, clearing cache and retrying once",
       );
       columnIdCache = null;
-      columnValues = await buildColumnValues(row);
+      columnValues = await buildColumnValues(rowWithName);
       data = await mondayRequest(query, {
         boardId: process.env.MONDAY_BOARD_ID,
         groupId,
-        itemName,
+        itemName: pulseName,
         columnValues: JSON.stringify(columnValues),
       });
     } else {
       throw err;
     }
   }
-  console.log("[Monday] Item created with id:", data.create_item.id);
+  console.log("[Monday] Item created with id:", data.create_item.id, "name:", pulseName);
   return data.create_item.id as string;
 }
 
@@ -739,12 +831,16 @@ export async function updateMondayItem(itemId: string, row: MondayRow) {
   }`;
 
   let columnValues = await buildColumnValues(row);
-  try {
+  const send = async (values: Record<string, any>) => {
     await mondayRequest(query, {
       boardId: process.env.MONDAY_BOARD_ID,
       itemId,
-      columnValues: JSON.stringify(columnValues),
+      columnValues: JSON.stringify(values),
     });
+  };
+
+  try {
+    await send(columnValues);
   } catch (err) {
     if (isInvalidColumnError(err)) {
       console.log(
@@ -752,13 +848,22 @@ export async function updateMondayItem(itemId: string, row: MondayRow) {
       );
       columnIdCache = null;
       columnValues = await buildColumnValues(row);
-      await mondayRequest(query, {
-        boardId: process.env.MONDAY_BOARD_ID,
-        itemId,
-        columnValues: JSON.stringify(columnValues),
-      });
+      await send(columnValues);
     } else {
-      throw err;
+      // One bad status label used to fail the whole mutation — strip that column and retry.
+      const msg = err instanceof Error ? err.message : String(err);
+      const colMatch = msg.match(/"column_id":"([^"]+)"/);
+      const badColId = colMatch?.[1];
+      if (badColId && msg.includes("missingLabel") && columnValues[badColId] != null) {
+        console.warn(
+          `[Monday] Removing bad column ${badColId} after missingLabel and retrying`,
+          columnValues[badColId],
+        );
+        const { [badColId]: _removed, ...rest } = columnValues;
+        await send(rest);
+      } else {
+        throw err;
+      }
     }
   }
 

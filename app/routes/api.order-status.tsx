@@ -841,9 +841,7 @@ export async function action({ request }: ActionFunctionArgs) {
         try {
           await updateMondayItem(updated.mondayItemId, mondayRow);
           // Keep pulse name aligned with Shopify order + line letter (fixes old product-title names).
-          await renameMondayItem(updated.mondayItemId, itemName).catch((e) =>
-            console.error("[api.order-status] Monday rename failed", e),
-          );
+          await renameMondayItem(updated.mondayItemId, itemName);
           updated = await prisma.orderLineItemOperationalData.update({
             where: { id: updated.id },
             data: { mondayItemName: itemName },
