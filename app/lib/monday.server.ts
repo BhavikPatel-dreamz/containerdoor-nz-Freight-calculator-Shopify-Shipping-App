@@ -65,6 +65,39 @@ export function isInvalidColumnError(err: unknown): boolean {
   );
 }
 
+/**
+ * Monday pulse name = Shopify order name + line letter, e.g. `#CDL215347A`.
+ * Product titles must never be used as Monday item names.
+ */
+export function buildMondayPulseName(
+  orderName?: string | null,
+  letterSuffix?: string | null,
+  fallbackOrderId?: string | null,
+): string {
+  let base = String(orderName || "").trim();
+  if (!base) base = String(fallbackOrderId || "").trim();
+  if (!base) return "Order";
+  if (!base.startsWith("#")) base = `#${base}`;
+  const letter = String(letterSuffix || "").trim().toUpperCase();
+  return `${base}${letter}`;
+}
+
+export async function renameMondayItem(itemId: string, newName: string) {
+  const name = String(newName || "").trim();
+  if (!itemId || !name) return;
+  console.log("[Monday] renameMondayItem:", itemId, "→", name);
+  await mondayRequest(
+    `mutation ($boardId: ID!, $itemId: ID!, $newName: String!) {
+      change_name_on_board(board_id: $boardId, item_id: $itemId, new_name: $newName) { id name }
+    }`,
+    {
+      boardId: process.env.MONDAY_BOARD_ID,
+      itemId,
+      newName: name,
+    },
+  );
+}
+
 type MondayRow = {
   customerName: string;
   email: string;
