@@ -2,7 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { companyLabels } from "../../lib/freight";
-import { getCustomerStatusStyle, getPaymentStatusStyle, getCin7CellStatus, getRefPrefix } from "./helpers";
+import { getCustomerStatusStyle, getPaymentStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
 type OrderTableProps = {
@@ -23,7 +23,6 @@ type OrderTableProps = {
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
   hiddenColumns?: Set<string>;
-  navigate: (url: string) => void;
 };
 
 export function OrderTable({
@@ -44,7 +43,6 @@ export function OrderTable({
   mondayFixingId,
   creatingCin7OrderId,
   hiddenColumns = new Set(),
-  navigate,
 }: OrderTableProps) {
   return (
     <div className="fo-table-scroll">
@@ -72,7 +70,6 @@ export function OrderTable({
               const isSelected = selected.has(item.id);
               const isFirstItem = liIdx === 0;
               const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
-              const statusClass = item.customerStatus ? `fo-fulfil ${item.customerStatus.toLowerCase()}` : "fo-fulfil none";
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
@@ -213,16 +210,21 @@ export function OrderTable({
                           }
                           if (status === "mismatch") {
                             return (
-                              <button
-                                type="button"
-                                className="fo-sync-pill amber"
-                                title={`Out of sync: ${(item.cin7Mismatches ?? []).join(", ")}. Click to update Cin7.`}
-                                onClick={() => onFixCin7(order, item)}
-                                disabled={cin7FixingId === cellKey}
-                                style={{ cursor: cin7FixingId === cellKey ? "wait" : "pointer" }}
-                              >
-                                CIN7 !
-                              </button>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                <button
+                                  type="button"
+                                  className="fo-sync-pill amber"
+                                  title={`Out of sync: ${(item.cin7Mismatches ?? []).join(", ")}. Click to update Cin7.`}
+                                  onClick={() => onFixCin7(order, item)}
+                                  disabled={cin7FixingId === cellKey}
+                                  style={{ cursor: cin7FixingId === cellKey ? "wait" : "pointer" }}
+                                >
+                                  CIN7 !
+                                </button>
+                                {cin7Url ? (
+                                  <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Cin7 Sales Order">↗</a>
+                                ) : null}
+                              </span>
                             );
                           }
                           return (
@@ -247,17 +249,23 @@ export function OrderTable({
                             return mUrl ? <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }}>Monday ✓</a> : <span className="fo-sync-pill green">Monday ✓</span>;
                           }
                           if (status === "mismatch") {
+                            const mUrl = item.mondayItemUrl || null;
                             return (
-                              <button
-                                type="button"
-                                className="fo-sync-pill amber"
-                                title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
-                                onClick={() => onSyncMonday(order, item)}
-                                disabled={mondayFixingId === cellKey}
-                                style={{ cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
-                              >
-                                Monday !
-                              </button>
+                              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                                <button
+                                  type="button"
+                                  className="fo-sync-pill amber"
+                                  title={`Out of sync with Monday: ${(item.mondayMismatches ?? []).join(", ")}. Click to update Monday.`}
+                                  onClick={() => onSyncMonday(order, item)}
+                                  disabled={mondayFixingId === cellKey}
+                                  style={{ cursor: mondayFixingId === cellKey ? "wait" : "pointer" }}
+                                >
+                                  Monday !
+                                </button>
+                                {mUrl ? (
+                                  <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Monday item">↗</a>
+                                ) : null}
+                              </span>
                             );
                           }
                           return (
