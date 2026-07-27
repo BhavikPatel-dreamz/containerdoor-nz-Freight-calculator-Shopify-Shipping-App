@@ -59,6 +59,8 @@ Read these rules before changing OMS freight dashboard / email / sync:
 - Monday `change_multiple_column_values` fails the whole mutation if one status label is invalid; normalize labels before push.
 - Always map incoming status casing to exact Monday labels for `warehouseStatus`, `dispatchStatus`, `deliveryStatus`, `customerStatus`, and `paymentStatus`.
 - Payment status: OMS UI often shows Shopify financial status when `ops.paymentStatus` is empty. Monday sync must send display payment (`Paid`/`Partial`/`Pending`/`Overdue`) and persist it if DB empty. Never push labels Monday board lacks (e.g. Refunded) — omit instead of failing whole mutation.
+- OMS `/api/order-status` Monday push must load Customer/Email/SKU/Qty from `OrderLineItemIndex` / `OrderSnapshot` — never hardcode empty strings.
+- Prefer `buildMondayRowFromOms()` for all Monday pushes so Dispatch/Freight + Operational + Customer + Order Details columns stay filled (EDD, carrier, tracking, freight ref, warehouse/dispatch/delivery, dates, supplier, PO, deposit/balance, payment, address/phone, product/variant/SKU/qty).
 - OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
 - Monday item URL: `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{mondayItemId}` via `buildMondayItemUrl()` in `monday.server.ts`.
 - Monday pulse **name** = Shopify order name + line letter (`#CDL215347A`) via `buildMondayPulseName()` — never product title. Rename on sync if old name was product title.

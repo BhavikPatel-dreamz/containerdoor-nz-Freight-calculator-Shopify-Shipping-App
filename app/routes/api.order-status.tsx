@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
-import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl, buildMondayPulseName, renameMondayItem } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl, renameMondayItem, buildMondayRowFromOms } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
@@ -820,47 +820,12 @@ export async function action({ request }: ActionFunctionArgs) {
       hadExistingMondayId: !!updated.mondayItemId,
     };
     try {
-      const mondayRow = {
-        customerName: "",
-        email: "",
-        carriers: updated.carrier ?? "",
-        trackingNumber: updated.trackingNumber ?? "",
-        eddDate: updated.eddDate ?? "",
-        originalEddDate: updated.originalEddDate ?? "",
-        productTitle: updated.productTitle ?? "",
-        sku: "",
-        boxes: "",
-        customerStatus: updated.customerStatus ?? "",
-        paymentStatus: normalizePaymentStatus(updated.paymentStatus ?? ""),
+      const { row: mondayRow, itemName } = await buildMondayRowFromOms({
         shop: shopValue || updated.shop || "",
         orderId,
         variantId,
-        warehouseStatus: updated.warehouseStatus ?? "",
-        warehouseTags: updated.warehouseTags ?? "",
-        dispatchStatus: updated.dispatchStatus ?? "",
-        deliveryStatus: updated.deliveryStatus ?? "",
-        depositPaid: updated.depositPaid ?? "",
-        balanceDue: updated.balanceDue ?? "",
-      };
-      const lineIndex = await prisma.orderLineItemIndex.findFirst({
-        where: {
-          orderId,
-          variantId,
-          ...(shopValue ? { shop: shopValue } : {}),
-        },
-        select: { orderName: true, letterSuffix: true },
+        ops: updated,
       });
-      const snapMeta = !lineIndex?.orderName
-        ? await prisma.orderSnapshot.findFirst({
-            where: { orderId, ...(shopValue ? { shop: shopValue } : {}) },
-            select: { orderName: true },
-          })
-        : null;
-      const itemName = buildMondayPulseName(
-        lineIndex?.orderName || snapMeta?.orderName,
-        lineIndex?.letterSuffix,
-        orderId,
-      );
       mondayDebug.itemName = itemName;
 
       if (!updated.mondayItemId || updated.mondayItemId === "pending") {

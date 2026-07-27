@@ -18,9 +18,8 @@
  */
 
 import prisma from "../db.server";
-import { normalizePaymentStatus } from "./freight-orders.server";
+import { updateMondayItem, buildMondayRowFromOms } from "./monday.server";
 import { syncChangesToShopify } from "./shopify-sync.server";
-import { updateMondayItem } from "./monday.server";
 import {
   syncCin7EstimatedDispatchDate,
   syncCin7TrackingNumber,
@@ -113,28 +112,30 @@ export async function pushLineItemToAllSystems(
         where: { shop_orderId_variantId: { shop, orderId, variantId } },
       });
       if (record?.mondayItemId && record.mondayItemId !== "pending") {
-        await updateMondayItem(record.mondayItemId, {
-          customerName: "",
-          email: "",
-          carriers: fields.carrier ?? record.carrier ?? "",
-          trackingNumber: fields.trackingNumber ?? record.trackingNumber ?? "",
-          eddDate: fields.eddDate ?? record.eddDate ?? "",
-          originalEddDate: record.originalEddDate ?? "",
-          productTitle: record.productTitle ?? "",
-          sku: "",
-          boxes: "",
-          customerStatus: fields.customerStatus ?? record.customerStatus ?? "",
-          paymentStatus: normalizePaymentStatus(fields.paymentStatus ?? record.paymentStatus ?? ""),
+        const { row } = await buildMondayRowFromOms({
           shop,
           orderId,
           variantId,
-          warehouseStatus: record.warehouseStatus ?? "",
-          warehouseTags: record.warehouseTags ?? "",
-          dispatchStatus: fields.dispatchStatus ?? record.dispatchStatus ?? "",
-          deliveryStatus: record.deliveryStatus ?? "",
-          depositPaid: record.depositPaid ?? "",
-          balanceDue: record.balanceDue ?? "",
+          ops: {
+            ...record,
+            ...(fields.carrier !== undefined ? { carrier: fields.carrier } : {}),
+            ...(fields.trackingNumber !== undefined ? { trackingNumber: fields.trackingNumber } : {}),
+            ...(fields.eddDate !== undefined ? { eddDate: fields.eddDate } : {}),
+            ...(fields.customerStatus !== undefined ? { customerStatus: fields.customerStatus } : {}),
+            ...(fields.paymentStatus !== undefined ? { paymentStatus: fields.paymentStatus } : {}),
+            ...(fields.warehouseStatus !== undefined ? { warehouseStatus: fields.warehouseStatus } : {}),
+            ...(fields.warehouseTags !== undefined ? { warehouseTags: fields.warehouseTags } : {}),
+            ...(fields.dispatchStatus !== undefined ? { dispatchStatus: fields.dispatchStatus } : {}),
+            ...(fields.deliveryStatus !== undefined ? { deliveryStatus: fields.deliveryStatus } : {}),
+            ...(fields.depositPaid !== undefined ? { depositPaid: fields.depositPaid } : {}),
+            ...(fields.balanceDue !== undefined ? { balanceDue: fields.balanceDue } : {}),
+            ...(fields.portArrivalDate !== undefined ? { portArrivalDate: fields.portArrivalDate } : {}),
+            ...(fields.inTransitDate !== undefined ? { inTransitDate: fields.inTransitDate } : {}),
+            ...(fields.supplierContainer !== undefined ? { supplierContainer: fields.supplierContainer } : {}),
+            ...(fields.receivedDate !== undefined ? { receivedDate: fields.receivedDate } : {}),
+          },
         });
+        await updateMondayItem(record.mondayItemId, row);
         log("monday", true);
       }
     } catch (e: any) {
