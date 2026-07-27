@@ -333,6 +333,7 @@ const paymentStatusLabelMap: Record<string, string> = {
 };
 
 const warehouseStatusLabelMap: Record<string, string> = {
+  pending: "Not received",
   "not received": "Not received",
   received: "Received",
   processing: "Processing",
