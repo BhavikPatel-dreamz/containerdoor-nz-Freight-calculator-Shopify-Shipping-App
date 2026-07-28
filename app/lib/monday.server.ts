@@ -967,6 +967,7 @@ export async function fetchMondayItem(itemId: string) {
   return {
     customerStatus: getText("customerStatus"),
     statusChangedAt: getChangedAt("customerStatus"),
+    carriers: getText("carriers"),
     eddDate: getText("eddDate"),
     eddDateChangedAt: getChangedAt("eddDate"),
     originalEddDate: getText("originalEddDate"),

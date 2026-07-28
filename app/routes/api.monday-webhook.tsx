@@ -4,6 +4,35 @@ import prisma from "../db.server";
 import { fetchMondayItem, fetchMondayUpdates } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
+import { companyLabels } from "../lib/freight";
+
+function normalizeMondayCarrierToOmsCode(raw: string): string {
+  const v = String(raw || "").trim();
+  if (!v) return "";
+
+  // Already canonical OMS code (e.g. FLIWAYLINEHAUL / NZP / TGE).
+  if (companyLabels[v as keyof typeof companyLabels]) return v;
+
+  const lower = v.toLowerCase();
+  const byLabel = Object.entries(companyLabels).find(
+    ([, label]) => String(label).toLowerCase() === lower,
+  );
+  if (byLabel) return byLabel[0];
+
+  // Common alias fallback from Monday status labels.
+  const keyNorm = lower.replace(/[\s_-]+/g, "");
+  if (keyNorm === "fliwaylinehaul" || keyNorm === "fliway") return "FLIWAYLINEHAUL";
+  if (keyNorm === "fliwaymidsize") return "FLIWAYMIDSIZE";
+  if (keyNorm === "nzp") return "NZP";
+  if (keyNorm === "nzpage restricted" || keyNorm === "nzpagerestricted") return "NZP_AGE_RESTRICTED";
+  if (keyNorm === "tge" || keyNorm === "teamglobalexpress") return "TGE";
+  if (keyNorm === "m2h") return "M2H";
+  if (keyNorm === "mainfreight") return "MAINFREIGHT";
+  if (keyNorm === "castle") return "CASTLE";
+
+  // Preserve raw if unknown so operator can still see value and we can debug.
+  return v;
+}
 
 // ───────────────────────────────────────────────────────────────────────────
 // Monday.com fires this webhook whenever a column value changes on an item
@@ -139,6 +168,10 @@ export async function action({ request }: ActionFunctionArgs) {
       if (newPaymentStatus && newPaymentStatus !== (record.paymentStatus ?? "")) {
         updates.paymentStatus = newPaymentStatus;
       }
+      const newCarrier = normalizeMondayCarrierToOmsCode(mondayData.carriers ?? "");
+      if (newCarrier && newCarrier !== (record.carrier ?? "")) {
+        updates.carrier = newCarrier;
+      }
 
       // ── Pull Monday Updates (operational notes) inbound ──
       try {
@@ -176,22 +209,23 @@ export async function action({ request }: ActionFunctionArgs) {
           updates,
         );
 
-        // Push pulled changes to Shopify + Cin7 (fire-and-forget)
-        pushLineItemToAllSystems(
+        // Push pulled changes to Shopify + Cin7 + Monday mirrors.
+        // IMPORTANT: await this in webhook context so serverless does not exit
+        // before outbound sync calls complete.
+        await pushLineItemToAllSystems(
           {
             shop: record.shop,
             orderId: record.orderId,
             variantId: record.variantId,
             ...(updates.eddDate !== undefined ? { eddDate: updates.eddDate } : {}),
             ...(updates.trackingNumber !== undefined ? { trackingNumber: updates.trackingNumber } : {}),
+            ...(updates.carrier !== undefined ? { carrier: updates.carrier } : {}),
             ...(updates.customerStatus !== undefined ? { customerStatus: updates.customerStatus } : {}),
             ...(updates.warehouseStatus !== undefined ? { warehouseStatus: updates.warehouseStatus } : {}),
             ...(updates.dispatchStatus !== undefined ? { dispatchStatus: updates.dispatchStatus } : {}),
             ...(updates.deliveryStatus !== undefined ? { deliveryStatus: updates.deliveryStatus } : {}),
           },
           "monday",
-        ).catch((e) =>
-          console.error("[Monday][Webhook] Push to other systems failed:", e),
         );
       }
     }
