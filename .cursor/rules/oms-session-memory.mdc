@@ -18,9 +18,11 @@ Read these rules before changing OMS freight dashboard / email / sync:
 ---
 
 ## Status fields — no generic “Status”
-- Primary customer-facing status = **`customerStatus`** (Confirmed / Dispatched / Delivered / Cancelled).
-- Also: `warehouseStatus`, `paymentStatus`, `dispatchStatus`, `deliveryStatus`.
+- Primary customer-facing status = **`customerStatus`** (Pending / Confirmed / Dispatched / Delivered / Cancelled).
+- **Purpose:** fulfilment lifecycle shown to / about the customer (order progress). Not money, not warehouse floor state.
+- Also: `warehouseStatus` (inbound/ready), `paymentStatus` (Paid/Partial/Pending/Overdue), `dispatchStatus`, `deliveryStatus`.
 - There is **no** separate generic `status` DB column.
+- OMS list column label = **Customer status** (not bare “Status”) so it isn’t confused with Payment / Warehouse.
 - Monday maps `customerStatus` → board column titled **"Status"** in code (`monday.server.ts`); prefer renaming that Monday title to **Customer Status** when touching Monday sync — do not invent a second OMS status field.
 
 ## Notes & Monday / Cin7 / Shopify

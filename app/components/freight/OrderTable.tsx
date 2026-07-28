@@ -50,9 +50,10 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line #</th><th>Customer</th><th>Product</th>
+            <th>Line #</th><th>Customer</th><th>Product</th><th>Qty</th>
             {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th>EDD</th><th>Status</th>
+            <th>EDD</th>
+            <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse.">Customer status</th>
             {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
             {!hiddenColumns.has("payment") && <th>Payment</th>}
             {!hiddenColumns.has("carrier") && <th>Carrier</th>}
@@ -106,11 +107,12 @@ export function OrderTable({
                         <div className="fo-prod-variant" title={item.variantTitle}>{item.variantTitle}</div>
                       ) : null}
                       <div className="fo-prod-meta">
-                        {item.sku ? <span className="fo-prod-sku" title={item.sku}>SKU {item.sku}</span> : null}
-                        {item.productId ? <span className="fo-prod-id" title={item.productId}>ID {item.productId}</span> : null}
-                        {!item.sku && !item.productId ? <span className="fo-prod-sku">—</span> : null}
+                        {item.sku ? <span className="fo-prod-sku" title={item.sku}>SKU {item.sku}</span> : <span className="fo-prod-sku">—</span>}
                       </div>
                     </div>
+                  </td>
+                  <td className="fo-td" style={{ fontSize: "13px", fontWeight: 600, color: "#111827", textAlign: "center" }}>
+                    {item.boxes || 1}
                   </td>
                   {!hiddenColumns.has("supplier") && (
                     <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
