@@ -432,9 +432,9 @@ export default function ContainerdoorLoginPage() {
 
         <div className="rl-left">
           <div className="rl-brand">
-            <div className="rl-brand-box">F</div>
+            <div className="rl-brand-box">CD</div>
             <div>
-              <div className="rl-brand-name">Freight OMS</div>
+              <div className="rl-brand-name">ContainerDoor OMS</div>
               <div className="rl-brand-sub">Operations Portal</div>
             </div>
           </div>
@@ -442,7 +442,7 @@ export default function ContainerdoorLoginPage() {
           <div className="rl-left-body">
             <div className="rl-left-eyebrow">External Access</div>
             <h1 className="rl-left-heading">
-              Manage freight <em>operations</em> in one place
+              Manage order <em>operations</em> in one place
             </h1>
             <p className="rl-left-desc">
               Track line items, update delivery dates, add tracking numbers,
@@ -464,7 +464,7 @@ export default function ContainerdoorLoginPage() {
 
           <div className="rl-left-footer">
             <div className="rl-footer-dot" />
-            <span className="rl-footer-txt">Systems operational · Freight OMS v1.0</span>
+            <span className="rl-footer-txt">Systems operational · ContainerDoor OMS</span>
           </div>
         </div>
 
@@ -472,9 +472,9 @@ export default function ContainerdoorLoginPage() {
           <div className={`rl-card${mounted ? " mounted" : ""}`}>
 
             <div className="rl-mobile-brand">
-              <div className="rl-brand-box">F</div>
+              <div className="rl-brand-box">CD</div>
               <div>
-                <div className="rl-brand-name">Freight OMS</div>
+                <div className="rl-brand-name">ContainerDoor OMS</div>
                 <div className="rl-brand-sub">Operations Portal</div>
               </div>
             </div>

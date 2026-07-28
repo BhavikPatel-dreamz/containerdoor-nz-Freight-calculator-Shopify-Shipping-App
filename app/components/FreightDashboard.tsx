@@ -1238,8 +1238,8 @@ export default function FreightDashboard({
         {/* Navbar */}
         <nav className="fo-nav">
           <div className="fo-nav-left">
-            <div className="fo-logo-box">F</div>
-            <span className="fo-nav-title">Freight OMS</span>
+            <div className="fo-logo-box">CD</div>
+            <span className="fo-nav-title">ContainerDoor OMS</span>
             {!isDetailPage ? (
               <div className="fo-nav-search-wrap">
                 <span className="fo-nav-search-icon">

@@ -33,7 +33,7 @@ export default function App() {
         }
       `}</style>
       <s-app-nav>
-        <s-link href="/app">Freight Orders</s-link>
+        <s-link href="/app">Orders</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/rates">Rates</s-link>
         <s-link href="/app/operations">Operations Summary</s-link>
