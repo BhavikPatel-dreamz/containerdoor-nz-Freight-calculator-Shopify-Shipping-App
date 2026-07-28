@@ -708,11 +708,12 @@ export default function FreightDashboard({
     } catch (e) { setTrackingError(e instanceof Error ? e.message : "Failed to save tracking"); } finally { setIsSavingTracking(false); }
   };
 
-  // ── Dispatch & Freight save ──
+  // ── Dispatch & Freight: panel Edit opens EDD only (carrier/tracking stay read-only / via Tracking btn) ──
   const handleDispatchEdit = () => {
     if (!detailView) return;
-    setEditDispatchForm({ eddDate: detailView.item.eddDate ? detailView.item.eddDate.slice(0, 10) : "", carrier: detailView.item.company || "", trackingNumber: detailView.item.trackingNumber || "", freightRef: detailView.item.freightRef || "" });
-    setEditDispatchError(""); setEditDispatchModal(true);
+    setEddModal({ order: detailView.order, item: detailView.item });
+    setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: false });
+    setEddError("");
   };
   const handleDispatchSave = async () => {
     if (!detailView) return;
