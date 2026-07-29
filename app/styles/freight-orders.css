@@ -7,7 +7,8 @@
 .fo-root {
   min-height: 100vh;
   background: #f3f4f6;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; */
+  font-family: "Arial", sans-serif;
   color: #111827;
   font-size: 14px;
 }
@@ -704,7 +705,7 @@
 .fo-prod-sku,
 .fo-prod-id {
   font-size: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; */
   color: #6b7280;
   font-weight: 500;
   white-space: nowrap;
@@ -759,11 +760,13 @@
 
 .fo-carrier-badge {
   display: inline-block;
-  padding: 3px 12px;
+  padding: 3px 8px;
   border-radius: 10px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  white-space: nowrap;
+  white-space: normal;
+  line-height: 1.3;
+  word-break: break-word;
 }
 
 .fo-tracking-num {
@@ -1562,7 +1565,7 @@
   padding: 4px 8px;
   font-size: 11px;
   font-weight: 600;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  /* font-family: ui-monospace, SFMono-Regular, Menlo, monospace; */
   border: 1px solid #e5e7eb;
   border-radius: 5px;
   background: #f9fafb;

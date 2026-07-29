@@ -56,7 +56,7 @@ export function OrderTable({
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse.">Customer status</th>
             {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
             {!hiddenColumns.has("payment") && <th>Payment</th>}
-            {!hiddenColumns.has("carrier") && <th>Carrier</th>}
+            {!hiddenColumns.has("carrier") && <th style={{ width: "110px" }}>Carrier</th>}
             {!hiddenColumns.has("tracking") && <th>Tracking</th>}
             {!hiddenColumns.has("freightRef") && <th>Ref</th>}
             {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && <th>Sync</th>}
