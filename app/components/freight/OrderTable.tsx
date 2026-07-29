@@ -50,9 +50,9 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line #</th><th>Customer</th><th>Product</th><th>Qty</th>
+            <th>Line #</th><th>Customer</th><th>Product</th><th style={{ width: "44px" }}>Qty</th>
             {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th>EDD</th>
+            <th style={{ textAlign: "center" }}>EDD</th>
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse.">Customer status</th>
             {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
             {!hiddenColumns.has("payment") && <th>Payment</th>}
@@ -111,7 +111,7 @@ export function OrderTable({
                       </div>
                     </div>
                   </td>
-                  <td className="fo-td" style={{ fontSize: "13px", fontWeight: 600, color: "#111827", textAlign: "center" }}>
+                  <td className="fo-td" style={{ fontSize: "13px", fontWeight: 600, color: "#111827", textAlign: "center", width: "44px" }}>
                     {item.boxes || 1}
                   </td>
                   {!hiddenColumns.has("supplier") && (

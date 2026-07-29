@@ -71,7 +71,11 @@ function renderTemplate(template: string, recipient: ClaimedRecipient, appUrl: s
     .replace(/\{supplier\}/g, od.supplier || "")
     .replace(/\{edd\}/g, od.edd || "")
     .replace(/\{carrier\}/g, od.carrier || "")
-    .replace(/\{tracking\}/g, od.trackingNumber || "");
+    .replace(/\{tracking\}/g, od.trackingNumber || "")
+    .replace(/\{product\}/g, od.productName || od.product || "")
+    .replace(/\{product_name\}/g, od.productName || od.product || "")
+    .replace(/\{variants\}/g, od.variants || od.variant || "")
+    .replace(/\{variant\}/g, od.variants || od.variant || "");
 }
 
 function toHtml(text: string) {

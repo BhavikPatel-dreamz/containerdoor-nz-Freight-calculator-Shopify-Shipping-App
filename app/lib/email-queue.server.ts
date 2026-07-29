@@ -88,16 +88,26 @@ export async function buildRecipientOrderData(
   variantId: string,
   extras?: Record<string, any>,
 ) {
-  const ops = await prisma.orderLineItemOperationalData.findUnique({
-    where: { shop_orderId_variantId: { shop, orderId, variantId } },
-    select: {
-      supplierContainer: true,
-      eddDate: true,
-      carrier: true,
-      trackingNumber: true,
-      warehouseStatus: true,
-    },
-  });
+  const [ops, lineIndex] = await Promise.all([
+    prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+      select: {
+        supplierContainer: true,
+        eddDate: true,
+        carrier: true,
+        trackingNumber: true,
+        warehouseStatus: true,
+        productTitle: true,
+      },
+    }),
+    prisma.orderLineItemIndex.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+      select: { productTitle: true, variantTitle: true },
+    }),
+  ]);
+
+  const productName = lineIndex?.productTitle || ops?.productTitle || "";
+  const variants = [lineIndex?.variantTitle].filter(Boolean).join(" / ");
 
   return {
     orderId,
@@ -107,7 +117,12 @@ export async function buildRecipientOrderData(
     carrier: ops?.carrier ?? "",
     trackingNumber: ops?.trackingNumber ?? "",
     warehouseStatus: ops?.warehouseStatus ?? "",
-    variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking"],
+    productName,
+    product: productName,
+    product_name: productName,
+    variants,
+    variant: variants,
+    variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking", "product", "product_name", "variants", "variant"],
     ...extras,
   };
 }
