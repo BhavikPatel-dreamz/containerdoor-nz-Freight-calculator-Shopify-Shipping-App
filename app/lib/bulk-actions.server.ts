@@ -40,6 +40,7 @@ export interface BulkActionItem {
 export interface BulkActions {
   eddDate?: string;
   paymentStatus?: string;
+  customerStatus?: string;
   supplier?: string;
   note?: string;
   noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
@@ -162,6 +163,18 @@ async function applyDataActions(
     }
   }
 
+  // ── Customer Status ──
+  if (hasOwn(actions, "customerStatus")) {
+    const nextVal = actions.customerStatus ?? "";
+    const oldVal = existing?.customerStatus ?? "";
+    if (nextVal !== oldVal) {
+      updateData.customerStatus = nextVal;
+      updateData.customerStatusUpdatedAt = new Date();
+      oldValues.customerStatus = oldVal;
+      newValues.customerStatus = nextVal;
+    }
+  }
+
   // ── Supplier ──
   if (hasOwn(actions, "supplier")) {
     const nextVal = actions.supplier ?? "";
@@ -275,6 +288,15 @@ async function applyDataActions(
           deliveryStatus: "internal",
         });
       }
+      if (hasOwn(newValues, "customerStatus")) {
+        activityRows.push({
+          activityType: "customer_status_update",
+          channel: "system",
+          subject: "Customer status",
+          body: `Customer status changed from "${oldValues.customerStatus || "none"}" to "${newValues.customerStatus || "none"}"`,
+          deliveryStatus: "internal",
+        });
+      }
       if (hasOwn(newValues, "supplierContainer")) {
         activityRows.push({
           activityType: "supplier_update",
@@ -315,6 +337,10 @@ async function applyDataActions(
     let shouldSync = false;
     if (hasOwn(updateData, "paymentStatus")) {
       syncFields.paymentStatus = updateData.paymentStatus;
+      shouldSync = true;
+    }
+    if (hasOwn(updateData, "customerStatus")) {
+      syncFields.customerStatus = updateData.customerStatus;
       shouldSync = true;
     }
     if (hasOwn(updateData, "supplierContainer")) {
@@ -471,6 +497,7 @@ function describeBulkAction(actions: BulkActions): string {
   return [
     hasOwn(actions, "eddDate") ? "eddDate" : "",
     hasOwn(actions, "paymentStatus") ? "paymentStatus" : "",
+    hasOwn(actions, "customerStatus") ? "customerStatus" : "",
     hasOwn(actions, "supplier") ? "supplier" : "",
     actions.note ? "note" : "",
     actions.notify ? "notify" : "",
@@ -495,12 +522,20 @@ async function createNotifyJob(
     });
     if (!snap?.email) continue;
 
-    const ops = await prisma.orderLineItemOperationalData.findUnique({
-      where: { shop_orderId_variantId: { shop, orderId: item.orderId, variantId: item.variantId } },
-      select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true },
-    });
+    const [ops, lineIndex] = await Promise.all([
+      prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId: item.orderId, variantId: item.variantId } },
+        select: { supplierContainer: true, eddDate: true, carrier: true, trackingNumber: true, warehouseStatus: true, productTitle: true },
+      }),
+      prisma.orderLineItemIndex.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId: item.orderId, variantId: item.variantId } },
+        select: { productTitle: true, variantTitle: true },
+      }),
+    ]);
 
     const name = [snap.shippingFirstName, snap.shippingLastName].filter(Boolean).join(" ") || "Customer";
+    const productName = lineIndex?.productTitle || ops?.productTitle || "";
+    const variants = [lineIndex?.variantTitle].filter(Boolean).join(" / ");
 
     recipients.push({
       email: snap.email,
@@ -512,13 +547,18 @@ async function createNotifyJob(
         recipient: snap.email,
         orderId: item.orderId,
         orderName: snap.orderName,
-        variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking"],
+        variables: ["name", "order", "link", "supplier", "edd", "carrier", "tracking", "product", "product_name", "variants", "variant"],
         filters: filters ?? {},
         supplier: ops?.supplierContainer ?? "",
         edd: ops?.eddDate ?? "",
         carrier: ops?.carrier ?? "",
         trackingNumber: ops?.trackingNumber ?? "",
         warehouseStatus: ops?.warehouseStatus ?? "",
+        productName,
+        product: productName,
+        product_name: productName,
+        variants,
+        variant: variants,
       },
     });
   }

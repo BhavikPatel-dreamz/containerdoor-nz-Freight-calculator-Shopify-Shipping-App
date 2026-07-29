@@ -324,7 +324,7 @@ const FIELD_DEFS: Partial<
   // productId: not synced to Monday — client doesn't need this column (2026-07)
   boxes: { title: "Quantity", type: "numbers" },
   customerStatus: {
-    title: "Status",
+    title: "Cust. Status",
     type: "status",
     defaults: JSON.stringify({
       labels: {
