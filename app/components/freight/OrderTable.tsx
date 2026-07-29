@@ -2,7 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { companyLabels } from "../../lib/freight";
-import { getCustomerStatusStyle, getPaymentStatusStyle, getCin7CellStatus } from "./helpers";
+import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getCarrierStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
 type OrderTableProps = {
@@ -147,7 +147,18 @@ export function OrderTable({
                     </div>
                   </td>
                   <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
-                  {!hiddenColumns.has("warehouse") && <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>}
+                  {!hiddenColumns.has("warehouse") && (
+                    <td className="fo-td">
+                      {(() => {
+                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "");
+                        return (
+                          <span className="fo-cust-status" style={{ background: whBg, color: whText }}>
+                            {whLabel || "—"}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  )}
                   {!hiddenColumns.has("payment") && (
                     <td className="fo-td">
                       {(() => {
@@ -162,7 +173,15 @@ export function OrderTable({
                   )}
                   {!hiddenColumns.has("carrier") && (
                     <td className="fo-td">
-                      <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
+                      {(() => {
+                        const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company;
+                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+                        return (
+                          <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
+                            {carrierLabel}
+                          </span>
+                        );
+                      })()}
                     </td>
                   )}
                   {!hiddenColumns.has("tracking") && (

@@ -2,7 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { companyLabels } from "../../lib/freight";
-import { getCustomerStatusStyle, getPaymentStatusStyle } from "./helpers";
+import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getDispatchStatusStyle, getDeliveryStatusStyle, getCarrierStatusStyle } from "./helpers";
 import { IconPencil } from "./icons";
 
 type DetailPanelsProps = {
@@ -42,7 +42,20 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
               : "—"}
           </span>
         </div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Carrier</span><span className="fo-detail-value" style={{ color: "#2563eb" }}>{companyLabels[item.company as keyof typeof companyLabels] ?? item.company ?? "—"}</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Carrier</span>
+          <span className="fo-detail-value">
+            {(() => {
+              const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company ?? "—";
+              const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+              return (
+                <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>
+                  {carrierLabel}
+                </span>
+              );
+            })()}
+          </span>
+        </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Tracking #</span><span className="fo-detail-value">{item.trackingNumber ? <span style={{ color: "#2563eb" }}>{item.trackingNumber}</span> : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value">{item.freightRef || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
@@ -56,18 +69,46 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
             <IconPencil /> Edit
           </button>
         </div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Warehouse status</span><span className="fo-detail-value">{item.warehouseStatus || "—"}</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Warehouse status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getWarehouseStatusStyle(item.warehouseStatus || "").bg, color: getWarehouseStatusStyle(item.warehouseStatus || "").text }}>
+              {getWarehouseStatusStyle(item.warehouseStatus || "").label || "—"}
+            </span>
+          </span>
+        </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Warehouse tags</span><span className="fo-detail-value">{item.warehouseTags || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Received</span><span className="fo-detail-value">{item.receivedDate ? new Date(item.receivedDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Dispatch status</span><span className="fo-detail-value">{item.dispatchStatus || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Delivery status</span><span className="fo-detail-value">{item.deliveryStatus || "—"}</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Dispatch status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getDispatchStatusStyle(item.dispatchStatus || "").bg, color: getDispatchStatusStyle(item.dispatchStatus || "").text }}>
+              {getDispatchStatusStyle(item.dispatchStatus || "").label || "—"}
+            </span>
+          </span>
+        </div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Delivery status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getDeliveryStatusStyle(item.deliveryStatus || "").bg, color: getDeliveryStatusStyle(item.deliveryStatus || "").text }}>
+              {getDeliveryStatusStyle(item.deliveryStatus || "").label || "—"}
+            </span>
+          </span>
+        </div>
         <div className="fo-detail-row"><span className="fo-detail-label">PO #</span><span className="fo-detail-value">{item.poNumber || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Port arrival</span><span className="fo-detail-value">{item.portArrivalDate ? new Date(item.portArrivalDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">In transit date</span><span className="fo-detail-value">{item.inTransitDate ? new Date(item.inTransitDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Supplier / Container</span><span className="fo-detail-value">{item.supplierContainer || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Deposit paid</span><span className="fo-detail-value">{item.depositPaid || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Balance due</span><span className="fo-detail-value">{item.balanceDue || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Payment status</span><span className="fo-detail-value">{item.paymentStatus || "—"}</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Payment status</span>
+          <span className="fo-detail-value">
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
+              {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
+            </span>
+          </span>
+        </div>
       </div>
 
       {/* 3. Customer */}
