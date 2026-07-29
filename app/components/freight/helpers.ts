@@ -3,12 +3,12 @@ import type { FreightLineItem, FreightOrderRow, NoteItem } from "./types";
 
 export function getCustomerStatusStyle(status: string): { bg: string; text: string; label: string } {
   switch ((status || "").toLowerCase()) {
-    case "dispatched": return { bg: "#dcfce7", text: "#15803d", label: "Dispatched" };
-    case "delivered": return { bg: "#d1fae5", text: "#065f46", label: "Delivered" };
-    case "confirmed": return { bg: "#dbeafe", text: "#1d4ed8", label: "Confirmed" };
-    case "cancelled": return { bg: "#fee2e2", text: "#b91c1c", label: "Cancelled" };
-    case "pending": return { bg: "#fef3c7", text: "#92400e", label: "Pending" };
-    default: return { bg: "#f3f4f6", text: "#6b7280", label: status || "—" };
+    case "dispatched": return { bg: "#e8697d", text: "#ffffff", label: "Dispatched" };
+    case "delivered": return { bg: "#339ecd", text: "#ffffff", label: "Delivered" };
+    case "confirmed": return { bg: "#33d391", text: "#ffffff", label: "Confirmed" };
+    case "cancelled": return { bg: "#b57de3", text: "#ffffff", label: "Cancelled" };
+    case "pending": return { bg: "#fdbc64", text: "#ffffff", label: "Pending" };
+    default: return { bg: "#c4c4c4", text: "#ffffff", label: status || "—" };
   }
 }
 
@@ -19,20 +19,68 @@ export function getPaymentStatusStyle(status: string): { bg: string; text: strin
     case "authorized":
     case "captured":
     case "complete":
-      return { bg: "#dcfce7", text: "#15803d", label: "Paid" };
+      return { bg: "#fdbc64", text: "#ffffff", label: "Paid" };
     case "partial":
     case "partially_paid":
     case "partially_refunded":
-      return { bg: "#fef3c7", text: "#92400e", label: "Partial" };
+      return { bg: "#33d391", text: "#ffffff", label: "Partial" };
     case "pending":
     case "pending_payment":
     case "unpaid":
     case "authorized_pending_capture":
     case "outstanding":
-      return { bg: "#f3f4f6", text: "#6b7280", label: "Pending" };
-    case "overdue": return { bg: "#fee2e2", text: "#b91c1c", label: "Overdue" };
-    case "refunded": return { bg: "#f3f4f6", text: "#6b7280", label: "Refunded" };
-    default: return { bg: "#f3f4f6", text: "#6b7280", label: status || "—" };
+      return { bg: "#e8697d", text: "#ffffff", label: "Pending" };
+    case "overdue": return { bg: "#339ecd", text: "#ffffff", label: "Overdue" };
+    case "refunded": return { bg: "#c4c4c4", text: "#ffffff", label: "Refunded" };
+    default: return { bg: "#c4c4c4", text: "#ffffff", label: status || "—" };
+  }
+}
+
+
+export function getWarehouseStatusStyle(status: string): { bg: string; text: string; label: string } {
+  switch ((status || "").toLowerCase()) {
+    case "received": return { bg: "#33d391", text: "#ffffff", label: "Received" };
+    case "not received": return { bg: "#fdbc64", text: "#ffffff", label: "Not received" };
+    case "processing": return { bg: "#e8697d", text: "#ffffff", label: "Processing" };
+    case "ready to dispatch": return { bg: "#339ecd", text: "#ffffff", label: "Ready to dispatch" };
+    case "dispatched": return { bg: "#b57de3", text: "#ffffff", label: "Dispatched" };
+    default: return { bg: "#c4c4c4", text: "#ffffff", label: status || "—" };
+  }
+}
+
+export function getDispatchStatusStyle(status: string): { bg: string; text: string; label: string } {
+  switch ((status || "").toLowerCase()) {
+    case "booked": return { bg: "#33d391", text: "#ffffff", label: "Booked" };
+    case "not dispatched": return { bg: "#fdbc64", text: "#ffffff", label: "Not dispatched" };
+    case "dispatched": return { bg: "#e8697d", text: "#ffffff", label: "Dispatched" };
+    case "failed": return { bg: "#339ecd", text: "#ffffff", label: "Failed" };
+    default: return { bg: "#c4c4c4", text: "#ffffff", label: status || "—" };
+  }
+}
+
+
+export function getDeliveryStatusStyle(status: string): { bg: string; text: string; label: string } {
+  switch ((status || "").toLowerCase()) {
+    case "in transit": return { bg: "#33d391", text: "#ffffff", label: "In transit" };
+    case "pending": return { bg: "#fdbc64", text: "#ffffff", label: "Pending" };
+    case "out for delivery": return { bg: "#e8697d", text: "#ffffff", label: "Out for delivery" };
+    case "delivered": return { bg: "#339ecd", text: "#ffffff", label: "Delivered" };
+    case "failed": return { bg: "#b57de3", text: "#ffffff", label: "Failed" };
+    default: return { bg: "#c4c4c4", text: "#ffffff", label: status || "—" };
+  }
+}
+
+export function getCarrierStatusStyle(label: string): { bg: string; text: string } {
+  switch ((label || "").toLowerCase()) {
+    case "fliway - midsize": return { bg: "#33d391", text: "#ffffff" };
+    case "fliway - linehaul": return { bg: "#fdbc64", text: "#ffffff" };
+    case "nzp": return { bg: "#e8697d", text: "#ffffff" };
+    case "nzp - age restricted": return { bg: "#339ecd", text: "#ffffff" };
+    case "mainfreight": return { bg: "#79affd", text: "#ffffff" };
+    case "castle": return { bg: "#b57de3", text: "#ffffff" };
+    case "m2h": return { bg: "#ff8358", text: "#ffffff" };
+    case "team global express": return { bg: "#797e93", text: "#ffffff" };
+    default: return { bg: "#c4c4c4", text: "#ffffff" };
   }
 }
 

@@ -759,10 +759,11 @@
 
 .fo-carrier-badge {
   display: inline-block;
-  font-size: 12px;
-  font-weight: 400;
+  padding: 3px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
   white-space: nowrap;
-  color: #374151;
 }
 
 .fo-tracking-num {
