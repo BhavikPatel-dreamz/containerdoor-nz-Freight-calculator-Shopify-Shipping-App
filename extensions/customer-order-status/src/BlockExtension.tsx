@@ -47,7 +47,7 @@ const TARGET = "customer-account.order-status.cart-line-item.render-after";
 const APP_URL = String(
   (typeof process !== "undefined" &&
     (process.env.SHOPIFY_APP_URL || process.env.APP_URL)) ||
-    "",
+  "https://containerdoor-nz-freight-calculator.vercel.app",
 )
   .trim()
   .replace(/\/+$/, "");
