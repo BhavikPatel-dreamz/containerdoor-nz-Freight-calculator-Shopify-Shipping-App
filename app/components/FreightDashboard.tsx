@@ -139,7 +139,7 @@ export default function FreightDashboard({
   const [eddError, setEddError] = useState("");
   const [trackingError, setTrackingError] = useState("");
   const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
-  const [eddForm, setEddForm] = useState({ newEdd: "", reason: "", notifyCustomer: false });
+  const [eddForm, setEddForm] = useState({ newEdd: "", reason: "", notifyCustomer: true });
   const serverDriven = Boolean(counts);
   const [search, setSearch] = useState(searchParams.get("q") ?? "");
   const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
@@ -502,7 +502,7 @@ export default function FreightDashboard({
       setRows((prevRows = []) => prevRows.map(applyEdd));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyEdd) : prev);
       if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
-      setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: false });
+      setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: true });
       if (detailView) {
         const j = await fetchOrderStatus(
           shop,
@@ -713,7 +713,7 @@ export default function FreightDashboard({
   const handleDispatchEdit = () => {
     if (!detailView) return;
     setEddModal({ order: detailView.order, item: detailView.item });
-    setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: false });
+    setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: true });
     setEddError("");
   };
   const handleDispatchSave = async () => {
@@ -1492,7 +1492,7 @@ export default function FreightDashboard({
                     </span>
                   </div>
                   <div className="fo-detail-bar-actions">
-                    <button className="fo-detail-action-btn" onClick={() => { setEddModal({ order: detailView.order, item: detailView.item }); setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: false }); }}>
+                    <button className="fo-detail-action-btn" onClick={() => { setEddModal({ order: detailView.order, item: detailView.item }); setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: true }); }}>
                       <IconCalendar /> Update EDD
                     </button>
                     <button className="fo-detail-action-btn" onClick={() => { setTrackingModal({ order: detailView.order, item: detailView.item }); setTrackingForm({ carrier: detailView.item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
@@ -1541,7 +1541,7 @@ export default function FreightDashboard({
                   navigate(`/app/order/${encodeURIComponent(pathId)}`);
                 }}
                 onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
-                onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: false }); }}
+                onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: true }); }}
                 onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}
                 onFixCin7={handleFixCin7Mismatch}
                 onSyncMonday={handleSyncMondayItem}

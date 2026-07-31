@@ -393,6 +393,14 @@ function ItemCard({
     setSaveError(null);
     try {
       const nextData = { ...form };
+      const trackingChanged =
+        form.trackingNumber.trim() !== "" &&
+        form.trackingNumber.trim() !== (record.trackingNumber ?? "").trim();
+      const eddChanged =
+        form.eddDate.trim() !== "" &&
+        form.eddDate.trim() !== (record.eddDate ?? "").trim();
+      // Only one notify kind per save — EDD takes priority if both changed at once.
+      const notifyKind = eddChanged ? "edd" : trackingChanged ? "tracking" : undefined;
 
       const res = await fetch(apiUrl(appUrl, "/api/order-status"), {
         method: "POST",
@@ -407,6 +415,9 @@ function ItemCard({
           },
           performedBy: "Shopify Admin",
           source: "shopify_admin_block",
+          // Match OMS modal behavior: tracking # / EDD change auto-notifies customer.
+          notifyCustomer: eddChanged || trackingChanged,
+          notifyKind,
         }),
       });
       const json = await res.json();
