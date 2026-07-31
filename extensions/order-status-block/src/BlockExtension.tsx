@@ -13,6 +13,7 @@ import {
   Box,
   Button,
   TextField,
+  Select,
 } from "@shopify/ui-extensions-react/admin";
 
 type LineItemRecord = {
@@ -310,14 +311,36 @@ function TableHeader() {
 // ─── Item card with collapse + edit mode ─────────────────────────────────────
 
 type EditableState = {
+  customerStatus: string;
+  warehouseStatus: string;
+  dispatchStatus: string;
+  deliveryStatus: string;
   trackingNumber: string;
   freightRef: string;
+  eddDate: string;
+  portArrivalDate: string;
+  inTransitDate: string;
+  supplierContainer: string;
+  depositPaid: string;
+  balanceDue: string;
+  notes: string;
 };
 
 function recordToFormState(r: LineItemRecord): EditableState {
   return {
+    customerStatus: r.customerStatus ?? "",
+    warehouseStatus: r.warehouseStatus ?? "",
+    dispatchStatus: r.dispatchStatus ?? "",
+    deliveryStatus: r.deliveryStatus ?? "",
     trackingNumber: r.trackingNumber ?? "",
     freightRef: r.freightRef ?? "",
+    eddDate: r.eddDate ?? "",
+    portArrivalDate: r.portArrivalDate ?? "",
+    inTransitDate: r.inTransitDate ?? "",
+    supplierContainer: r.supplierContainer ?? "",
+    depositPaid: r.depositPaid ?? "",
+    balanceDue: r.balanceDue ?? "",
+    notes: r.notes ?? "",
   };
 }
 
@@ -369,11 +392,7 @@ function ItemCard({
     setSaving(true);
     setSaveError(null);
     try {
-      // Launch phase: only tracking # + freight ref are editable from Shopify admin block.
-      const nextData = {
-        trackingNumber: form.trackingNumber,
-        freightRef: form.freightRef,
-      };
+      const nextData = { ...form };
 
       const res = await fetch(apiUrl(appUrl, "/api/order-status"), {
         method: "POST",
@@ -463,6 +482,44 @@ function ItemCard({
 
             <InlineStack gap="base" blockAlignment="end">
               <Box minInlineSize="half">
+                <Select
+                  label="Customer Status"
+                  value={form.customerStatus}
+                  onChange={updateField("customerStatus")}
+                  options={CUSTOMER_STATUS_OPTIONS}
+                />
+              </Box>
+              <Box minInlineSize="half">
+                <Select
+                  label="Warehouse Status"
+                  value={form.warehouseStatus}
+                  onChange={updateField("warehouseStatus")}
+                  options={WAREHOUSE_STATUS_OPTIONS}
+                />
+              </Box>
+            </InlineStack>
+
+            <InlineStack gap="base" blockAlignment="end">
+              <Box minInlineSize="half">
+                <Select
+                  label="Dispatch Status"
+                  value={form.dispatchStatus}
+                  onChange={updateField("dispatchStatus")}
+                  options={DISPATCH_STATUS_OPTIONS}
+                />
+              </Box>
+              <Box minInlineSize="half">
+                <Select
+                  label="Delivery Status"
+                  value={form.deliveryStatus}
+                  onChange={updateField("deliveryStatus")}
+                  options={DELIVERY_STATUS_OPTIONS}
+                />
+              </Box>
+            </InlineStack>
+
+            <InlineStack gap="base" blockAlignment="end">
+              <Box minInlineSize="half">
                 <TextField
                   label="Tracking #"
                   value={form.trackingNumber}
@@ -480,9 +537,70 @@ function ItemCard({
               </Box>
             </InlineStack>
 
-            {/* Status / EDD / ops fields — future phase
-            <InlineStack gap="base" blockAlignment="end">...</InlineStack>
-            */}
+            <InlineStack gap="base" blockAlignment="end">
+              <Box minInlineSize="half">
+                <TextField
+                  label="EDD (YYYY-MM-DD)"
+                  value={form.eddDate}
+                  onChange={updateField("eddDate")}
+                  placeholder="2026-12-31"
+                />
+              </Box>
+              <Box minInlineSize="half">
+                <TextField
+                  label="Port Arrival (YYYY-MM-DD)"
+                  value={form.portArrivalDate}
+                  onChange={updateField("portArrivalDate")}
+                  placeholder="2026-12-31"
+                />
+              </Box>
+            </InlineStack>
+
+            <InlineStack gap="base" blockAlignment="end">
+              <Box minInlineSize="half">
+                <TextField
+                  label="In Transit Date (YYYY-MM-DD)"
+                  value={form.inTransitDate}
+                  onChange={updateField("inTransitDate")}
+                  placeholder="2026-12-31"
+                />
+              </Box>
+              <Box minInlineSize="half">
+                <TextField
+                  label="Supplier / Container"
+                  value={form.supplierContainer}
+                  onChange={updateField("supplierContainer")}
+                  placeholder="e.g. Supplier / CONT123"
+                />
+              </Box>
+            </InlineStack>
+
+            <InlineStack gap="base" blockAlignment="end">
+              <Box minInlineSize="half">
+                <TextField
+                  label="Deposit Paid ($)"
+                  value={form.depositPaid}
+                  onChange={updateField("depositPaid")}
+                  placeholder="0.00"
+                />
+              </Box>
+              <Box minInlineSize="half">
+                <TextField
+                  label="Balance Due ($)"
+                  value={form.balanceDue}
+                  onChange={updateField("balanceDue")}
+                  placeholder="0.00"
+                />
+              </Box>
+            </InlineStack>
+
+            <TextField
+              label="Notes / internal info"
+              value={form.notes}
+              onChange={updateField("notes")}
+              multiline={3}
+              placeholder="Internal notes for this line item..."
+            />
           </BlockStack>
         ) : (
           <BlockStack gap="tight">

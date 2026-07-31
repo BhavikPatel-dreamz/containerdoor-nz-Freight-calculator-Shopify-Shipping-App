@@ -1,7 +1,7 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
 client_id = "787d83dca600474d64ea044ad28e4a2d"
-name = "containerdoo-calculator"
+name = "ContainerDoor OMS"
 application_url = "https://containerdoor-nz-freight-calculator.vercel.app"
 embedded = true
 
