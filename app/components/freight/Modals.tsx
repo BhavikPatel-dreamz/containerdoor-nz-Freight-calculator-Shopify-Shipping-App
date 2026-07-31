@@ -10,6 +10,7 @@ import {
   PAYMENT_STATUS_OPTIONS,
   optionsWithCurrent,
 } from "../../lib/status-options";
+import "../../styles/freight-orders.css";
 
 // ─── Tracking Modal ──────────────────────────────────────────────────────────
 

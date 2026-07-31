@@ -290,14 +290,13 @@ type MondayRow = {
   balanceDue: string;
 };
 
-const FIELD_DEFS: Record<
-  keyof MondayRow,
-  { title: string; type: string; defaults?: string }
+const FIELD_DEFS: Partial<
+  Record<keyof MondayRow, { title: string; type: string; defaults?: string }>
 > = {
   customerName: { title: "Customer", type: "text" },
   email: { title: "Email", type: "email" },
-  phone: { title: "Phone", type: "text" },
-  address: { title: "Address", type: "text" },
+  // phone: not synced to Monday — client doesn't need this column (2026-07)
+  // address: not synced to Monday — client doesn't need this column (2026-07)
   carriers: {
     title: "Carrier",
     type: "status",
@@ -315,17 +314,17 @@ const FIELD_DEFS: Record<
     }),
   },
   trackingNumber: { title: "Tracking Number", type: "text" },
-  freightRef: { title: "Freight Ref", type: "text" },
-  deliveryMethod: { title: "Delivery Method", type: "text" },
+  // freightRef: not synced to Monday — client doesn't need this column (2026-07)
+  // deliveryMethod: not synced to Monday — client doesn't need this column (2026-07)
   eddDate: { title: "EDD", type: "date" },
   originalEddDate: { title: "Original EDD", type: "date" },
   productTitle: { title: "Product", type: "text" },
   variantTitle: { title: "Variant", type: "text" },
   sku: { title: "SKU", type: "text" },
-  productId: { title: "Product ID", type: "text" },
+  // productId: not synced to Monday — client doesn't need this column (2026-07)
   boxes: { title: "Quantity", type: "numbers" },
   customerStatus: {
-    title: "Status",
+    title: "Cust. Status",
     type: "status",
     defaults: JSON.stringify({
       labels: {
@@ -349,10 +348,12 @@ const FIELD_DEFS: Record<
       },
     }),
   },
-  shop: { title: "Shop", type: "text" },
-  orderId: { title: "Order ID", type: "text" },
-  variantId: { title: "Variant ID", type: "text" },
-  lineOrderName: { title: "Line Order #", type: "text" },
+  // shop: not synced to Monday — client doesn't need this column (2026-07)
+  // orderId: not synced to Monday — client doesn't need this column (2026-07)
+  // variantId: not synced to Monday — client doesn't need this column (2026-07)
+  // lineOrderName: not synced to Monday as a column — client doesn't need this column (2026-07)
+  //   Note: lineOrderName is still used separately as the Monday pulse *name* in
+  //   createMondayItem/buildColumnValues (values.name), that logic is untouched.
   orderDate: { title: "Order Date", type: "date" },
   warehouseStatus: {
     title: "Warehouse Status",
@@ -367,39 +368,16 @@ const FIELD_DEFS: Record<
       },
     }),
   },
-  warehouseTags: { title: "Warehouse Tags", type: "text" },
-  dispatchStatus: {
-    title: "Dispatch Status",
-    type: "status",
-    defaults: JSON.stringify({
-      labels: {
-        "0": "Not dispatched",
-        "1": "Booked",
-        "2": "Dispatched",
-        "3": "Failed",
-      },
-    }),
-  },
-  deliveryStatus: {
-    title: "Delivery Status",
-    type: "status",
-    defaults: JSON.stringify({
-      labels: {
-        "0": "Pending",
-        "1": "In transit",
-        "2": "Out for delivery",
-        "3": "Delivered",
-        "4": "Failed",
-      },
-    }),
-  },
-  receivedDate: { title: "Received Date", type: "date" },
-  portArrivalDate: { title: "Port Arrival", type: "date" },
-  inTransitDate: { title: "In Transit Date", type: "date" },
-  supplierContainer: { title: "Supplier / Container", type: "text" },
-  poNumber: { title: "PO #", type: "text" },
-  depositPaid: { title: "Deposit Paid", type: "text" },
-  balanceDue: { title: "Balance Due", type: "text" },
+  // warehouseTags: not synced to Monday — client doesn't need this column (2026-07)
+  // dispatchStatus: not synced to Monday — client doesn't need this column (2026-07)
+  // deliveryStatus: not synced to Monday — client doesn't need this column (2026-07)
+  // receivedDate: not synced to Monday — client doesn't need this column (2026-07)
+  // portArrivalDate: not synced to Monday — client doesn't need this column (2026-07)
+  // inTransitDate: not synced to Monday — client doesn't need this column (2026-07)
+  // supplierContainer: { title: "Supplier / Container", type: "text" },
+  // poNumber: { title: "PO #", type: "text" },
+  // depositPaid: not synced to Monday — client doesn't need this column (2026-07)
+  // balanceDue: not synced to Monday — client doesn't need this column (2026-07)
 };
 
 let columnIdCache: Record<string, string> | null = null;
@@ -454,17 +432,27 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
       console.log(
         `[Monday] Creating column "${def.title}" (type: ${def.type})`,
       );
-      const created = await mondayRequest(
-        `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
-          create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
-        }`,
-        {
-          boardId: process.env.MONDAY_BOARD_ID,
-          title: def.title,
-          columnType: def.type,
-          defaults: def.defaults,
-        },
-      );
+      let created;
+      try {
+        created = await mondayRequest(
+          `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
+            create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
+          }`,
+          {
+            boardId: process.env.MONDAY_BOARD_ID,
+            title: def.title,
+            columnType: def.type,
+            defaults: def.defaults,
+          },
+        );
+      } catch {
+        console.warn(`[Monday] Skipping missing column "${def.title}"`);
+        continue;
+      }
+      if (!created?.create_column?.id) {
+        console.warn(`[Monday] Skipping missing column "${def.title}"`);
+        continue;
+      }
       console.log(
         `[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`,
       );

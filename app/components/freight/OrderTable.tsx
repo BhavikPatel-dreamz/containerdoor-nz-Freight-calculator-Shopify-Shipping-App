@@ -2,7 +2,7 @@
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
 import { companyLabels } from "../../lib/freight";
-import { getCustomerStatusStyle, getPaymentStatusStyle, getCin7CellStatus } from "./helpers";
+import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getCarrierStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
 type OrderTableProps = {
@@ -50,17 +50,17 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line #</th><th>Customer</th><th>Product</th><th>Qty</th>
+            <th>Line #</th><th>Customer</th><th>Product</th><th style={{ width: "44px" }}>Qty</th>
             {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th>EDD</th>
-            <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse.">Customer status</th>
-            {!hiddenColumns.has("warehouse") && <th>Warehouse</th>}
-            {!hiddenColumns.has("payment") && <th>Payment</th>}
-            {!hiddenColumns.has("carrier") && <th>Carrier</th>}
-            {!hiddenColumns.has("tracking") && <th>Tracking</th>}
+            <th style={{ textAlign: "center" }}>EDD</th>
+            <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse." style={{textAlign: "center" , width: "130px"}}>Customer status</th>
+            {!hiddenColumns.has("warehouse") && <th style={{ textAlign: "center" }}>Warehouse</th>}
+            {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" }}>Payment</th>}
+            {!hiddenColumns.has("carrier") && <th style={{ width: "120px" , textAlign: "center" }}>Carrier</th>}
+            {!hiddenColumns.has("tracking") && <th style={{ textAlign: "center" }}>Tracking</th>}
             {!hiddenColumns.has("freightRef") && <th>Ref</th>}
-            {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && <th>Sync</th>}
-            <th>Actions</th>
+            {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && <th style={{ textAlign: "center", width: "80px" }}>Sync</th>}
+            <th style={{ width: "80px" }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -74,7 +74,7 @@ export function OrderTable({
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
-                  <td className="fo-td" onClick={(e) => e.stopPropagation()}>
+                  <td className="fo-td" onClick={(e) => e.stopPropagation()} style={{ width: "80px" }}>
                     <input
                       type="checkbox"
                       className="fo-checkbox"
@@ -83,7 +83,7 @@ export function OrderTable({
                       onChange={() => toggleSelect(item.id)}
                     />
                   </td>
-                  <td className="fo-td">
+                  <td className="fo-td" style={{  width: "80px" }}>
                     {isFirstItem ? (
                       <span className="fo-order-chip">
                         <span className="fo-order-letter" style={{ background: chipColor + "33", color: chipColor }}>{item.letterSuffix}</span>
@@ -96,11 +96,11 @@ export function OrderTable({
                       </span>
                     )}
                   </td>
-                  <td className="fo-td">
+                  <td className="fo-td" style={{  width: "80px" }}>
                     <div className="fo-cust-name">{order.customerName}</div>
                     <div className="fo-cust-email">{order.email}</div>
                   </td>
-                  <td className="fo-td fo-td-product">
+                  <td className="fo-td fo-td-product" style={{ width: "80px" }}>
                     <div className="fo-prod-stack">
                       <div className="fo-prod-name" title={item.title || undefined}>{item.title || "—"}</div>
                       {item.variantTitle ? (
@@ -111,15 +111,15 @@ export function OrderTable({
                       </div>
                     </div>
                   </td>
-                  <td className="fo-td" style={{ fontSize: "13px", fontWeight: 600, color: "#111827", textAlign: "center" }}>
+                  <td className="fo-td" style={{ fontSize: "13px", fontWeight: 600, color: "#111827", textAlign: "center", width: "44px" }}>
                     {item.boxes || 1}
                   </td>
                   {!hiddenColumns.has("supplier") && (
-                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280",width: "80px" }}>
                       {item.vendor || "—"}
                     </td>
                   )}
-                  <td className="fo-td">
+                  <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                     <div className="fo-edd-wrap">
                       {item.eddDate ? (
                         <>
@@ -146,10 +146,23 @@ export function OrderTable({
                       )}
                     </div>
                   </td>
-                  <td className="fo-td"><span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span></td>
-                  {!hiddenColumns.has("warehouse") && <td className="fo-td" style={{ fontSize: "12px", color: "#374151" }}>{item.warehouseStatus || "—"}</td>}
+                  <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
+                    <span className="fo-cust-status" style={{ background: stBg, color: stText }}>{stLabel || "—"}</span>
+                    </td>
+                  {!hiddenColumns.has("warehouse") && (
+                    <td className="fo-td" style={{ textAlign: "center", width: "50px" }}>
+                      {(() => {
+                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "");
+                        return (
+                          <span className="fo-cust-status" style={{ background: whBg, color: whText }}>
+                            {whLabel || "—"}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                  )}
                   {!hiddenColumns.has("payment") && (
-                    <td className="fo-td">
+                    <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       {(() => {
                         const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
                         return (
@@ -161,12 +174,20 @@ export function OrderTable({
                     </td>
                   )}
                   {!hiddenColumns.has("carrier") && (
-                    <td className="fo-td">
-                      <span className="fo-carrier-badge">{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</span>
+                    <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
+                      {(() => {
+                        const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company;
+                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+                        return (
+                          <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
+                            {carrierLabel}
+                          </span>
+                        );
+                      })()}
                     </td>
                   )}
                   {!hiddenColumns.has("tracking") && (
-                    <td className="fo-td">
+                    <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       {item.trackingNumber ? (
                         <button
                           className="fo-tracking-num"
@@ -184,12 +205,12 @@ export function OrderTable({
                     </td>
                   )}
                   {!hiddenColumns.has("freightRef") && (
-                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" }}>
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280" , width: "80px"}}>
                       {item.freightRef || "—"}
                     </td>
                   )}
                   {(!hiddenColumns.has("cin7") || !hiddenColumns.has("monday")) && (
-                    <td className="fo-td">
+                    <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       <div className="fo-sync-stack">
                         {!hiddenColumns.has("cin7") && (() => {
                           const status = getCin7CellStatus(item);
@@ -286,7 +307,7 @@ export function OrderTable({
                       </div>
                     </td>
                   )}
-                  <td className="fo-td">
+                  <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                     <div className="fo-act-row">
                       <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
                       <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>

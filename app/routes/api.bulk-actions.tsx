@@ -32,10 +32,11 @@ export async function action({ request }: ActionFunctionArgs) {
     }
 
     // Check if at least one action is defined
-    const { eddDate, paymentStatus, supplier, note, notify } = body.actions;
+    const { eddDate, note, notify } = body.actions;
     const hasPayment = Object.prototype.hasOwnProperty.call(body.actions, "paymentStatus");
+    const hasCustomerStatus = Object.prototype.hasOwnProperty.call(body.actions, "customerStatus");
     const hasSupplier = Object.prototype.hasOwnProperty.call(body.actions, "supplier");
-    if (!eddDate && !hasPayment && !hasSupplier && !note && !notify) {
+    if (!eddDate && !hasPayment && !hasCustomerStatus && !hasSupplier && !note && !notify) {
       return Response.json({ ok: false, error: "No actions specified" }, { status: 400 });
     }
 

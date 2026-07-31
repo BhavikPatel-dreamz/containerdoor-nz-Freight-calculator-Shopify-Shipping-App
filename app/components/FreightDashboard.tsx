@@ -606,6 +606,7 @@ export default function FreightDashboard({
           return {
             ...li,
             paymentStatus: payload.paymentStatus !== undefined ? payload.paymentStatus : li.paymentStatus,
+            customerStatus: payload.customerStatus !== undefined ? payload.customerStatus : li.customerStatus,
             supplierContainer: payload.supplier !== undefined ? payload.supplier : li.supplierContainer,
             eddDate: payload.eddDate !== undefined ? payload.eddDate : li.eddDate,
             originalEddDate:

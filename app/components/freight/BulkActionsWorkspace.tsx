@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useMemo, useState } from "react";
 import type { FreightLineItem, FreightOrderRow } from "./types";
+import { CUSTOMER_STATUS_OPTIONS } from "../../lib/status-options";
 import {
   Modal,
   ModalHeader,
@@ -24,6 +25,7 @@ import {
 export type BulkActionsPayload = {
   eddDate?: string;
   paymentStatus?: string;
+  customerStatus?: string;
   supplier?: string;
   note?: string;
   noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
@@ -65,6 +67,8 @@ const EMAIL_VARS = [
   { key: "{supplier}", tip: "Supplier" },
   { key: "{edd}", tip: "Estimated delivery" },
   { key: "{tracking}", tip: "Tracking number" },
+  { key: "{product}", tip: "Product name" },
+  { key: "{variants}", tip: "Variant details" },
 ];
 
 export function BulkActionsWorkspace({
@@ -81,12 +85,14 @@ export function BulkActionsWorkspace({
 
   const [enableEdd, setEnableEdd] = useState(false);
   const [enablePayment, setEnablePayment] = useState(false);
+  const [enableCustomerStatus, setEnableCustomerStatus] = useState(false);
   const [enableSupplier, setEnableSupplier] = useState(false);
   const [enableNote, setEnableNote] = useState(false);
   const [enableNotify, setEnableNotify] = useState(false);
 
   const [eddDate, setEddDate] = useState("");
   const [paymentStatus, setPaymentStatus] = useState("");
+  const [customerStatus, setCustomerStatus] = useState("");
   const [supplier, setSupplier] = useState("");
   const [noteText, setNoteText] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false);
@@ -133,21 +139,24 @@ export function BulkActionsWorkspace({
   const summaryItems = [
     { id: "edd", label: "Estimated Delivery Date", active: enableEdd },
     { id: "payment", label: "Payment Status", active: enablePayment },
+    { id: "customer-status", label: "Customer Status", active: enableCustomerStatus },
     { id: "supplier", label: "Supplier", active: enableSupplier },
     { id: "note", label: "Internal Note", active: enableNote },
     { id: "email", label: "Customer Email", active: enableNotify },
   ];
 
-  const hasAction = enableEdd || enablePayment || enableSupplier || enableNote || enableNotify;
+  const hasAction = enableEdd || enablePayment || enableCustomerStatus || enableSupplier || enableNote || enableNotify;
 
   function resetForm() {
     setEnableEdd(false);
     setEnablePayment(false);
+    setEnableCustomerStatus(false);
     setEnableSupplier(false);
     setEnableNote(false);
     setEnableNotify(false);
     setEddDate("");
     setPaymentStatus("");
+    setCustomerStatus("");
     setSupplier("");
     setNoteText("");
     setSendToMonday(true);
@@ -182,6 +191,7 @@ export function BulkActionsWorkspace({
       payload.eddDate = eddDate;
     }
     if (enablePayment) payload.paymentStatus = paymentStatus;
+    if (enableCustomerStatus) payload.customerStatus = customerStatus;
     if (enableSupplier) payload.supplier = supplier;
     if (enableNote) {
       if (!noteText.trim()) {
@@ -339,6 +349,18 @@ export function BulkActionsWorkspace({
                       <option value="Partial">Partial</option>
                       <option value="Pending">Pending</option>
                       <option value="Overdue">Overdue</option>
+                    </FieldSelect>
+                  </FormSection>
+                </ActionCard>
+
+                <ActionCard enabled={enableCustomerStatus} onToggle={setEnableCustomerStatus} title="Customer Status">
+                  <FormSection label="Status" htmlFor="ba-customer-status">
+                    <FieldSelect id="ba-customer-status" value={customerStatus} onChange={(e) => setCustomerStatus(e.target.value)}>
+                      {CUSTOMER_STATUS_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </FieldSelect>
                   </FormSection>
                 </ActionCard>
