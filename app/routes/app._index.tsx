@@ -40,7 +40,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const tab = url.searchParams.get("tab") || "all";
   const supplier = (url.searchParams.get("supplier") || "").trim();
   const warehouseStatus = (url.searchParams.get("warehouseStatus") || "").trim();
-  const warehouseTag = (url.searchParams.get("warehouseTag") || "").trim();
   const carrier = (url.searchParams.get("carrier") || "").trim();
   const paymentStatus = (url.searchParams.get("paymentStatus") || "").trim();
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
@@ -65,10 +64,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
   if (warehouseStatus) {
     conds.push(Prisma.sql`lower(ops."warehouseStatus") = ${warehouseStatus.toLowerCase()}`);
   }
-  if (warehouseTag) {
-    const tagLike = `%${warehouseTag.toLowerCase()}%`;
-    conds.push(Prisma.sql`lower(ops."warehouseTags") LIKE ${tagLike}`);
-  }
   if (carrier) {
     const carrierLike = `%${carrier.toLowerCase()}%`;
     conds.push(Prisma.sql`(lower(idx."company") LIKE ${carrierLike} OR lower(idx."carriers") LIKE ${carrierLike})`);
@@ -85,18 +80,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   `;
   const suppliers = supplierRows.map((r) => r.vendor);
 
-  const [warehouseStatusRows, warehouseTagRows, carrierRows] = await Promise.all([
+  const [warehouseStatusRows, carrierRows] = await Promise.all([
     prisma.$queryRaw<Array<{ warehouseStatus: string }>>`
       SELECT DISTINCT lower(ops."warehouseStatus") AS "warehouseStatus"
       FROM "OrderLineItemOperationalData" ops
       WHERE ops."shop" = ${shop} AND ops."warehouseStatus" <> ''
       ORDER BY lower(ops."warehouseStatus") ASC
-    `,
-    prisma.$queryRaw<Array<{ warehouseTags: string }>>`
-      SELECT DISTINCT trim(unnest(string_to_array(ops."warehouseTags", ','))) AS "warehouseTags"
-      FROM "OrderLineItemOperationalData" ops
-      WHERE ops."shop" = ${shop} AND ops."warehouseTags" <> ''
-      ORDER BY trim(unnest(string_to_array(ops."warehouseTags", ','))) ASC
     `,
     prisma.$queryRaw<Array<{ company: string }>>`
       SELECT DISTINCT idx."company" FROM "OrderLineItemIndex" idx
@@ -105,7 +94,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
     `,
   ]);
   const warehouseStatuses = warehouseStatusRows.map((r) => r.warehouseStatus);
-  const warehouseTags = warehouseTagRows.map((r) => r.warehouseTags).filter(Boolean);
   const carriers = carrierRows.map((r) => r.company);
 
   const countRows = await prisma.$queryRaw<
@@ -147,7 +135,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
       ops."customerStatus", ops."carrier" AS ops_carrier, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
-      ops."warehouseStatus", ops."warehouseTags", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
+      ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
@@ -195,7 +183,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",
-      warehouseTags: r.warehouseTags ?? "",
       dispatchStatus: r.dispatchStatus ?? "",
       deliveryStatus: r.deliveryStatus ?? "",
       depositPaid: r.depositPaid ?? "",
@@ -245,13 +232,13 @@ export async function loader({ request }: LoaderFunctionArgs) {
     completedCount: c.completed,
   };
 
-  return { orders, counts, total, page, pageCount, shop, suppliers, supplier, warehouseStatuses, warehouseTags, carriers, activeFilters: { warehouseStatus, warehouseTag, carrier, paymentStatus }, currentUser };
+  return { orders, counts, total, page, pageCount, shop, suppliers, supplier, warehouseStatuses, carriers, activeFilters: { warehouseStatus, carrier, paymentStatus }, currentUser };
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function Index() {
-  const { orders, counts, total, page, pageCount, shop, suppliers, warehouseStatuses, warehouseTags, carriers, activeFilters, currentUser } = useLoaderData<typeof loader>();
+  const { orders, counts, total, page, pageCount, shop, suppliers, warehouseStatuses, carriers, activeFilters, currentUser } = useLoaderData<typeof loader>();
 
   return (
     <FreightDashboard
@@ -259,7 +246,6 @@ export default function Index() {
       counts={counts}
       suppliers={suppliers}
       warehouseStatuses={warehouseStatuses}
-      warehouseTags={warehouseTags}
       carriers={carriers}
       activeFilters={activeFilters}
       total={total}

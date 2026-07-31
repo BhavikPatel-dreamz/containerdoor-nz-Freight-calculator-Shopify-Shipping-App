@@ -41,7 +41,6 @@ export interface LineItemSyncFields {
   dispatchStatus?: string;
   carrier?: string;
   warehouseStatus?: string;
-  warehouseTags?: string;
   deliveryStatus?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
@@ -91,7 +90,6 @@ export async function pushLineItemToAllSystems(
         ...(fields.dispatchStatus !== undefined ? { dispatchStatus: fields.dispatchStatus } : {}),
         ...(fields.customerStatus !== undefined ? { customerStatus: fields.customerStatus } : {}),
         ...(fields.warehouseStatus !== undefined ? { warehouseStatus: fields.warehouseStatus } : {}),
-        ...(fields.warehouseTags !== undefined ? { warehouseTags: fields.warehouseTags } : {}),
         ...(fields.deliveryStatus !== undefined ? { deliveryStatus: fields.deliveryStatus } : {}),
         ...(fields.portArrivalDate !== undefined ? { portArrivalDate: fields.portArrivalDate } : {}),
         ...(fields.inTransitDate !== undefined ? { inTransitDate: fields.inTransitDate } : {}),
@@ -126,7 +124,6 @@ export async function pushLineItemToAllSystems(
             ...(fields.customerStatus !== undefined ? { customerStatus: fields.customerStatus } : {}),
             ...(fields.paymentStatus !== undefined ? { paymentStatus: fields.paymentStatus } : {}),
             ...(fields.warehouseStatus !== undefined ? { warehouseStatus: fields.warehouseStatus } : {}),
-            ...(fields.warehouseTags !== undefined ? { warehouseTags: fields.warehouseTags } : {}),
             ...(fields.dispatchStatus !== undefined ? { dispatchStatus: fields.dispatchStatus } : {}),
             ...(fields.deliveryStatus !== undefined ? { deliveryStatus: fields.deliveryStatus } : {}),
             ...(fields.depositPaid !== undefined ? { depositPaid: fields.depositPaid } : {}),

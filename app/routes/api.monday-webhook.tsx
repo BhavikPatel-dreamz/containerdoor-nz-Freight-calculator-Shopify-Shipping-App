@@ -139,11 +139,6 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.warehouseStatus = newWarehouseStatus;
       }
 
-      const newWarehouseTags = (mondayData.warehouseTags ?? "").trim();
-      if (newWarehouseTags !== undefined && newWarehouseTags !== (record.warehouseTags ?? "")) {
-        updates.warehouseTags = newWarehouseTags;
-      }
-
       const newDispatchStatus = (mondayData.dispatchStatus ?? "").trim();
       if (newDispatchStatus && newDispatchStatus !== record.dispatchStatus) {
         updates.dispatchStatus = newDispatchStatus;

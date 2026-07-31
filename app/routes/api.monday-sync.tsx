@@ -166,7 +166,6 @@ export async function action({ request }: ActionFunctionArgs) {
   const mondayEdd = mondayData?.eddDate ?? "";
   const mondayOriginalEdd = mondayData?.originalEddDate ?? "";
   const mondayWarehouseStatus = mondayData?.warehouseStatus ?? "";
-  const mondayWarehouseTags = mondayData?.warehouseTags ?? "";
   const mondayDispatchStatus = mondayData?.dispatchStatus ?? "";
   const mondayDeliveryStatus = mondayData?.deliveryStatus ?? "";
   const mondayDepositPaid = mondayData?.depositPaid ?? "";
@@ -181,7 +180,6 @@ export async function action({ request }: ActionFunctionArgs) {
       ...(mondayEdd ? { eddDate: mondayEdd } : {}),
       ...(mondayOriginalEdd ? { originalEddDate: mondayOriginalEdd } : {}),
       ...(mondayWarehouseStatus ? { warehouseStatus: mondayWarehouseStatus } : {}),
-      ...(mondayWarehouseTags !== undefined ? { warehouseTags: mondayWarehouseTags } : {}),
       ...(mondayDispatchStatus ? { dispatchStatus: mondayDispatchStatus } : {}),
       ...(mondayDeliveryStatus ? { deliveryStatus: mondayDeliveryStatus } : {}),
       ...(mondayDepositPaid ? { depositPaid: mondayDepositPaid } : {}),

@@ -77,7 +77,6 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
             </span>
           </span>
         </div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Warehouse tags</span><span className="fo-detail-value">{item.warehouseTags || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Received</span><span className="fo-detail-value">{item.receivedDate ? new Date(item.receivedDate).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" }) : "—"}</span></div>
         <div className="fo-detail-row">
           <span className="fo-detail-label">Dispatch status</span>

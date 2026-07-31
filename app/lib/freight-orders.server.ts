@@ -165,7 +165,6 @@ export function buildRowFromSnapshot(
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
       warehouseStatus: ops?.warehouseStatus ?? "",
-      warehouseTags: ops?.warehouseTags ?? "",
       dispatchStatus: ops?.dispatchStatus ?? "",
       deliveryStatus: ops?.deliveryStatus ?? "",
       depositPaid: ops?.depositPaid ?? "",
