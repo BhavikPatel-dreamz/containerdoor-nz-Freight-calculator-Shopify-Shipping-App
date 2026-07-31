@@ -3,6 +3,7 @@ import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
 import { createCin7SalesOrder, fetchCin7SalesOrder } from "../lib/cin7.server";
+import { buildCin7SalesOrderUrl } from "../lib/cin7-adapter.server";
 
 type RequestPayload = {
   shop?: string;
@@ -50,6 +51,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return Response.json({
           ok: true,
           cin7SalesOrderId: existing.cin7SalesOrderId,
+          cin7SalesOrderUrl: buildCin7SalesOrderUrl(existing.cin7SalesOrderId) ?? "",
         });
       }
 
@@ -266,6 +268,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({
       ok: true,
       cin7SalesOrderId: String(result.id),
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(String(result.id)) ?? "",
     });
   } catch (error) {
     console.error(`[Cin7][API] Error:`, error);

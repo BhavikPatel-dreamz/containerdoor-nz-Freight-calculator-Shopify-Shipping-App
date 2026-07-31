@@ -136,6 +136,9 @@ export function buildRowFromSnapshot(
   opsMap: Map<string, any>,
   orderCin7Map: Map<string, boolean>,
   orderPoMap?: Map<string, string>,
+  /** orderId → legacy order-level Cin7 SO id (grouped era). Used as URL fallback
+   *  so the detail page renders the same clickable link as the list page. */
+  orderCin7IdMap?: Map<string, string>,
 ) {
   if (!snap.carriers || !snap.shippingCode) return null;
 
@@ -145,6 +148,11 @@ export function buildRowFromSnapshot(
   const lineItems = itemSnaps.map((it) => {
     const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
     const opsPayment = String(ops?.paymentStatus ?? "").trim();
+    // Prefer per-line Cin7 link; fall back to legacy order-level SO id (same as list loader).
+    const lineCin7Id = String(ops?.cin7SalesOrderId ?? "").trim();
+    const orderCin7Id = String(orderCin7IdMap?.get(String(snap.orderId)) ?? "").trim();
+    const resolvedCin7Id =
+      lineCin7Id && !["", "pending", "duplicate"].includes(lineCin7Id) ? lineCin7Id : orderCin7Id;
     return {
       id: `${snap.orderId}-${it.idx}`,
       variantId: it.variantId,
@@ -173,8 +181,8 @@ export function buildRowFromSnapshot(
       receivedDate: ops?.receivedDate ?? "",
       portArrivalDate: ops?.portArrivalDate ?? "",
       inTransitDate: ops?.inTransitDate ?? "",
-      cin7SalesOrderId: ops?.cin7SalesOrderId ?? "",
-      cin7SalesOrderUrl: buildCin7SalesOrderUrl(ops?.cin7SalesOrderId) ?? "",
+      cin7SalesOrderId: resolvedCin7Id,
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(resolvedCin7Id) ?? "",
       poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
       // Prefer per-line Cin7 link; fall back to legacy order-level SO
       cin7Exists:

@@ -59,8 +59,8 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   if (!snap) throw new Response("Order not found", { status: 404 });
 
   shopifyOrderId = String(snap.orderId);
-  const { opsMap, orderCin7Map, orderPoMap } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
-  const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map, orderPoMap);
+  const { opsMap, orderCin7Map, orderPoMap, orderCin7IdMap } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
+  const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map, orderPoMap, orderCin7IdMap);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
 
   // Attach OrderLineItemIndex.id on each line so client can fetch by single id.
@@ -112,11 +112,21 @@ async function buildOpsMapsForOrder(prisma: any, shop: string, orderId: string) 
       .filter((row: any) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
       .map((row: any) => [row.orderId, true] as [string, boolean]),
   );
+  // orderId → order-level Cin7 SO id (so the detail page can render a clickable
+  // link when only a legacy grouped SO exists — matches the list loader).
+  const orderCin7IdMap = new Map<string, string>(
+    orderOpData
+      .filter((row: any) => {
+        const v = String(row.cin7SalesOrderId ?? "").trim();
+        return Boolean(v && v !== "pending" && v !== "duplicate");
+      })
+      .map((row: any) => [String(row.orderId), String(row.cin7SalesOrderId)] as [string, string]),
+  );
   const orderPoMap = new Map<string, string>(
     orderOpData.map((row: any) => [String(row.orderId), String(row.poNumber ?? "")]),
   );
 
-  return { opsMap, orderCin7Map, orderPoMap };
+  return { opsMap, orderCin7Map, orderPoMap, orderCin7IdMap };
 }
 
 export default function FreightOrderDetailPage() {
