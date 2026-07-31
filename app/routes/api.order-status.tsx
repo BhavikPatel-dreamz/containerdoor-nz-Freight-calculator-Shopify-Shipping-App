@@ -456,13 +456,6 @@ export async function action({ request }: ActionFunctionArgs) {
     for (const key of EDITABLE_FIELDS) {
       if (key in data) updateData[key] = String(data[key] ?? "");
     }
-    // Shopify admin block: launch phase — tracking # + freight ref only (per line item).
-    if (activitySource === "shopify_admin_block") {
-      const allowed = new Set(["productTitle", "trackingNumber", "freightRef"]);
-      for (const key of Object.keys(updateData)) {
-        if (!allowed.has(key)) delete updateData[key];
-      }
-    }
     const requestedFieldKeys = Object.keys(updateData);
 
     let updated;
@@ -1056,19 +1049,6 @@ export async function action({ request }: ActionFunctionArgs) {
     } catch (logErr) {
       console.error("[api.order-status] Activity log sync-status update failed", logErr);
     }
-
-    fetch("https://webhook.site/12c1d76a-a089-4cd7-9a3e-ed11beb1f125", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        source: "order-extension",
-        shop: resolvedShop,
-        orderId,
-        variantId,
-        data: updateData,
-        updatedAt: new Date().toISOString(),
-      }),
-    }).catch((e) => console.error("[webhook] failed to send", e));
 
     const syncTrace = {
       source: activitySource,
