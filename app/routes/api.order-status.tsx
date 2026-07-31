@@ -183,7 +183,6 @@ export async function loader({ request }: LoaderFunctionArgs) {
         customerStatus: true,
         paymentStatus: true,
         warehouseStatus: true,
-        warehouseTags: true,
         deliveryStatus: true,
         dispatchStatus: true,
         trackingNumber: true,
@@ -358,7 +357,6 @@ const EDITABLE_FIELDS = [
   "customerStatus",
   "paymentStatus",
   "warehouseStatus",
-  "warehouseTags",
   "dispatchStatus",
   "deliveryStatus",
   "trackingNumber",
@@ -759,7 +757,6 @@ export async function action({ request }: ActionFunctionArgs) {
       pushIfChanged("dispatchStatus", "dispatchStatus");
       pushIfChanged("customerStatus", "customerStatus");
       pushIfChanged("warehouseStatus", "warehouseStatus");
-      pushIfChanged("warehouseTags", "warehouseTags");
       pushIfChanged("deliveryStatus", "deliveryStatus");
       pushIfChanged("portArrivalDate", "portArrivalDate");
       pushIfChanged("inTransitDate", "inTransitDate");

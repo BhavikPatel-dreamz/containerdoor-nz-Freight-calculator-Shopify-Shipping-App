@@ -55,7 +55,6 @@ export function mergeStatusLineIntoItem<T extends Record<string, any>>(
     customerStatus: line.customerStatus ?? item.customerStatus,
     paymentStatus: line.paymentStatus || item.paymentStatus,
     warehouseStatus: line.warehouseStatus ?? item.warehouseStatus,
-    warehouseTags: line.warehouseTags ?? item.warehouseTags,
     dispatchStatus: line.dispatchStatus ?? item.dispatchStatus,
     deliveryStatus: line.deliveryStatus ?? item.deliveryStatus,
     trackingNumber: line.trackingNumber ?? item.trackingNumber,

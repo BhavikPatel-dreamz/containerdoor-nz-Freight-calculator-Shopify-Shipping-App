@@ -381,7 +381,6 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
 type OpsEditForm = {
   customerStatus: string;
   warehouseStatus: string;
-  warehouseTags: string;
   dispatchStatus: string;
   deliveryStatus: string;
   poNumber: string;
@@ -451,10 +450,6 @@ export function OpsEditModal({ order, item, form, error, isSaving, setForm, onCl
           <div>
             <label className="fo-field-label" htmlFor="ops-received">Received</label>
             <input id="ops-received" type="date" className="fo-input" value={form.receivedDate} onChange={(e) => setForm((p) => ({ ...p, receivedDate: e.target.value }))} />
-          </div>
-          <div>
-            <label className="fo-field-label" htmlFor="ops-warehouse-tags">Warehouse tags</label>
-            <input id="ops-warehouse-tags" className="fo-input" placeholder="e.g. Fragile, Oversized" value={form.warehouseTags} onChange={(e) => setForm((p) => ({ ...p, warehouseTags: e.target.value }))} />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
             <div>

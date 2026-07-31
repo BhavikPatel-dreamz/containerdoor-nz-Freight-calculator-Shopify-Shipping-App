@@ -134,10 +134,6 @@ export async function pushSupplierContainerToShopify(shop: string, orderId: stri
   return pushMetafield(shop, orderId, variantKey("supplier_container", variantId), supplierContainer);
 }
 
-export async function pushWarehouseTagsToShopify(shop: string, orderId: string, variantId: string, warehouseTags: string) {
-  return pushMetafield(shop, orderId, variantKey("warehouse_tags", variantId), warehouseTags);
-}
-
 export async function pushReceivedDateToShopify(shop: string, orderId: string, variantId: string, receivedDate: string) {
   return pushMetafield(shop, orderId, variantKey("received_date", variantId), receivedDate);
 }
@@ -169,7 +165,6 @@ export interface OperationalDataChanges {
   dispatchStatus?: string;
   customerStatus?: string;
   warehouseStatus?: string;
-  warehouseTags?: string;
   deliveryStatus?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
@@ -200,9 +195,6 @@ export async function syncChangesToShopify(changes: OperationalDataChanges) {
     }
     if (changes.warehouseStatus !== undefined) {
       await pushWarehouseStatusToShopify(shop, orderId, variantId, changes.warehouseStatus);
-    }
-    if (changes.warehouseTags !== undefined) {
-      await pushWarehouseTagsToShopify(shop, orderId, variantId, changes.warehouseTags);
     }
     if (changes.deliveryStatus !== undefined) {
       await pushDeliveryStatusToShopify(shop, orderId, variantId, changes.deliveryStatus);

@@ -199,7 +199,6 @@ export async function buildMondayRowFromOms(args: {
     lineOrderName: itemName,
     orderDate: orderDateRaw,
     warehouseStatus: String(ops.warehouseStatus || "").trim(),
-    warehouseTags: String(ops.warehouseTags || "").trim(),
     dispatchStatus: String(ops.dispatchStatus || "").trim(),
     deliveryStatus: String(ops.deliveryStatus || "").trim(),
     receivedDate: String(ops.receivedDate || "").trim(),
@@ -278,7 +277,6 @@ type MondayRow = {
   lineOrderName: string;
   orderDate: string;
   warehouseStatus: string;
-  warehouseTags: string;
   dispatchStatus: string;
   deliveryStatus: string;
   receivedDate: string;
@@ -368,7 +366,6 @@ const FIELD_DEFS: Partial<
       },
     }),
   },
-  // warehouseTags: not synced to Monday — client doesn't need this column (2026-07)
   // dispatchStatus: not synced to Monday — client doesn't need this column (2026-07)
   // deliveryStatus: not synced to Monday — client doesn't need this column (2026-07)
   // receivedDate: not synced to Monday — client doesn't need this column (2026-07)
@@ -962,7 +959,6 @@ export async function fetchMondayItem(itemId: string) {
     trackingNumber: getText("trackingNumber"),
     trackingNumberChangedAt,
     warehouseStatus: getText("warehouseStatus"),
-    warehouseTags: getText("warehouseTags"),
     dispatchStatus: getText("dispatchStatus"),
     deliveryStatus: getText("deliveryStatus"),
     depositPaid: getText("depositPaid"),

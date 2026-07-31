@@ -36,7 +36,6 @@ export default function FreightDashboard({
   counts,
   suppliers = [],
   warehouseStatuses = [],
-  warehouseTags = [],
   carriers = [],
   activeFilters = {},
   page,
@@ -83,7 +82,7 @@ export default function FreightDashboard({
   const [editDispatchModal, setEditDispatchModal] = useState(false);
   const [editOpsModal, setEditOpsModal] = useState(false);
   const [editDispatchForm, setEditDispatchForm] = useState({ eddDate: "", carrier: "", trackingNumber: "", freightRef: "" });
-  const [editOpsForm, setEditOpsForm] = useState({ customerStatus: "", warehouseStatus: "", warehouseTags: "", dispatchStatus: "", deliveryStatus: "", poNumber: "", depositPaid: "", balanceDue: "", paymentStatus: "", supplierContainer: "", receivedDate: "", portArrivalDate: "", inTransitDate: "" });
+  const [editOpsForm, setEditOpsForm] = useState({ customerStatus: "", warehouseStatus: "", dispatchStatus: "", deliveryStatus: "", poNumber: "", depositPaid: "", balanceDue: "", paymentStatus: "", supplierContainer: "", receivedDate: "", portArrivalDate: "", inTransitDate: "" });
   const [isSavingDispatch, setIsSavingDispatch] = useState(false);
   const [isSavingOps, setIsSavingOps] = useState(false);
   const [editDispatchError, setEditDispatchError] = useState("");
@@ -200,7 +199,6 @@ export default function FreightDashboard({
       const np = new URLSearchParams(prev);
       np.delete("supplier");
       np.delete("warehouseStatus");
-      np.delete("warehouseTag");
       np.delete("carrier");
       np.delete("paymentStatus");
       np.set("page", "1");
@@ -209,7 +207,7 @@ export default function FreightDashboard({
 
   const hasActiveFilters = Boolean(
     searchParams.get("supplier") || searchParams.get("warehouseStatus") ||
-    searchParams.get("warehouseTag") || searchParams.get("carrier") ||
+    searchParams.get("carrier") ||
     searchParams.get("paymentStatus")
   );
 
@@ -220,7 +218,6 @@ export default function FreightDashboard({
   const [stagedFilters, setStagedFilters] = useState({
     supplier: searchParams.get("supplier") ?? "",
     warehouseStatus: searchParams.get("warehouseStatus") ?? "",
-    warehouseTag: searchParams.get("warehouseTag") ?? "",
     carrier: searchParams.get("carrier") ?? "",
     paymentStatus: searchParams.get("paymentStatus") ?? "",
   });
@@ -229,7 +226,6 @@ export default function FreightDashboard({
     setStagedFilters({
       supplier: searchParams.get("supplier") ?? "",
       warehouseStatus: searchParams.get("warehouseStatus") ?? "",
-      warehouseTag: searchParams.get("warehouseTag") ?? "",
       carrier: searchParams.get("carrier") ?? "",
       paymentStatus: searchParams.get("paymentStatus") ?? "",
     });
@@ -243,7 +239,6 @@ export default function FreightDashboard({
       const set = (k: string, v: string) => { if (v) np.set(k, v); else np.delete(k); };
       set("supplier", merged.supplier);
       set("warehouseStatus", merged.warehouseStatus);
-      set("warehouseTag", merged.warehouseTag);
       set("carrier", merged.carrier);
       set("paymentStatus", merged.paymentStatus);
       np.set("page", "1");
@@ -259,7 +254,6 @@ export default function FreightDashboard({
   const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
     stagedFilters.supplier ? { key: "supplier" as const, label: "Supplier", value: stagedFilters.supplier } : null,
     stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
-    stagedFilters.warehouseTag ? { key: "warehouseTag" as const, label: "Tag", value: stagedFilters.warehouseTag } : null,
     stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
     stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
   ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
@@ -855,7 +849,6 @@ export default function FreightDashboard({
     setEditOpsForm({
       customerStatus: normalizeStatusValue(CUSTOMER_STATUS_OPTIONS, detailView.item.customerStatus || ""),
       warehouseStatus: normalizeStatusValue(WAREHOUSE_STATUS_OPTIONS, detailView.item.warehouseStatus || ""),
-      warehouseTags: detailView.item.warehouseTags || "",
       dispatchStatus: normalizeStatusValue(DISPATCH_STATUS_OPTIONS, detailView.item.dispatchStatus || ""),
       deliveryStatus: normalizeStatusValue(DELIVERY_STATUS_OPTIONS, detailView.item.deliveryStatus || ""),
       poNumber: detailView.item.poNumber || "",
@@ -876,7 +869,6 @@ export default function FreightDashboard({
       const data: Record<string, string> = {};
       if (editOpsForm.customerStatus !== (detailView.item.customerStatus || "")) data.customerStatus = editOpsForm.customerStatus;
       if (editOpsForm.warehouseStatus !== (detailView.item.warehouseStatus || "")) data.warehouseStatus = editOpsForm.warehouseStatus;
-      if (editOpsForm.warehouseTags !== (detailView.item.warehouseTags || "")) data.warehouseTags = editOpsForm.warehouseTags;
       if (editOpsForm.dispatchStatus !== (detailView.item.dispatchStatus || "")) data.dispatchStatus = editOpsForm.dispatchStatus;
       if (editOpsForm.deliveryStatus !== (detailView.item.deliveryStatus || "")) data.deliveryStatus = editOpsForm.deliveryStatus;
       if (editOpsForm.poNumber !== (detailView.item.poNumber || "")) data.poNumber = editOpsForm.poNumber;
@@ -892,10 +884,10 @@ export default function FreightDashboard({
       if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
       const payload = await res.json();
       logSyncTrace("Operational edit", payload);
-      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, customerStatus: data.customerStatus ?? li.customerStatus, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, warehouseTags: data.warehouseTags ?? li.warehouseTags, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
+      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, customerStatus: data.customerStatus ?? li.customerStatus, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
       setRows((prev) => prev.map(apply));
       if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
-      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, customerStatus: data.customerStatus ?? prev.item.customerStatus, warehouseStatus: data.warehouseStatus ?? prev.item.warehouseStatus, warehouseTags: data.warehouseTags ?? prev.item.warehouseTags, dispatchStatus: data.dispatchStatus ?? prev.item.dispatchStatus, deliveryStatus: data.deliveryStatus ?? prev.item.deliveryStatus, poNumber: data.poNumber ?? prev.item.poNumber, depositPaid: data.depositPaid ?? prev.item.depositPaid, balanceDue: data.balanceDue ?? prev.item.balanceDue, paymentStatus: data.paymentStatus ?? prev.item.paymentStatus, supplierContainer: data.supplierContainer ?? prev.item.supplierContainer, receivedDate: data.receivedDate ?? prev.item.receivedDate, portArrivalDate: data.portArrivalDate ?? prev.item.portArrivalDate, inTransitDate: data.inTransitDate ?? prev.item.inTransitDate } } : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, customerStatus: data.customerStatus ?? prev.item.customerStatus, warehouseStatus: data.warehouseStatus ?? prev.item.warehouseStatus, dispatchStatus: data.dispatchStatus ?? prev.item.dispatchStatus, deliveryStatus: data.deliveryStatus ?? prev.item.deliveryStatus, poNumber: data.poNumber ?? prev.item.poNumber, depositPaid: data.depositPaid ?? prev.item.depositPaid, balanceDue: data.balanceDue ?? prev.item.balanceDue, paymentStatus: data.paymentStatus ?? prev.item.paymentStatus, supplierContainer: data.supplierContainer ?? prev.item.supplierContainer, receivedDate: data.receivedDate ?? prev.item.receivedDate, portArrivalDate: data.portArrivalDate ?? prev.item.portArrivalDate, inTransitDate: data.inTransitDate ?? prev.item.inTransitDate } } : prev);
       setEditOpsModal(false); setSyncNotification("Operational data updated & synced"); window.setTimeout(() => setSyncNotification(null), 4500);
     } catch (e) { setEditOpsError(e instanceof Error ? e.message : "Failed to save"); } finally { setIsSavingOps(false); }
   };
@@ -976,10 +968,11 @@ export default function FreightDashboard({
       const payload = await response.json();
       if (!payload.ok) throw new Error(payload.error || "Failed to create Cin7 order");
       const cin7Exists = Boolean(payload.cin7SalesOrderId && payload.cin7SalesOrderId !== "pending");
-      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })) };
+      const cin7SalesOrderUrl = String(payload.cin7SalesOrderUrl ?? "");
+      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })) };
       setRows((prevRows = []) => prevRows.map(applyCin7));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7) : prev);
-      if (detailView?.order.id === order.id) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists } } : prev);
+      if (detailView?.order.id === order.id) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
       setSyncNotification("Cin7 order created successfully");
     } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to create Cin7 order"); } finally { setCreatingCin7OrderId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
   };
@@ -1079,6 +1072,7 @@ export default function FreightDashboard({
             const cin7Exists = Boolean(
               cin7Payload.cin7SalesOrderId && cin7Payload.cin7SalesOrderId !== "pending",
             );
+            const cin7SalesOrderUrl = String(cin7Payload.cin7SalesOrderUrl ?? "");
             lines.push({
               system: "Cin7",
               ok: cin7Exists,
@@ -1097,6 +1091,8 @@ export default function FreightDashboard({
                     lineItems: o.lineItems.map((li) => ({
                       ...li,
                       cin7Exists,
+                      cin7SalesOrderId: cin7Exists ? String(cin7Payload.cin7SalesOrderId) : li.cin7SalesOrderId,
+                      cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl,
                       cin7Status: cin7Exists ? ("match" as const) : ("missing" as const),
                       cin7Mismatches: [],
                     })),
@@ -1104,7 +1100,7 @@ export default function FreightDashboard({
             setRows((prev) => prev.map(applyCin7Created));
             if (allRows) setAllRows((prev) => (prev ? prev.map(applyCin7Created) : prev));
             setDetailView((prev) =>
-              prev ? { ...prev, item: { ...prev.item, cin7Exists } } : prev,
+              prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev,
             );
           } else {
             lines.push({
@@ -1406,17 +1402,6 @@ export default function FreightDashboard({
                   >
                     <option value="">All</option>
                     {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse tag</label>
-                  <select
-                    className="fo-status-select"
-                    value={stagedFilters.warehouseTag}
-                    onChange={(e) => applyFilters({ warehouseTag: e.target.value })}
-                  >
-                    <option value="">All</option>
-                    {warehouseTags.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
