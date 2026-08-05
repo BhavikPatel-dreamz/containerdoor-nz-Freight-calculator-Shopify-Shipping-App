@@ -57,6 +57,11 @@ function BoxDimensionsBlock() {
     }
     setLoading(true);
     try {
+      // Ensure we pass a proper GraphQL global ID (GID) for the variant.
+      const ownerId = String(variantId).startsWith("gid://")
+        ? variantId
+        : `gid://shopify/ProductVariant/${variantId}`;
+
       const res = await gql(
         `query GetVariantMeta($id: ID!, $namespace: String!) {
           productVariant(id: $id) {
@@ -65,7 +70,7 @@ function BoxDimensionsBlock() {
             }
           }
         }`,
-        { id: variantId, namespace: NAMESPACE }
+        { id: ownerId, namespace: NAMESPACE }
       );
 
       const nodes: { key: string; value: string }[] =
@@ -106,6 +111,11 @@ function BoxDimensionsBlock() {
     setSaving(true);
     setBanner(null);
     try {
+      // Ensure ownerId is a GraphQL global id.
+      const ownerId = String(variantId).startsWith("gid://")
+        ? variantId
+        : `gid://shopify/ProductVariant/${variantId}`;
+
       const res = await gql(
         `mutation SetMeta($metafields: [MetafieldsSetInput!]!) {
           metafieldsSet(metafields: $metafields) {
@@ -120,12 +130,10 @@ function BoxDimensionsBlock() {
             { key: "number_of_boxes", value: String(boxes.length) },
             {
               key: "weight_grams",
-              value: boxes
-                .map((b) => String(Math.round(Number(b.weight) * 1000)))
-                .join(","),
+              value: boxes.map((b) => String(Math.round(Number(b.weight) * 1000))).join(","),
             },
           ].map((m) => ({
-            ownerId: variantId,
+            ownerId,
             namespace: NAMESPACE,
             key: m.key,
             value: m.value,
