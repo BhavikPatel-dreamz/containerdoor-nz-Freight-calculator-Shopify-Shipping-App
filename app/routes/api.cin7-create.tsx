@@ -132,6 +132,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 sku
                 title
                 quantity
+                variant {
+                  sku
+                }
                 originalUnitPriceSet {
                   presentmentMoney {
                     amount
@@ -167,7 +170,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // Build Cin7 line items (filter out items without SKU)
     const lineItems = (orderData.lineItems?.nodes ?? [])
       .map((li: any) => ({
-        code: li.sku ?? "",
+        code: li.sku ?? li.variant?.sku ?? "",
         name: li.title ?? "",
         qty: li.quantity ?? 1,
         unitPrice: Number(li.originalUnitPriceSet?.presentmentMoney?.amount ?? 0),
