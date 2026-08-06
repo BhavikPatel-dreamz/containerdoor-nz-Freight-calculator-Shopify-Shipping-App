@@ -2,7 +2,7 @@
   "name": "containerdoo-calculator",
   "private": true,
   "scripts": {
-    "build": "prisma generate && prisma migrate deploy && react-router build",
+    "build": "react-router build",
     "dev": "prisma generate && cloudflared tunnel run bhavik & shopify app dev --tunnel-url=https://b2b.dynamicdreamz.com:3000",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
