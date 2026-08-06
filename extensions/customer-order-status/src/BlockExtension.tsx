@@ -94,7 +94,7 @@ function CartLineFreightStatus() {
     (cartLine as any)?.title ??
     "";
 
-  // ── Fetch all records for the order, then pick the matching one ───────────
+  // ── Fetch all records for the order, then pick the matching one ─
   const fetchRecord = useCallback(async () => {
     if (!numericOrderId) {
       setLoading(false);
