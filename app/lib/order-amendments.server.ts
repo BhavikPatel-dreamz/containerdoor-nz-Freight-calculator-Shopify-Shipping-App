@@ -263,23 +263,24 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
     if (lineOps) {
       const a = input.address;
       const lineUpdate: Record<string, string> = {};
-      const lmap: Array<[keyof AddressAmendment, string]> = [
-        ["firstName", "shippingFirstName"],
-        ["lastName", "shippingLastName"],
-        ["address1", "shippingAddress1"],
-        ["address2", "shippingAddress2"],
-        ["city", "shippingCity"],
-        ["province", "shippingProvince"],
-        ["zip", "shippingZip"],
-        ["country", "shippingCountry"],
+      const lmap: Array<[keyof AddressAmendment, string, string]> = [
+        ["firstName", "shippingFirstName", "firstName"],
+        ["lastName", "shippingLastName", "lastName"],
+        ["address1", "shippingAddress1", "address1"],
+        ["address2", "shippingAddress2", "address2"],
+        ["city", "shippingCity", "city"],
+        ["province", "shippingProvince", "province"],
+        ["zip", "shippingZip", "zip"],
+        ["country", "shippingCountry", "country"],
       ];
-      for (const [inKey, lineKey] of lmap) {
+      for (const [inKey, lineKey, label] of lmap) {
         if (a[inKey] === undefined) continue;
         const next = String(a[inKey] ?? "").trim();
         const prev = String((lineOps as any)[lineKey] ?? "");
         if (next === prev) continue;
         lineUpdate[lineKey] = next;
         lineAddressChanged = true;
+        changes.push({ field: label, oldValue: prev, newValue: next });
       }
       if (lineAddressChanged) {
         await prisma.orderLineItemOperationalData.update({
