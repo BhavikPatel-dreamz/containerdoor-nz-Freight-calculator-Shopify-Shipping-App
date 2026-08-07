@@ -186,7 +186,16 @@ model OrderLineItemOperationalData {
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
   trackingNumberUpdatedAt DateTime?   // NEW
-  freightRef        String   @default("")  
+  freightRef        String   @default("")
+  // NEW: per-line delivery address (overrides order-level snapshot address for this line only)
+  shippingFirstName String   @default("")
+  shippingLastName  String   @default("")
+  shippingAddress1  String   @default("")
+  shippingAddress2  String   @default("")
+  shippingCity      String   @default("")
+  shippingProvince  String   @default("")
+  shippingZip       String   @default("")
+  shippingCountry   String   @default("")
   eddDate           String   @default("")
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")

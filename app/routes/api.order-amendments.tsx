@@ -18,13 +18,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("shop") || "";
   const orderId = url.searchParams.get("orderId") || "";
+  const variantId = url.searchParams.get("variantId") || undefined;
   if (!shop || !orderId) {
     return Response.json(
       { ok: false, error: "Missing shop or orderId" },
       { status: 400, headers: CORS_HEADERS },
     );
   }
-  const draft = await getOrderAmendmentDraft(shop, orderId);
+  const draft = await getOrderAmendmentDraft(shop, orderId, variantId);
   if (!draft) {
     return Response.json(
       { ok: false, error: "Order not found" },

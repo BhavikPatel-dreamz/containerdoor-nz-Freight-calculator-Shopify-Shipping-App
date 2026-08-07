@@ -90,10 +90,10 @@ export async function postOrderStatus(body: {
   return { ok: res.ok, json };
 }
 
-export async function fetchOrderAmendments(shop: string, orderId: string): Promise<any | null> {
-  const res = await fetch(
-    `/api/order-amendments?shop=${encodeURIComponent(shop)}&orderId=${encodeURIComponent(orderId)}`,
-  );
+export async function fetchOrderAmendments(shop: string, orderId: string, variantId?: string): Promise<any | null> {
+  const qs = new URLSearchParams({ shop, orderId });
+  if (variantId) qs.set("variantId", variantId);
+  const res = await fetch(`/api/order-amendments?${qs}`);
   if (!res.ok) return null;
   return res.json();
 }
