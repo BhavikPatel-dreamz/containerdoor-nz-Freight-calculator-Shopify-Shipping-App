@@ -75,7 +75,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           {
             service_name: "please order seperatly all the orders",
             service_code: "separate_orders_required",
-            description: "please order seperatly all the orders",
+            description: "",
             currency: payload.rate?.currency || "NZD",
             total_price: "0",
           },
@@ -133,6 +133,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         currency: serviceRate.currency || payload.rate?.currency || "NZD",
         total_price: Math.round(serviceRate.total * 100).toString(),
       });
+
+        // For depot delivery options, add three temporary test options (minimal change)
+        if (serviceRate.serviceType === "DEPOT_DELIVERY") {
+          const extras = ["test1", "test2", "test3"];
+          for (const ex of extras) {
+            shopifyRates.push({
+              service_name: `${serviceName} - ${ex}`,
+              service_code: `${serviceCode}::extra:${ex}`,
+              currency: serviceRate.currency || payload.rate?.currency || "NZD",
+              total_price: Math.round(serviceRate.total * 100).toString(),
+            });
+          }
+        }
     }
 
     if (shopifyRates.length === 0) {
