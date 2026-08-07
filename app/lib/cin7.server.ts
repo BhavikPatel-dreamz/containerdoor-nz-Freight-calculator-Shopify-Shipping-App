@@ -362,6 +362,100 @@ export async function syncCin7Carrier(input: {
   }
 }
 
+export async function syncCin7DeliveryAddress(input: {
+  salesOrderId?: string;
+  firstName?: string;
+  lastName?: string;
+  address1?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7DeliveryAddress: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7DeliveryAddress: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = getCin7UpdateUrl();
+    const body = [
+      {
+        id: parseInt(salesOrderId, 10) || 0,
+        deliveryFirstName: input.firstName ?? "",
+        deliveryLastName: input.lastName ?? "",
+        deliveryAddress1: input.address1 ?? "",
+        deliveryAddress2: input.address2 ?? "",
+        deliveryCity: input.city ?? "",
+        deliveryState: input.state ?? "",
+        deliveryPostalCode: input.postalCode ?? "",
+        deliveryCountry: input.country ?? "",
+      },
+    ];
+
+    debug("Cin7", `PUT address request to ${url}`);
+    debug("Cin7", "PUT address body:", body);
+
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT address response status: ${res.status}`);
+    debug("Cin7", `PUT address response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT address failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT address success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for address update (salesOrderId=${salesOrderId})`,
+      };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT address success (200): address updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    }
+
+    debug("Cin7", `PUT address error (${res.status}): ${responseText}`);
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    debug("Cin7", "PUT address request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 export async function appendCin7InternalComment(input: {
   salesOrderId?: string;

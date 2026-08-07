@@ -735,7 +735,11 @@ export default function FreightDashboard({
     setAmendError("");
     setIsSavingAmend(false);
     try {
-      const json = await fetchOrderAmendments(shop, detailView.order.shopifyOrderId);
+      const json = await fetchOrderAmendments(
+        shop,
+        detailView.order.shopifyOrderId,
+        detailView.item.variantId,
+      );
       if (!json?.ok) throw new Error(json?.error || "Failed to load order");
       const d = json.draft;
       setAmendForm({
