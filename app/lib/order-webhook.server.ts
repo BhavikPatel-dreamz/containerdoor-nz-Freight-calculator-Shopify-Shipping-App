@@ -16,6 +16,7 @@ import {
 export type OrderPayload = {
   id?: number;
   name?: string;
+  note_attributes?: Array<{ name?: string; value?: string }>;
   created_at?: string;
   currency?: string;
   total_price?: string;
@@ -113,6 +114,23 @@ export function extractCarrierFromOrder(order: OrderPayload): string {
     if (first) return first;
   }
   return shippingLines.find((l) => l?.title)?.title ?? "";
+}
+
+// ─── Depot child-address helper (from checkout cart attribute) ──────────────
+export function extractSelectedDepotAddress(order: OrderPayload): {
+  name?: string;
+  address1?: string;
+  city?: string;
+  zip?: string;
+} | null {
+  const raw = (order.note_attributes ?? []).find((a) => a.name === "selected_depot_address")?.value;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Sync payload for external services ──────────────────────────────────────
@@ -284,6 +302,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
 export async function createOrderLineItemRecords(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   const lineItems = order.line_items ?? [];
+  const selectedDepot = extractSelectedDepotAddress(order);
 
   // Build freight lookup so we can attach carrier info from the shipping line
   const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
@@ -317,6 +336,13 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
           productTitle: li.title ?? "",
           carrier: carrierByVariant.get(variantId) ?? "",
           paymentStatus: "",
+          ...(selectedDepot
+            ? {
+                shippingAddress1: selectedDepot.address1 ?? "",
+                shippingCity: selectedDepot.city ?? "",
+                shippingZip: selectedDepot.zip ?? "",
+              }
+            : {}),
         },
       });
       created++;
