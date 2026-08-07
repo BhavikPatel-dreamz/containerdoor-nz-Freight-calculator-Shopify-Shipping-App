@@ -26,6 +26,10 @@ export type FreightLineItem = {
   depositPaid?: string;
   balanceDue?: string;
   poNumber?: string;
+  /** Depot address selected at checkout (Depot Collection service only) */
+  depotAddress1?: string;
+  depotCity?: string;
+  depotZip?: string;
   supplierContainer?: string;
   receivedDate?: string;
   portArrivalDate?: string;

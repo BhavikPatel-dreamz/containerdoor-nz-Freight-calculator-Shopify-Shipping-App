@@ -1,0 +1,10 @@
+api_version = "2025-01"
+
+[[extensions]]
+type = "ui_extension"
+name = "depot-child-selector"
+handle = "depot-child-selector"
+
+[[extensions.targeting]]
+target = "purchase.checkout.shipping-option-item.render-after"
+module = "./src/Checkout.tsx"
