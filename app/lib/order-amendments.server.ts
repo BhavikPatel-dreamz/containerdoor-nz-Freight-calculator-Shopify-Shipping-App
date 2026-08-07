@@ -223,7 +223,7 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
   }
 
   // ── Address ──
-  if (input.address) {
+    if (input.address && !input.variantId) {
     const a = input.address;
     const map: Array<[keyof AddressAmendment, string, string]> = [
       ["firstName", "shippingFirstName", "firstName"],
