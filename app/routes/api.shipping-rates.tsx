@@ -66,6 +66,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const serviceRates = await calculateServiceRates(shop, destination, packages);
 
+    const hasStandardDelivery = serviceRates.some((rate) => rate.serviceType === "STANDARD_DELIVERY");
+    const hasDepotCollection = serviceRates.some((rate) => rate.serviceType === "DEPOT_DELIVERY");
+
+    if (hasStandardDelivery && hasDepotCollection) {
+      return Response.json({
+        rates: [
+          {
+            service_name: "please order seperatly all the orders",
+            service_code: "separate_orders_required",
+            description: "please order seperatly all the orders",
+            currency: payload.rate?.currency || "NZD",
+            total_price: "0",
+          },
+        ],
+      });
+    }
+
     // Filter to Standard Delivery only; one combined rate shown to customer
     const serviceNameMap: Partial<Record<string, string>> = {
       STANDARD_DELIVERY: "Standard Delivery",
