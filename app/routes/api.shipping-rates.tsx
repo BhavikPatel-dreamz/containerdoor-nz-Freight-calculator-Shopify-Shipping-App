@@ -64,7 +64,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ rates: [] });
     }
 
-    const serviceRates = await calculateServiceRates(shop, destination, packages);
+    const freightResult = await calculateServiceRates(shop, destination, packages, true); // NEW: 4th arg opts into diagnostics
+
+    if (freightResult.issue === "QUOTE_REQUIRED_VARIANTS") {
+      console.log(`[FREIGHT] Quote required for ${shop} — variants: ${freightResult.quoteRequiredVariantIds.join(", ")}`);
+      return Response.json({
+        rates: [{
+          service_name: "Freight Quote Required",
+          service_code: "manual_quote",
+          description: "Please contact us for a freight quote for your location.",
+          currency: payload.rate?.currency || "NZD",
+          total_price: "0",
+        }],
+      });
+    }
+
+    if (freightResult.issue === "SEPARATE_ORDERS") {
+      console.log(`[FREIGHT] No shared delivery method across cart items for ${shop}`);
+      return Response.json({
+        rates: [{
+          service_name: "Please Order Items Separately",
+          service_code: "separate_orders_required",
+          description: "Items in your cart require different delivery methods. Please place separate orders for these items.",
+          currency: payload.rate?.currency || "NZD",
+          total_price: "0",
+        }],
+      });
+    }
+
+    const serviceRates = freightResult.rates;
 
     // Filter to Standard Delivery only; one combined rate shown to customer
     const serviceNameMap: Partial<Record<string, string>> = {
