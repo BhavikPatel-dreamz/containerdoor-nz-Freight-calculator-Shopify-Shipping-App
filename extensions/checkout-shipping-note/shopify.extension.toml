@@ -9,6 +9,7 @@ handle = "checkout-shipping-note"
   [[extensions.targeting]]
   module = "./src/ShippingOptionNote.tsx"
   target = "purchase.checkout.shipping-option-item.render-after"
-  
+
   [extensions.capabilities]
   network_access = true
+  api_access = true

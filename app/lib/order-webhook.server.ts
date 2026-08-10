@@ -116,6 +116,39 @@ export function extractCarrierFromOrder(order: OrderPayload): string {
   return shippingLines.find((l) => l?.title)?.title ?? "";
 }
 
+// ─── Fallback depot matching (for orders created via Admin draft orders) ────
+// Draft orders never run the checkout UI extension, so no `selected_depot_address`
+// note attribute exists. When that's the case and the shipping line looks like a
+// depot service, auto-pick the nearest depot by zip proximity — mirrors the logic
+// in extensions/checkout-shipping-note/src/ShippingOptionNote.tsx.
+
+const FLIWAY_DEPOTS_FALLBACK = [
+  { name: "Fliway Depot - Auckland Central", address1: "12 Fanshawe Street, Auckland CBD", zip: "1010" },
+  { name: "Fliway Depot - Parnell", address1: "88 Parnell Road, Parnell", zip: "1023" },
+  { name: "Fliway Depot - Mount Eden", address1: "45 Mount Eden Road, Mount Eden", zip: "1060" },
+  { name: "Fliway Depot - Gisborne Central", address1: "20 Gladstone Road, Gisborne", zip: "4010" },
+  { name: "Fliway Depot - Gisborne East", address1: "5 Customhouse Street, Gisborne", zip: "4010" },
+  { name: "Fliway Depot - Elgin, Gisborne", address1: "112 Childers Road, Elgin, Gisborne", zip: "4012" },
+];
+
+function findNearestFallbackDepot(customerZip: string): { name?: string; address1?: string; city?: string; zip?: string } | null {
+  const customerZipNum = parseInt(customerZip, 10);
+  if (isNaN(customerZipNum) || FLIWAY_DEPOTS_FALLBACK.length === 0) return null;
+
+  let best = FLIWAY_DEPOTS_FALLBACK[0];
+  let bestDistance = Number.MAX_SAFE_INTEGER;
+  for (const depot of FLIWAY_DEPOTS_FALLBACK) {
+    const depotZipNum = parseInt(depot.zip, 10);
+    if (isNaN(depotZipNum)) continue;
+    const distance = Math.abs(customerZipNum - depotZipNum);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = depot;
+    }
+  }
+  return { name: best.name, address1: best.address1, city: "", zip: best.zip };
+}
+
 // ─── Depot child-address helper (from checkout cart attribute) ──────────────
 export function extractSelectedDepotAddress(order: OrderPayload): {
   name?: string;
@@ -302,7 +335,23 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
 export async function createOrderLineItemRecords(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   const lineItems = order.line_items ?? [];
-  const selectedDepot = extractSelectedDepotAddress(order);
+
+  // Prefer the customer's real checkout selection. If it's missing (e.g. order
+  // was created via Admin → Draft orders, which never runs the checkout
+  // extension) AND the shipping line looks like a depot service, fall back to
+  // auto-picking the nearest depot by the order's shipping zip.
+  let selectedDepot = extractSelectedDepotAddress(order);
+  if (!selectedDepot) {
+    const freightLineForDepot = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    const looksLikeDepot = /depot/i.test(freightLineForDepot?.title ?? "");
+    if (looksLikeDepot) {
+      const zip = getShippingAddress(order).zip ?? "";
+      selectedDepot = findNearestFallbackDepot(zip);
+      if (selectedDepot) {
+        console.log(`[OrderLineItems][Webhook][${orderId}] No checkout depot selection — auto-picked nearest depot by zip=${zip}: ${selectedDepot.name}`);
+      }
+    }
+  }
 
   // Build freight lookup so we can attach carrier info from the shipping line
   const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
@@ -336,11 +385,13 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
           productTitle: li.title ?? "",
           carrier: carrierByVariant.get(variantId) ?? "",
           paymentStatus: "",
+          // Depot fields only — shippingAddress1/City/Zip are NOT touched here.
+          // Those remain reserved for customer address overrides via order-amendments.server.ts.
           ...(selectedDepot
             ? {
-                shippingAddress1: selectedDepot.address1 ?? "",
-                shippingCity: selectedDepot.city ?? "",
-                shippingZip: selectedDepot.zip ?? "",
+                depotAddress1: selectedDepot.address1 ?? "",
+                depotCity: selectedDepot.city ?? "",
+                depotZip: selectedDepot.zip ?? "",
               }
             : {}),
         },
