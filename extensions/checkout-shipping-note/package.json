@@ -1,11 +1,12 @@
 {
-  "name": "depot-child-selector",
-  "private": true,
+  "name": "checkout-shipping-note",
   "version": "1.0.0",
-  "license": "UNLICENSED",
+  "main": "index.js",
+  "license": "ISC",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
-    "preact": "^10.10.0",
-    "@preact/signals": "^2.3.0",
     "@shopify/ui-extensions": "2025.7.3",
     "@shopify/ui-extensions-react": "2025.7.3",
     "react": "18.3.1"

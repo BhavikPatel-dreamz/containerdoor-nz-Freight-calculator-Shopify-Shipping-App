@@ -1,0 +1,11 @@
+api_version = "2025-07"
+uid = "754de0cb-fe3b-6719-4ec4-6de2537a5d4a00661170"
+
+[[extensions]]
+type = "ui_extension"
+name = "Checkout Shipping Note"
+handle = "checkout-shipping-note"
+
+  [[extensions.targeting]]
+  module = "./src/ShippingOptionNote.tsx"
+  target = "purchase.checkout.shipping-option-item.render-after"
