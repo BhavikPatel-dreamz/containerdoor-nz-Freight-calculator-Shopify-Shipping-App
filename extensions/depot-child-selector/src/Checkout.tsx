@@ -24,16 +24,16 @@ export default reactExtension(
 );
 
 function DepotChildSelector() {
-  // Runs once PER shipping option row — only render our picker under the
-  // option the shopper actually selected, matching "Depot Collection".
-  const shippingOption = useShippingOptionTarget();
+  // useShippingOptionTarget() returns a wrapper object, not the option itself.
+  // Real shape: { shippingOptionTarget, isTargetSelected, renderMode }
+  const { shippingOptionTarget, isTargetSelected } = useShippingOptionTarget();
   const applyAttributeChange = useApplyAttributeChange();
   const attributes = useAttributes();
 
-  const title = shippingOption?.title ?? "";
+  const title = shippingOptionTarget?.title ?? "";
   const isDepotOption = /depot collection/i.test(title);
-  const isSelected = shippingOption?.selected === true;
-  if (!isDepotOption || !isSelected) return null;
+
+  if (!isDepotOption || !isTargetSelected) return null;
 
   const current = attributes.find((a) => a.key === DEPOT_ATTRIBUTE_KEY)?.value ?? "";
 
