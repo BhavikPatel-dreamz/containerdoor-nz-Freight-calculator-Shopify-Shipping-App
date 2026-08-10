@@ -58,7 +58,12 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Tracking #</span><span className="fo-detail-value">{item.trackingNumber ? <span style={{ color: "#2563eb" }}>{item.trackingNumber}</span> : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value">{item.freightRef || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Delivery method</span>
+          <span className="fo-detail-value">
+            {(item.depotAddress1 || item.depotCity || item.depotZip) ? "Depot" : "Standard"}
+          </span>
+        </div>
         {(item.depotAddress1 || item.depotCity || item.depotZip) ? (
           <div className="fo-detail-row">
             <span className="fo-detail-label">Depot address</span>
