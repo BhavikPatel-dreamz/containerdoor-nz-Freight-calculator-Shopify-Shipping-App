@@ -196,6 +196,9 @@ model OrderLineItemOperationalData {
   shippingProvince  String   @default("")
   shippingZip       String   @default("")
   shippingCountry   String   @default("")
+  depotAddress1     String   @default("")
+  depotCity         String   @default("")
+  depotZip          String   @default("")
   eddDate           String   @default("")
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")
