@@ -52,14 +52,30 @@ export const companyLabels: Record<string, string> = {
 };
 
 export function getCarrierLabel(company: string, isDepotCollection = false) {
-  if (!company) return "";
-  if (!isDepotCollection) return companyLabels[company] ?? company;
+  const normalizedCompany = String(company || "").trim();
+  if (!normalizedCompany) return "";
+  if (!isDepotCollection) return companyLabels[normalizedCompany] ?? normalizedCompany;
 
-  if (company === "FLIWAYLINEHAUL" || company === "FLIWAYMIDSIZE") {
-    return "Fliway Depot";
+  const lowerKey = normalizedCompany.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (
+    lowerKey === "fliwaylinehaul" ||
+    lowerKey === "fliwaymidsize" ||
+    lowerKey === "fliway" ||
+    lowerKey === "linehaulfliway" ||
+    lowerKey === "midsizefliway" ||
+    lowerKey === "fliwaylinehauldepot" ||
+    lowerKey === "fliwaymidsizedepot"
+  ) {
+    return "Depot - Fliway";
+  }
+  if (lowerKey === "mainfreight" || lowerKey === "mainfreightdepot" || lowerKey === "mfdepot") {
+    return "MF Depot";
+  }
+  if (lowerKey === "tge" || lowerKey === "tgedepot") {
+    return "TGE Depot";
   }
 
-  return `${companyLabels[company] ?? company} Depot`;
+  return `${companyLabels[normalizedCompany] ?? normalizedCompany} Depot`;
 }
 
 export const freightFormula = {
