@@ -300,14 +300,18 @@ const FIELD_DEFS: Partial<
     type: "status",
     defaults: JSON.stringify({
       labels: {
-        "0": "Fliway - Linehaul",
-        "1": "Fliway - Midsize",
+        "0": "Linehaul - Fliway",
+        "1": "Midsize - Fliway",
         "2": "NZP",
         "3": "NZP - Age Restricted",
         "4": "Castle",
-        "5": "Team Global Express",
-        "6": "M2H",
-        "7": "Mainfreight",
+        "5": "Special",
+        "6": "M2H Delivery",
+        "7": "MF Depot",
+        "8": "TGE Depot",
+        "9": "Depot - Fliway",
+        "10": "Van Run",
+        "11": "TGE",
       },
     }),
   },
@@ -601,15 +605,23 @@ const deliveryStatusLabelMap: Record<string, string> = {
 };
 
 const carrierLabelMap: Record<string, string> = {
-  fliway: "Fliway - Linehaul",
-  fliwaylinehaul: "Fliway - Linehaul",
-  fliwaymidsize: "Fliway - Midsize",
+  fliway: "Linehaul - Fliway",
+  fliwaylinehaul: "Linehaul - Fliway",
+  "fliway - linehaul": "Linehaul - Fliway",
+  fliwaymidsize: "Midsize - Fliway",
+  "fliway - midsize": "Midsize - Fliway",
   nzp: "NZP",
   nzp_age_restricted: "NZP - Age Restricted",
   castle: "Castle",
-  tge: "Team Global Express",
-  m2h: "M2H",
-  mainfreight: "Mainfreight",
+  tge: "TGE",
+  "team global express": "TGE",
+  m2h: "M2H Delivery",
+  m2h_delivery: "M2H Delivery",
+  mainfreight: "MF Depot",
+  "mainfreight depot": "MF Depot",
+  "tge depot": "TGE Depot",
+  "depot - fliway": "Depot - Fliway",
+  "fliway depot": "Depot - Fliway",
 };
 
 const MONDAY_CARRIER_LABELS = new Set(Object.values(carrierLabelMap));
