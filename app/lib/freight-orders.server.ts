@@ -144,6 +144,7 @@ export function buildRowFromSnapshot(
 
   const itemSnaps = buildLineItemSnapshots(snap);
   if (itemSnaps.length === 0) return null;
+  const isDepotService = String(snap.shippingCode ?? "").startsWith("depot_delivery::");
 
   const lineItems = itemSnaps.map((it) => {
     const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
@@ -166,6 +167,7 @@ export function buildRowFromSnapshot(
       boxes: it.boxes,
       amount: it.amount,
       letterSuffix: it.letterSuffix,
+      isDepot: isDepotService,
       customerStatus: ops?.customerStatus ?? "",
       paymentStatus: opsPayment || normalizePaymentStatus(snap.financialStatus),
       trackingNumber: ops?.trackingNumber ?? "",

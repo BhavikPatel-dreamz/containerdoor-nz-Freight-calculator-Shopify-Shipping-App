@@ -34,6 +34,7 @@ export type FreightLineItem = {
   receivedDate?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
+  isDepot?: boolean;
   cin7SalesOrderId?: string;
   cin7SalesOrderUrl?: string;
   cin7Exists?: boolean;

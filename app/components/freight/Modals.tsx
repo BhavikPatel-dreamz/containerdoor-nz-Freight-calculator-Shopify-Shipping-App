@@ -347,7 +347,7 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
           {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{error}</div>}
           {item.company ? (
             <div style={{ fontSize: "13px", color: "#475569" }}>
-              Carrier: <strong style={{ color: "#2563eb" }}>{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</strong>
+              Carrier: <strong style={{ color: "#2563eb" }}>{getCarrierLabel(item.company, Boolean(item.depotAddress1 || item.depotCity || item.depotZip)) ?? item.company}</strong>
             </div>
           ) : null}
           {/* EDD + carrier edit — future phase */}

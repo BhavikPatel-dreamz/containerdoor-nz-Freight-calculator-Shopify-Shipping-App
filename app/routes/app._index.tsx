@@ -147,6 +147,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."customerStatus", ops."carrier" AS ops_carrier, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
       ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
+      ops."depotAddress1", ops."depotCity", ops."depotZip",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
       snap."id" AS snapshot_id
@@ -190,6 +191,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       freightRef: r.freightRef ?? "",
       eddDate: r.eddDate ?? "",
       originalEddDate: r.originalEddDate ?? "",
+      depotAddress1: r.depotAddress1 ?? "",
+      depotCity: r.depotCity ?? "",
+      depotZip: r.depotZip ?? "",
+      isDepot: Boolean(r.depotAddress1 || r.depotCity || r.depotZip),
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",

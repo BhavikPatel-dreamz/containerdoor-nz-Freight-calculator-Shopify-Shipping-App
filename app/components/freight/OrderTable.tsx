@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getCarrierStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
@@ -176,11 +176,11 @@ export function OrderTable({
                   {!hiddenColumns.has("carrier") && (
                     <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
                       {(() => {
-                        const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company;
+                        const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot || item.depotAddress1 || item.depotCity || item.depotZip));
                         const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
                         return (
                           <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
-                            {carrierLabel}
+                            {carrierLabel || item.company}
                           </span>
                         );
                       })()}

@@ -254,6 +254,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
       variantSkuMap.set(li.variant.id.replace("gid://shopify/ProductVariant/", ""), li.variant.sku || li.sku || "");
     }
   }
+  const isDepotService = (shippingLine.code ?? "").startsWith("depot_delivery::");
   const lineItems = lineItemsRaw.split("|").map((part, idx) => {
     const [variantId, rest] = part.split(":");
     const [company, boxesStr, amountStr] = (rest ?? "").split("x");
@@ -267,6 +268,7 @@ function buildRow(order: ShopifyOrderNode, opsMap: Map<string, any>, orderCin7Ma
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),
       letterSuffix: LETTERS[idx % 26],
+      isDepot: isDepotService,
       customerStatus: ops?.customerStatus ?? "",
       trackingNumber: ops?.trackingNumber ?? "",
       freightRef: ops?.freightRef ?? "",

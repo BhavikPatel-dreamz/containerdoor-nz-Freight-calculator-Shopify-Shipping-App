@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getDispatchStatusStyle, getDeliveryStatusStyle, getCarrierStatusStyle } from "./helpers";
 import { IconPencil } from "./icons";
 
@@ -46,7 +46,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
           <span className="fo-detail-label">Carrier</span>
           <span className="fo-detail-value">
             {(() => {
-              const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company ?? "—";
+              const carrierLabel = getCarrierLabel(item.company, Boolean(item.depotAddress1 || item.depotCity || item.depotZip)) || item.company || "—";
               const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
               return (
                 <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>

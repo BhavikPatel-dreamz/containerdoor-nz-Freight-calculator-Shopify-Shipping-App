@@ -51,6 +51,17 @@ export const companyLabels: Record<string, string> = {
   MAINFREIGHT: "Mainfreight",
 };
 
+export function getCarrierLabel(company: string, isDepotCollection = false) {
+  if (!company) return "";
+  if (!isDepotCollection) return companyLabels[company] ?? company;
+
+  if (company === "FLIWAYLINEHAUL" || company === "FLIWAYMIDSIZE") {
+    return "Fliway Depot";
+  }
+
+  return `${companyLabels[company] ?? company} Depot`;
+}
+
 export const freightFormula = {
   depotCollectionCompanies: [
     "FLIWAYLINEHAUL",
