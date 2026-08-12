@@ -67,7 +67,6 @@ function ShippingOptionNote() {
     target?.title ?? target?.shippingOption?.title ?? target?.shipping_rate?.title ?? "";
 
   const isDepot = /depot/i.test(title ?? "");
-  if (!title || !isDepot) return null;
 
   // Pick the correct depot list based on which carrier's title matched
   const isMainfreight = /mainfreight|2home/i.test(title ?? "");
@@ -78,6 +77,10 @@ function ShippingOptionNote() {
 
   const customerZip = shippingAddress?.zip ?? "";
 
+  // NOTE: hooks must always run in the same order on every render, so they
+  // stay above the early "return null" below (Rules of Hooks). Previously
+  // the early return happened before these hooks, which could silently
+  // break rendering for specific shipping options (e.g. Mainfreight).
   const sortedDepots = useMemo(() => {
     const customerZipNum = parseInt(customerZip, 10);
     const depotsWithDistance = DEPOT_LIST.map((depot) => {
@@ -93,6 +96,8 @@ function ShippingOptionNote() {
   }, [customerZip, isMainfreight]);
 
   const [selected, setSelected] = useState<string>("");
+
+  if (!title || !isDepot) return null;
 
   async function postSelection(optionId: string) {
     try {

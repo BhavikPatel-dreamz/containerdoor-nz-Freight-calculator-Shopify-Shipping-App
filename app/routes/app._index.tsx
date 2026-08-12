@@ -42,6 +42,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const warehouseStatus = (url.searchParams.get("warehouseStatus") || "").trim();
   const carrier = (url.searchParams.get("carrier") || "").trim();
   const paymentStatus = (url.searchParams.get("paymentStatus") || "").trim();
+  const eddDateRaw = (url.searchParams.get("eddDate") || "").trim();
+  const eddDateEndRaw = (url.searchParams.get("eddDateEnd") || "").trim();
+  const eddDate = eddDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(eddDateRaw) ? eddDateRaw : "";
+  const eddDateEnd = eddDateEndRaw && /^\d{4}-\d{2}-\d{2}$/.test(eddDateEndRaw) ? eddDateEndRaw : "";
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
   const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
@@ -70,6 +74,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   if (paymentStatus) {
     conds.push(Prisma.sql`lower(ops."paymentStatus") = ${paymentStatus.toLowerCase()}`);
+  }
+  if (eddDate && eddDate.length > 0) {
+    conds.push(Prisma.sql`DATE(ops."eddDate") >= ${eddDate}::date`);
+  }
+  if (eddDateEnd && eddDateEnd.length > 0) {
+    conds.push(Prisma.sql`DATE(ops."eddDate") <= ${eddDateEnd}::date`);
   }
   const searchWhere = Prisma.join(conds, " AND ");
 

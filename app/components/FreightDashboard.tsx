@@ -201,6 +201,8 @@ export default function FreightDashboard({
       np.delete("warehouseStatus");
       np.delete("carrier");
       np.delete("paymentStatus");
+      np.delete("eddDate");
+      np.delete("eddDateEnd");
       np.set("page", "1");
       return np;
     });
@@ -208,7 +210,9 @@ export default function FreightDashboard({
   const hasActiveFilters = Boolean(
     searchParams.get("supplier") || searchParams.get("warehouseStatus") ||
     searchParams.get("carrier") ||
-    searchParams.get("paymentStatus")
+    searchParams.get("paymentStatus") ||
+    searchParams.get("eddDate") ||
+    searchParams.get("eddDateEnd")
   );
 
   // Open filter panel by default when URL already has filters (e.g. return from detail).
@@ -220,6 +224,8 @@ export default function FreightDashboard({
     warehouseStatus: searchParams.get("warehouseStatus") ?? "",
     carrier: searchParams.get("carrier") ?? "",
     paymentStatus: searchParams.get("paymentStatus") ?? "",
+    eddDate: searchParams.get("eddDate") ?? "",
+    eddDateEnd: searchParams.get("eddDateEnd") ?? "",
   });
   // Keep staging state in sync when URL params change externally (e.g. back/forward).
   useEffect(() => {
@@ -228,6 +234,8 @@ export default function FreightDashboard({
       warehouseStatus: searchParams.get("warehouseStatus") ?? "",
       carrier: searchParams.get("carrier") ?? "",
       paymentStatus: searchParams.get("paymentStatus") ?? "",
+      eddDate: searchParams.get("eddDate") ?? "",
+      eddDateEnd: searchParams.get("eddDateEnd") ?? "",
     });
   }, [searchParams]);
 
@@ -241,6 +249,8 @@ export default function FreightDashboard({
       set("warehouseStatus", merged.warehouseStatus);
       set("carrier", merged.carrier);
       set("paymentStatus", merged.paymentStatus);
+      set("eddDate", merged.eddDate);
+      set("eddDateEnd", merged.eddDateEnd);
       np.set("page", "1");
       return np;
     });
@@ -248,7 +258,11 @@ export default function FreightDashboard({
   };
 
   const removeFilter = (key: keyof typeof stagedFilters) => {
-    applyFilters({ [key]: "" });
+    if (key === "eddDate") {
+      applyFilters({ eddDate: "", eddDateEnd: "" });
+    } else {
+      applyFilters({ [key]: "" });
+    }
   };
 
   const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
@@ -256,6 +270,7 @@ export default function FreightDashboard({
     stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
     stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
     stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
+    stagedFilters.eddDate || stagedFilters.eddDateEnd ? { key: "eddDate" as const, label: "EDD Range", value: [stagedFilters.eddDate, stagedFilters.eddDateEnd].filter(Boolean).join(" → ") } : null,
   ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
 
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
@@ -1432,6 +1447,26 @@ export default function FreightDashboard({
                     <option value="Partial">Partial</option>
                     <option value="Overdue">Overdue</option>
                   </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD from</label>
+                  <input
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDate}
+                    onChange={(e) => applyFilters({ eddDate: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD to</label>
+                  <input
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDateEnd}
+                    onChange={(e) => applyFilters({ eddDateEnd: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
                 </div>
                 {hasActiveFilters && (
                   <button
