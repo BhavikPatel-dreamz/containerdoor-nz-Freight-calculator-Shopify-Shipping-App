@@ -11,14 +11,11 @@ export type FreightLineItem = {
   sku?: string;
   productId?: string;
   company: string;
-  carriersColor?: string;   // NEW — hex from Monday's Carrier label
   boxes: number;
   amount: number;
   letterSuffix: string;
   customerStatus: string;
-  customerStatusColor?: string;   // NEW — hex from Monday label, e.g. "#e2445c"
   paymentStatus?: string;
-  paymentStatusColor?: string;   // NEW
   trackingNumber: string;
   freightRef?: string;
   eddDate: string;

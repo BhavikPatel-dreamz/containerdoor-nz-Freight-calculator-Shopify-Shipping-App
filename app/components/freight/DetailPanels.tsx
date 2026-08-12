@@ -49,11 +49,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
               const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company ?? "—";
               const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
               return (
-                <span style={{
-                  padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600,
-                  background: item.carriersColor || carBg,
-                  color: item.carriersColor ? "#fff" : carText,
-                }}>
+                <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>
                   {carrierLabel}
                 </span>
               );
@@ -120,11 +116,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Payment status</span>
           <span className="fo-detail-value">
-            <span style={{
-              padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600,
-              background: item.paymentStatusColor || getPaymentStatusStyle(item.paymentStatus || "").bg,
-              color: item.paymentStatusColor ? "#fff" : getPaymentStatusStyle(item.paymentStatus || "").text,
-            }}>
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
               {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
             </span>
           </span>
@@ -148,11 +140,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Customer status</span>
           <span className="fo-detail-value">
-            <span style={{
-              padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600,
-              background: item.customerStatusColor || getCustomerStatusStyle(item.customerStatus).bg,
-              color: item.customerStatusColor ? "#fff" : getCustomerStatusStyle(item.customerStatus).text,
-            }}>
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getCustomerStatusStyle(item.customerStatus).bg, color: getCustomerStatusStyle(item.customerStatus).text }}>
               {getCustomerStatusStyle(item.customerStatus).label || "—"}
             </span>
           </span>
@@ -160,11 +148,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Payment status</span>
           <span className="fo-detail-value">
-            <span style={{
-              padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600,
-              background: item.paymentStatusColor || getPaymentStatusStyle(item.paymentStatus || "").bg,
-              color: item.paymentStatusColor ? "#fff" : getPaymentStatusStyle(item.paymentStatus || "").text,
-            }}>
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
               {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
             </span>
           </span>

@@ -53,9 +53,7 @@ export function mergeStatusLineIntoItem<T extends Record<string, any>>(
   return {
     ...item,
     customerStatus: line.customerStatus ?? item.customerStatus,
-    customerStatusColor: line.customerStatusColor ?? item.customerStatusColor,
     paymentStatus: line.paymentStatus || item.paymentStatus,
-    paymentStatusColor: line.paymentStatusColor ?? item.paymentStatusColor,
     warehouseStatus: line.warehouseStatus ?? item.warehouseStatus,
     dispatchStatus: line.dispatchStatus ?? item.dispatchStatus,
     deliveryStatus: line.deliveryStatus ?? item.deliveryStatus,
@@ -70,7 +68,6 @@ export function mergeStatusLineIntoItem<T extends Record<string, any>>(
     depositPaid: line.depositPaid ?? item.depositPaid,
     balanceDue: line.balanceDue ?? item.balanceDue,
     company: (line.carrier && String(line.carrier).trim()) || item.company,
-    carriersColor: line.carriersColor ?? item.carriersColor,
     mondayItemId: line.mondayItemId ?? item.mondayItemId,
     mondayItemName: line.mondayItemName ?? item.mondayItemName,
     mondayItemUrl: line.mondayItemUrl ?? item.mondayItemUrl,

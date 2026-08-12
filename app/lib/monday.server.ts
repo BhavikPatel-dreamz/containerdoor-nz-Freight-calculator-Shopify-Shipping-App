@@ -381,7 +381,6 @@ let columnIdCache: Record<string, string> | null = null;
 let columnIdCachePromise: Promise<Record<string, string>> | null = null;
 let validGroupIdCache: string | null = null;
 let validGroupIdPromise: Promise<string | undefined> | null = null;
-let columnColorCache: Record<string, Record<string, string>> = {};
 
 async function getOrCreateColumnIds(): Promise<Record<string, string>> {
   if (columnIdCache) {
@@ -405,10 +404,10 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
       process.env.MONDAY_BOARD_ID,
     );
     const data = await mondayRequest(
-      `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type settings_str } } }`,
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
       { boardId: process.env.MONDAY_BOARD_ID },
     );
-    const existing: { id: string; title: string; type: string; settings_str?: string }[] =
+    const existing: { id: string; title: string; type: string }[] =
       data.boards?.[0]?.columns ?? [];
     console.log(
       "[Monday] Existing columns:",
@@ -425,20 +424,6 @@ async function getOrCreateColumnIds(): Promise<Record<string, string>> {
           `[Monday] Column "${def.title}" already exists (id: ${found.id})`,
         );
         map[key] = found.id;
-        if ((found as any).type === "status" && (found as any).settings_str) {
-          try {
-            const settings = JSON.parse((found as any).settings_str);
-            if (settings.labels_colors) {
-              const colorByIndex: Record<string, string> = {};
-              for (const [idx, val] of Object.entries<any>(settings.labels_colors)) {
-                if (val?.color) colorByIndex[idx] = val.color;
-              }
-              columnColorCache[found.id] = colorByIndex;
-            }
-          } catch {
-            /* ignore */
-          }
-        }
         continue;
       }
       console.log(
@@ -947,19 +932,6 @@ export async function fetchMondayItem(itemId: string) {
     item.column_values.find((c: any) => c.id === colIds[key]);
   const getText = (key: keyof MondayRow) => getCol(key)?.text ?? "";
 
-  // NEW: extract label color from a status column's value JSON
-  const getColor = (key: keyof MondayRow): string | null => {
-    const raw = getCol(key)?.value;
-    if (!raw) return null;
-    try {
-      const index = JSON.parse(raw)?.index;
-      if (index === undefined || index === null) return null;
-      return columnColorCache[colIds[key]]?.[String(index)] ?? null;
-    } catch {
-      return null;
-    }
-  };
-
   const getChangedAt = (key: keyof MondayRow): string | null => {
     const raw = getCol(key)?.value;
     if (!raw) return null;
@@ -979,25 +951,19 @@ export async function fetchMondayItem(itemId: string) {
 
   return {
     customerStatus: getText("customerStatus"),
-    customerStatusColor: getColor("customerStatus"),
     statusChangedAt: getChangedAt("customerStatus"),
     carriers: getText("carriers"),
-    carriersColor: getColor("carriers"),
     eddDate: getText("eddDate"),
     eddDateChangedAt: getChangedAt("eddDate"),
     originalEddDate: getText("originalEddDate"),
     trackingNumber: getText("trackingNumber"),
     trackingNumberChangedAt,
     warehouseStatus: getText("warehouseStatus"),
-    warehouseStatusColor: getColor("warehouseStatus"),
     dispatchStatus: getText("dispatchStatus"),
-    dispatchStatusColor: getColor("dispatchStatus"),
     deliveryStatus: getText("deliveryStatus"),
-    deliveryStatusColor: getColor("deliveryStatus"),
     depositPaid: getText("depositPaid"),
     balanceDue: getText("balanceDue"),
     paymentStatus: getText("paymentStatus"),
-    paymentStatusColor: getColor("paymentStatus"),
     sku: getText("sku"),
   };
 }

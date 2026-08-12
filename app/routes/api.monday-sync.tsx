@@ -303,12 +303,7 @@ export async function action({ request }: ActionFunctionArgs) {
       mondayItemName: itemName,
       syncedFields: fieldSummary.filled,
       blankFields: fieldSummary.blank,
-      updated: {
-        ...updated,
-        customerStatusColor: mondayData?.customerStatusColor ?? null, // NEW — not a DB column, added here only
-        carriersColor: mondayData?.carriersColor ?? null,   // NEW
-        paymentStatusColor: mondayData?.paymentStatusColor ?? null,   // NEW
-      },
+      updated,
     },
     { headers: getCorsHeaders(request) },
   );
