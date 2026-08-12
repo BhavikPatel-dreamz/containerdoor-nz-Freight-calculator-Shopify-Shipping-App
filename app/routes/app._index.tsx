@@ -76,10 +76,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
     conds.push(Prisma.sql`lower(ops."paymentStatus") = ${paymentStatus.toLowerCase()}`);
   }
   if (eddDate && eddDate.length > 0) {
-    conds.push(Prisma.sql`DATE(ops."eddDate") >= ${eddDate}::date`);
+    conds.push(Prisma.sql`DATE(NULLIF(ops."eddDate", '')) >= ${eddDate}::date`);
   }
   if (eddDateEnd && eddDateEnd.length > 0) {
-    conds.push(Prisma.sql`DATE(ops."eddDate") <= ${eddDateEnd}::date`);
+    conds.push(Prisma.sql`DATE(NULLIF(ops."eddDate", '')) <= ${eddDateEnd}::date`);
   }
   const searchWhere = Prisma.join(conds, " AND ");
 

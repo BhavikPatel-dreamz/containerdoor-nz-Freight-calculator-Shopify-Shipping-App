@@ -265,12 +265,17 @@ export default function FreightDashboard({
     }
   };
 
+  const formatDisplayDate = (iso: string) => {
+    const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : iso;
+  };
+
   const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
     stagedFilters.supplier ? { key: "supplier" as const, label: "Supplier", value: stagedFilters.supplier } : null,
     stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
     stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
     stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
-    stagedFilters.eddDate || stagedFilters.eddDateEnd ? { key: "eddDate" as const, label: "EDD Range", value: [stagedFilters.eddDate, stagedFilters.eddDateEnd].filter(Boolean).join(" → ") } : null,
+    stagedFilters.eddDate || stagedFilters.eddDateEnd ? { key: "eddDate" as const, label: "EDD Range", value: [stagedFilters.eddDate, stagedFilters.eddDateEnd].filter(Boolean).map(formatDisplayDate).join(" → ") } : null,
   ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
 
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
