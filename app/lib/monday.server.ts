@@ -566,7 +566,7 @@ const paymentStatusLabelMap: Record<string, string> = {
 /** Monday Payment Status board labels only — omit unknown to avoid whole-mutation fail. */
 const MONDAY_PAYMENT_LABELS = new Set(["Paid", "Partial", "Pending", "Overdue"]);
 
-function resolveMondayPaymentLabel(raw: string): string | null {
+export function resolveMondayPaymentLabel(raw: string): string | null {
   const v = String(raw || "").trim();
   if (!v) return null;
   const key = v.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
@@ -632,6 +632,69 @@ const carrierLabelMap: Record<string, string> = {
 };
 
 const MONDAY_CARRIER_LABELS = new Set(Object.values(carrierLabelMap));
+
+export function resolveMondayCarrierLabel(rawCarrier: string, isDepot: boolean): string | null {
+  const carrierVal = String(rawCarrier || "").trim();
+  if (!carrierVal) return null;
+  const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
+  let label: string | null = null;
+
+  if (isDepot) {
+    if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+    else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+    else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+  }
+  if (!label) {
+    label =
+      carrierLabelMap[carrierVal.toLowerCase()] ||
+      carrierLabelMap[keyNorm] ||
+      (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+  }
+  return label;
+}
+
+export function resolveMondayCustomerStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), statusLabelMap);
+}
+
+let columnColorCache: Record<string, Record<string, string>> = {};
+
+async function getColumnColorMap(columnKey: string): Promise<Record<string, string>> {
+  if (columnColorCache[columnKey]) return columnColorCache[columnKey];
+  const colIds = await getOrCreateColumnIds();
+  const colId = colIds[columnKey];
+  if (!colId) return {};
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $colId: [String!]) { boards(ids: [$boardId]) { columns(ids: $colId) { settings_str } } }`,
+    { boardId: process.env.MONDAY_BOARD_ID, colId: [colId] },
+  ).catch(() => null);
+  const settingsStr = data?.boards?.[0]?.columns?.[0]?.settings_str;
+  if (!settingsStr) return {};
+  try {
+    const settings = JSON.parse(settingsStr);
+    const labels: Record<string, string> = settings.labels ?? {};
+    const labelsColors: Record<string, { color?: string }> = settings.labels_colors ?? {};
+    const map: Record<string, string> = {};
+    for (const [idx, labelText] of Object.entries(labels)) {
+      const hex = labelsColors[idx]?.color;
+      if (hex) map[String(labelText)] = hex;
+    }
+    columnColorCache[columnKey] = map;
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+/** Resolve the live badge hex color Monday shows for a status-column label. */
+export async function resolveMondayStatusColor(
+  columnKey: "carriers" | "customerStatus" | "paymentStatus",
+  label: string | null,
+): Promise<string> {
+  if (!label) return "";
+  const map = await getColumnColorMap(columnKey);
+  return map[label] ?? "";
+}
 
 function resolveMappedLabel(
   raw: string,

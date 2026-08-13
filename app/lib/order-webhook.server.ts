@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder } from "./cin7.server";
 import {
   buildCin7CustomerOrderNo,
@@ -790,6 +790,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       }
 
       let mondayItemId: string;
+      let mondayRowForColor: Awaited<ReturnType<typeof buildMondayRowFromOms>>["row"] | null = null;
       try {
         const { row: mondayRow } = await buildMondayRowFromOms({
           shop,
@@ -801,6 +802,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
             carrier: li.company || ops.carrier || "",
           },
         });
+        mondayRowForColor = mondayRow;
         mondayItemId = await createMondayItem(itemName, {
           ...mondayRow,
           lineOrderName: itemName,
@@ -829,6 +831,21 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
         continue;
       }
 
+      const carrierLabelUsed = mondayRowForColor
+        ? resolveMondayCarrierLabel(li.company || mondayRowForColor.carriers, mondayRowForColor.isDepot)
+        : null;
+      const custLabelUsed = mondayRowForColor
+        ? resolveMondayCustomerStatusLabel(mondayRowForColor.customerStatus)
+        : null;
+      const payLabelUsed = mondayRowForColor
+        ? resolveMondayPaymentLabel(mondayRowForColor.paymentStatus)
+        : null;
+      const [carrierColor, customerStatusColor, paymentStatusColor] = await Promise.all([
+        resolveMondayStatusColor("carriers", carrierLabelUsed),
+        resolveMondayStatusColor("customerStatus", custLabelUsed),
+        resolveMondayStatusColor("paymentStatus", payLabelUsed),
+      ]);
+
       try {
         await prisma.orderLineItemOperationalData.update({
           where: { id: ops.id },
@@ -839,6 +856,9 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
             mondayCachedMismatches: "",
             productTitle: li.title ?? ops.productTitle,
             carrier: li.company || ops.carrier,
+            ...(carrierColor ? { carrierColor } : {}),
+            ...(customerStatusColor ? { customerStatusColor } : {}),
+            ...(paymentStatusColor ? { paymentStatusColor } : {}),
           },
         });
         createdCount++;
