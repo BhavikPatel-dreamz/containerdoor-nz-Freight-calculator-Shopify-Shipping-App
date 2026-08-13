@@ -64,7 +64,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const lineRecords = await prisma.orderLineItemOperationalData.findMany({
       where: { shop, orderId: { in: orders.map((o) => o.orderId) } },
-      select: { orderId: true, variantId: true, cin7CachedStatus: true, cin7CachedMismatches: true },
+      select: { orderId: true, variantId: true, cin7CachedStatus: true, cin7CachedMismatches: true, cin7SalesOrderId: true },
     });
     const lineCacheMap = new Map(lineRecords.map((r) => [`${r.orderId}::${r.variantId}`, r]));
 
@@ -136,6 +136,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         const results = order.lineItems.map((li) => {
+          const lineCin7Id = String(
+            lineCacheMap.get(`${order.orderId}::${li.variantId}`)?.cin7SalesOrderId || "",
+          ).trim();
+          const lineIsLinked = lineCin7Id && lineCin7Id !== "pending" && lineCin7Id !== "duplicate";
+          if (!lineIsLinked) {
+            const cached = lineCacheMap.get(`${order.orderId}::${li.variantId}`);
+            const cachedStatus = cached?.cin7CachedStatus || "missing";
+            const cachedMismatchText = typeof cached?.cin7CachedMismatches === "string" ? cached.cin7CachedMismatches : "";
+            return {
+              variantId: li.variantId,
+              status: cachedStatus,
+              mismatches: cachedMismatchText ? cachedMismatchText.split(",").filter(Boolean) : [],
+            };
+          }
           const mismatches = diffCin7Fields(li, snapshot);
           return { variantId: li.variantId, status: mismatches.length ? "mismatch" : "match", mismatches };
         });

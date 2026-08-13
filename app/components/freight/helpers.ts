@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { FreightLineItem, FreightOrderRow, NoteItem } from "./types";
 
-export function getCustomerStatusStyle(status: string): { bg: string; text: string; label: string } {
+export function getCustomerStatusStyle(status: string, colorHex?: string): { bg: string; text: string; label: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff", label: status || "—" };
+  }
   switch ((status || "").toLowerCase()) {
     case "dispatched": return { bg: "#e8697d", text: "#ffffff", label: "Dispatched" };
     case "delivered": return { bg: "#339ecd", text: "#ffffff", label: "Delivered" };
@@ -12,7 +15,10 @@ export function getCustomerStatusStyle(status: string): { bg: string; text: stri
   }
 }
 
-export function getPaymentStatusStyle(status: string): { bg: string; text: string; label: string } {
+export function getPaymentStatusStyle(status: string, colorHex?: string): { bg: string; text: string; label: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff", label: status || "—" };
+  }
   switch ((status || "").toLowerCase()) {
     case "paid":
     case "fully_paid":
@@ -70,16 +76,27 @@ export function getDeliveryStatusStyle(status: string): { bg: string; text: stri
   }
 }
 
-export function getCarrierStatusStyle(label: string): { bg: string; text: string } {
+export function getCarrierStatusStyle(label: string, colorHex?: string): { bg: string; text: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff" };
+  }
+  // Fallback colors matched to Monday's actual board badge colors (Carrier
+  // column labels_colors), so the badge is correct immediately on first load
+  // — before the async webhook populates carrierColor from Monday.
   switch ((label || "").toLowerCase()) {
-    case "fliway - midsize": return { bg: "#33d391", text: "#ffffff" };
-    case "fliway - linehaul": return { bg: "#fdbc64", text: "#ffffff" };
-    case "nzp": return { bg: "#e8697d", text: "#ffffff" };
-    case "nzp - age restricted": return { bg: "#339ecd", text: "#ffffff" };
-    case "mainfreight": return { bg: "#79affd", text: "#ffffff" };
-    case "castle": return { bg: "#b57de3", text: "#ffffff" };
-    case "m2h": return { bg: "#ff8358", text: "#ffffff" };
-    case "team global express": return { bg: "#797e93", text: "#ffffff" };
+    case "fliway - linehaul": return { bg: "#401694", text: "#ffffff" };
+    case "fliway - midsize": return { bg: "#bda8f9", text: "#ffffff" };
+    case "nzp": return { bg: "#df2f4a", text: "#ffffff" };
+    case "nzp - age restricted": return { bg: "#ff5ac4", text: "#ffffff" };
+    case "castle": return { bg: "#333333", text: "#ffffff" };
+    case "m2h": return { bg: "#66ccff", text: "#ffffff" };
+    case "m2h delivery": return { bg: "#66ccff", text: "#ffffff" };
+    case "mainfreight": return { bg: "#ff007f", text: "#ffffff" };
+    case "team global express": return { bg: "#00c875", text: "#ffffff" };
+    case "tge": return { bg: "#00c875", text: "#ffffff" };
+    case "depot - fliway": return { bg: "#9d50dd", text: "#ffffff" };
+    case "mf depot": return { bg: "#216edf", text: "#ffffff" };
+    case "tge depot": return { bg: "#9cd326", text: "#ffffff" };
     default: return { bg: "#c4c4c4", text: "#ffffff" };
   }
 }

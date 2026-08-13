@@ -42,6 +42,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const warehouseStatus = (url.searchParams.get("warehouseStatus") || "").trim();
   const carrier = (url.searchParams.get("carrier") || "").trim();
   const paymentStatus = (url.searchParams.get("paymentStatus") || "").trim();
+  const eddDateRaw = (url.searchParams.get("eddDate") || "").trim();
+  const eddDateEndRaw = (url.searchParams.get("eddDateEnd") || "").trim();
+  const eddDate = eddDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(eddDateRaw) ? eddDateRaw : "";
+  const eddDateEnd = eddDateEndRaw && /^\d{4}-\d{2}-\d{2}$/.test(eddDateEndRaw) ? eddDateEndRaw : "";
   const requestedPage = Math.max(Number(url.searchParams.get("page") || "1"), 1);
 
   const conds: Prisma.Sql[] = [Prisma.sql`idx."shop" = ${shop}`];
@@ -70,6 +74,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   if (paymentStatus) {
     conds.push(Prisma.sql`lower(ops."paymentStatus") = ${paymentStatus.toLowerCase()}`);
+  }
+  if (eddDate && eddDate.length > 0) {
+    conds.push(Prisma.sql`DATE(NULLIF(ops."eddDate", '')) >= ${eddDate}::date`);
+  }
+  if (eddDateEnd && eddDateEnd.length > 0) {
+    conds.push(Prisma.sql`DATE(NULLIF(ops."eddDate", '')) <= ${eddDateEnd}::date`);
   }
   const searchWhere = Prisma.join(conds, " AND ");
 
@@ -127,6 +137,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const rowWhere = Prisma.join(rowConds, " AND ");
 
   const rows = await prisma.$queryRaw<any[]>`
+    WITH order_carrier_counts AS (
+      -- Use the ORIGINAL carrier from the freight code (o."company") only —
+      -- not the live/editable ops carrier — so isDepot never flips after
+      -- checkout due to a later per-line sync/edit.
+      SELECT
+        o."orderId",
+        COUNT(DISTINCT o."company") AS distinct_carrier_count
+      FROM "OrderLineItemIndex" o
+      WHERE o."shop" = ${shop}
+      GROUP BY o."orderId"
+    )
     SELECT
       idx."id" AS line_index_id,
       idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
@@ -134,12 +155,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
-      ops."customerStatus", ops."carrier" AS ops_carrier, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
+      ops."customerStatus", ops."carrier" AS ops_carrier, ops."carrierColor" AS ops_carrier_color, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
       ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
+      ops."depotAddress1", ops."depotCity", ops."depotZip",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
-      snap."id" AS snapshot_id
+      snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code,
+      occ."distinct_carrier_count" AS distinct_carrier_count
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -147,6 +170,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ON idx."shop" = ood."shop" AND idx."orderId" = ood."orderId"
     LEFT JOIN "OrderSnapshot" snap
       ON idx."shop" = snap."shop" AND idx."orderId" = snap."orderId"
+    LEFT JOIN order_carrier_counts occ
+      ON occ."orderId" = idx."orderId"
     WHERE ${rowWhere}
     ORDER BY idx."createdAt" DESC, idx."orderId" DESC, idx."letterSuffix" ASC
     LIMIT ${PAGE_SIZE} OFFSET ${offset}
@@ -171,6 +196,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       productId: r.productId || "",
       // Prefer OMS carrier override; fall back to freight code on index (same as detail page)
       company: (r.ops_carrier && String(r.ops_carrier).trim()) || r.company || "",
+      carrierColor: r.ops_carrier_color || "",
       boxes: Number(r.boxes ?? 0),
       amount: Number(r.amount ?? 0),
       letterSuffix: r.letterSuffix || "",
@@ -180,6 +206,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
       freightRef: r.freightRef ?? "",
       eddDate: r.eddDate ?? "",
       originalEddDate: r.originalEddDate ?? "",
+      depotAddress1: r.depotAddress1 ?? "",
+      depotCity: r.depotCity ?? "",
+      depotZip: r.depotZip ?? "",
+      // Business rule: depot orders always ship every line via the same carrier;
+      // standard orders can have a different carrier per line. If the
+      // shippingCode says "depot" but the order's lines actually have
+      // different carriers, it can't really be depot — same check as the
+      // detail page (buildRowFromSnapshot) so both pages always agree.
+      isDepot:
+        String(r.snapshot_shipping_code ?? "").startsWith("depot_delivery::") &&
+        Number(r.distinct_carrier_count ?? 1) <= 1,
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",

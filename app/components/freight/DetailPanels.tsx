@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getDispatchStatusStyle, getDeliveryStatusStyle, getCarrierStatusStyle } from "./helpers";
 import { IconPencil } from "./icons";
 
@@ -46,8 +46,8 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
           <span className="fo-detail-label">Carrier</span>
           <span className="fo-detail-value">
             {(() => {
-              const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company ?? "—";
-              const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+              const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot)) || item.company || "—";
+              const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor);
               return (
                 <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>
                   {carrierLabel}
@@ -58,8 +58,13 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         </div>
         <div className="fo-detail-row"><span className="fo-detail-label">Tracking #</span><span className="fo-detail-value">{item.trackingNumber ? <span style={{ color: "#2563eb" }}>{item.trackingNumber}</span> : "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Freight ref</span><span className="fo-detail-value">{item.freightRef || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Delivery method</span><span className="fo-detail-value">Standard</span></div>
-        {(item.depotAddress1 || item.depotCity || item.depotZip) ? (
+        <div className="fo-detail-row">
+          <span className="fo-detail-label">Delivery method</span>
+          <span className="fo-detail-value">
+            {item.isDepot ? "Depot" : "Standard"}
+          </span>
+        </div>
+        {item.isDepot ? (
           <div className="fo-detail-row">
             <span className="fo-detail-label">Depot address</span>
             <span className="fo-detail-value">
@@ -111,8 +116,8 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Payment status</span>
           <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
-              {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).bg, color: getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).text }}>
+              {getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).label || "—"}
             </span>
           </span>
         </div>
@@ -135,16 +140,16 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Customer status</span>
           <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getCustomerStatusStyle(item.customerStatus).bg, color: getCustomerStatusStyle(item.customerStatus).text }}>
-              {getCustomerStatusStyle(item.customerStatus).label || "—"}
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getCustomerStatusStyle(item.customerStatus, item.customerStatusColor).bg, color: getCustomerStatusStyle(item.customerStatus, item.customerStatusColor).text }}>
+              {getCustomerStatusStyle(item.customerStatus, item.customerStatusColor).label || "—"}
             </span>
           </span>
         </div>
         <div className="fo-detail-row">
           <span className="fo-detail-label">Payment status</span>
           <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "").bg, color: getPaymentStatusStyle(item.paymentStatus || "").text }}>
-              {getPaymentStatusStyle(item.paymentStatus || "").label || "—"}
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).bg, color: getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).text }}>
+              {getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor).label || "—"}
             </span>
           </span>
         </div>

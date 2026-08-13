@@ -51,6 +51,45 @@ export const companyLabels: Record<string, string> = {
   MAINFREIGHT: "Mainfreight",
 };
 
+export function getCarrierLabel(company: string, isDepotCollection = false) {
+  const normalizedCompany = String(company || "").trim();
+  if (!normalizedCompany) return "";
+  if (!isDepotCollection) return companyLabels[normalizedCompany] ?? normalizedCompany;
+
+  const lowerKey = normalizedCompany.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  if (
+    lowerKey === "fliwaylinehaul" ||
+    lowerKey === "fliwaymidsize" ||
+    lowerKey === "fliway" ||
+    lowerKey === "linehaulfliway" ||
+    lowerKey === "midsizefliway" ||
+    lowerKey === "fliwaylinehauldepot" ||
+    lowerKey === "fliwaymidsizedepot" ||
+    lowerKey === "depotfliway"
+  ) {
+    return "Depot - Fliway";
+  }
+  if (
+    lowerKey === "mainfreight" ||
+    lowerKey === "mainfreightdepot" ||
+    lowerKey === "mfdepot" ||
+    lowerKey === "depotmainfreight"
+  ) {
+    return "MF Depot";
+  }
+  if (lowerKey === "tge" || lowerKey === "tgedepot" || lowerKey === "depottge") {
+    return "TGE Depot";
+  }
+
+  // Value already looks like a resolved depot label (e.g. came back from
+  // Monday as text) — don't double-append " Depot".
+  if (/depot/i.test(normalizedCompany)) {
+    return normalizedCompany;
+  }
+
+  return `${companyLabels[normalizedCompany] ?? normalizedCompany} Depot`;
+}
+
 export const freightFormula = {
   depotCollectionCompanies: [
     "FLIWAYLINEHAUL",

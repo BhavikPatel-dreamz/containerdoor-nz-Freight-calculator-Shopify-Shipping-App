@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getCarrierStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
@@ -23,6 +23,7 @@ type OrderTableProps = {
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
   hiddenColumns?: Set<string>;
+  onShowNotification?: (message: string) => void;
 };
 
 export function OrderTable({
@@ -43,6 +44,7 @@ export function OrderTable({
   mondayFixingId,
   creatingCin7OrderId,
   hiddenColumns = new Set(),
+  onShowNotification,
 }: OrderTableProps) {
   return (
     <div className="fo-table-scroll">
@@ -70,7 +72,7 @@ export function OrderTable({
             return order.lineItems.map((item, liIdx) => {
               const isSelected = selected.has(item.id);
               const isFirstItem = liIdx === 0;
-              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
+              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus, item.customerStatusColor);
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
@@ -164,7 +166,7 @@ export function OrderTable({
                   {!hiddenColumns.has("payment") && (
                     <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       {(() => {
-                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
+                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor);
                         return (
                           <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
                             {payLabel || "—"}
@@ -176,11 +178,11 @@ export function OrderTable({
                   {!hiddenColumns.has("carrier") && (
                     <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
                       {(() => {
-                        const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company;
-                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+                        const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot));
+                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor);
                         return (
                           <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
-                            {carrierLabel}
+                            {carrierLabel || item.company}
                           </span>
                         );
                       })()}
@@ -225,6 +227,20 @@ export function OrderTable({
                             );
                           }
                           if (status === "error") {
+                            const isNoSku = (item.cin7Mismatches ?? []).includes("SKU not found");
+                            if (isNoSku) {
+                              return (
+                                <button
+                                  type="button"
+                                  className="fo-sync-pill red"
+                                  title="SKU not found — click for details"
+                                  onClick={() => onShowNotification?.("Cin7 sync failed: SKU not found for this line item.")}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  CIN7 ✕
+                                </button>
+                              );
+                            }
                             return (
                               <span className="fo-sync-pill amber" title="Order is voided or duplicated in Cin7 — cannot sync">
                                 CIN7 ⚠️

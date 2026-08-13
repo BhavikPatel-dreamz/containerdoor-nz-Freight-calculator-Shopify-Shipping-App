@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder } from "./cin7.server";
 import {
   buildCin7CustomerOrderNo,
@@ -291,7 +291,13 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     });
     console.log(`[OrderSnapshot][${orderId}] Saved for shop ${shop}`);
   } catch (error) {
-    console.error(`[OrderSnapshot][${orderId}] FAILED`, error);
+    const code = (error as any)?.code;
+    const message = (error as any)?.message ?? "";
+    if (code === "P2002" || message.includes("Unique constraint failed")) {
+      console.warn(`[OrderSnapshot][${orderId}] Duplicate snapshot detected, skipping (P2002)`);
+    } else {
+      console.error(`[OrderSnapshot][${orderId}] FAILED`, error);
+    }
   }
 }
 
@@ -405,11 +411,37 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
       order.current_total_price_set?.presentment_money?.currency_code ?? "NZD";
 
     // Ensure order-ops row exists (claim marker for UI "has Cin7 work").
-    await prisma.orderOperationalData.upsert({
-      where: { shop_orderId: { shop, orderId } },
-      create: { shop, orderId, cin7SalesOrderId: "pending" },
-      update: {},
-    });
+    // Retry the upsert a few times on P2002 races (concurrent workers).
+    {
+      const maxRetries = 3;
+      let attempt = 0;
+      while (true) {
+        try {
+          await prisma.orderOperationalData.upsert({
+            where: { shop_orderId: { shop, orderId } },
+            create: { shop, orderId, cin7SalesOrderId: "pending" },
+            update: {},
+          });
+          break;
+        } catch (err) {
+          const code = (err as any)?.code;
+          const message = (err as any)?.message ?? "";
+          if (code === "P2002" || message.includes("Unique constraint failed")) {
+            attempt++;
+            if (attempt > maxRetries) {
+              console.warn(`[Cin7][Webhook][${orderId}] orderOperationalData upsert P2002 after ${attempt} attempts, continuing`);
+              break;
+            }
+            const backoff = 100 * Math.pow(2, attempt - 1);
+            console.warn(`[Cin7][Webhook][${orderId}] P2002 on orderOperationalData upsert attempt ${attempt}, retrying after ${backoff}ms`);
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((res) => setTimeout(res, backoff));
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
 
     let created = 0;
     let skipped = 0;
@@ -467,6 +499,10 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
       if (!sku) {
         console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { cin7CachedStatus: "error", cin7CachedMismatches: "SKU not found" },
+        });
         skipped++;
         continue;
       }
@@ -758,6 +794,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       }
 
       let mondayItemId: string;
+      let mondayRowForColor: Awaited<ReturnType<typeof buildMondayRowFromOms>>["row"] | null = null;
       try {
         const { row: mondayRow } = await buildMondayRowFromOms({
           shop,
@@ -769,6 +806,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
             carrier: li.company || ops.carrier || "",
           },
         });
+        mondayRowForColor = mondayRow;
         mondayItemId = await createMondayItem(itemName, {
           ...mondayRow,
           lineOrderName: itemName,
@@ -797,6 +835,21 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
         continue;
       }
 
+      const carrierLabelUsed = mondayRowForColor
+        ? resolveMondayCarrierLabel(li.company || mondayRowForColor.carriers, mondayRowForColor.isDepot)
+        : null;
+      const custLabelUsed = mondayRowForColor
+        ? resolveMondayCustomerStatusLabel(mondayRowForColor.customerStatus)
+        : null;
+      const payLabelUsed = mondayRowForColor
+        ? resolveMondayPaymentLabel(mondayRowForColor.paymentStatus)
+        : null;
+      const [carrierColor, customerStatusColor, paymentStatusColor] = await Promise.all([
+        resolveMondayStatusColor("carriers", carrierLabelUsed),
+        resolveMondayStatusColor("customerStatus", custLabelUsed),
+        resolveMondayStatusColor("paymentStatus", payLabelUsed),
+      ]);
+
       try {
         await prisma.orderLineItemOperationalData.update({
           where: { id: ops.id },
@@ -807,6 +860,9 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
             mondayCachedMismatches: "",
             productTitle: li.title ?? ops.productTitle,
             carrier: li.company || ops.carrier,
+            ...(carrierColor ? { carrierColor } : {}),
+            ...(customerStatusColor ? { customerStatusColor } : {}),
+            ...(paymentStatusColor ? { paymentStatusColor } : {}),
           },
         });
         createdCount++;

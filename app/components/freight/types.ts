@@ -11,11 +11,14 @@ export type FreightLineItem = {
   sku?: string;
   productId?: string;
   company: string;
+  carrierColor?: string;
   boxes: number;
   amount: number;
   letterSuffix: string;
   customerStatus: string;
+  customerStatusColor?: string;
   paymentStatus?: string;
+  paymentStatusColor?: string;
   trackingNumber: string;
   freightRef?: string;
   eddDate: string;
@@ -34,6 +37,7 @@ export type FreightLineItem = {
   receivedDate?: string;
   portArrivalDate?: string;
   inTransitDate?: string;
+  isDepot?: boolean;
   cin7SalesOrderId?: string;
   cin7SalesOrderUrl?: string;
   cin7Exists?: boolean;

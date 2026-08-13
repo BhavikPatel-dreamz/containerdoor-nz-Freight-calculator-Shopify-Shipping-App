@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
 import { authenticate, unauthenticated } from "../shopify.server";
-import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl, renameMondayItem, buildMondayRowFromOms } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, isStaleMondayItemError, createMondayUpdate, buildMondayItemUrl, renameMondayItem, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { pushEddToShopify } from "../lib/shopify-sync.server";
@@ -179,9 +179,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       select: {
         variantId: true,
         productTitle: true,
-        carrier: true,
+         carrier: true,
+        carrierColor: true,
         customerStatus: true,
+        customerStatusColor: true,
         paymentStatus: true,
+        paymentStatusColor: true,
         warehouseStatus: true,
         deliveryStatus: true,
         dispatchStatus: true,
@@ -853,10 +856,25 @@ export async function action({ request }: ActionFunctionArgs) {
       mondayDebug.itemName = itemName;
 
       if (!updated.mondayItemId || updated.mondayItemId === "pending") {
+        const carrierLabelUsed = resolveMondayCarrierLabel(updated.carrier || mondayRow.carriers, mondayRow.isDepot);
+        const custLabelUsed = resolveMondayCustomerStatusLabel(mondayRow.customerStatus);
+        const payLabelUsed = resolveMondayPaymentLabel(mondayRow.paymentStatus);
+        const [carrierColor, customerStatusColor, paymentStatusColor] = await Promise.all([
+          resolveMondayStatusColor("carriers", carrierLabelUsed),
+          resolveMondayStatusColor("customerStatus", custLabelUsed),
+          resolveMondayStatusColor("paymentStatus", payLabelUsed),
+        ]);
+
         const newMondayId = await createMondayItem(itemName, mondayRow);
         updated = await prisma.orderLineItemOperationalData.update({
           where: { id: updated.id },
-          data: { mondayItemId: newMondayId, mondayItemName: itemName },
+          data: {
+            mondayItemId: newMondayId,
+            mondayItemName: itemName,
+            ...(carrierColor ? { carrierColor } : {}),
+            ...(customerStatusColor ? { customerStatusColor } : {}),
+            ...(paymentStatusColor ? { paymentStatusColor } : {}),
+          },
         });
         mondayDebug.action = "created";
         mondayDebug.mondayItemId = newMondayId;
