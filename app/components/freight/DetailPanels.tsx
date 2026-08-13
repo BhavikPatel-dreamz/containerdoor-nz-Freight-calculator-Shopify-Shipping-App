@@ -46,7 +46,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
           <span className="fo-detail-label">Carrier</span>
           <span className="fo-detail-value">
             {(() => {
-              const carrierLabel = getCarrierLabel(item.company, Boolean(item.depotAddress1 || item.depotCity || item.depotZip)) || item.company || "—";
+              const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot)) || item.company || "—";
               const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
               return (
                 <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>
@@ -61,10 +61,10 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Delivery method</span>
           <span className="fo-detail-value">
-            {(item.depotAddress1 || item.depotCity || item.depotZip) ? "Depot" : "Standard"}
+            {item.isDepot ? "Depot" : "Standard"}
           </span>
         </div>
-        {(item.depotAddress1 || item.depotCity || item.depotZip) ? (
+        {item.isDepot ? (
           <div className="fo-detail-row">
             <span className="fo-detail-label">Depot address</span>
             <span className="fo-detail-value">

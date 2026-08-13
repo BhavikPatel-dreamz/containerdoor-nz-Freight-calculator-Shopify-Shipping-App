@@ -176,7 +176,7 @@ export function OrderTable({
                   {!hiddenColumns.has("carrier") && (
                     <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
                       {(() => {
-                        const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot || item.depotAddress1 || item.depotCity || item.depotZip));
+                        const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot));
                         const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
                         return (
                           <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>

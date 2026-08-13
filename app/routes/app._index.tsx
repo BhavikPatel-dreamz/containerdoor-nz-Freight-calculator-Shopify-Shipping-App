@@ -150,7 +150,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."depotAddress1", ops."depotCity", ops."depotZip",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
-      snap."id" AS snapshot_id
+      snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -194,7 +194,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       depotAddress1: r.depotAddress1 ?? "",
       depotCity: r.depotCity ?? "",
       depotZip: r.depotZip ?? "",
-      isDepot: Boolean(r.depotAddress1 || r.depotCity || r.depotZip),
+      // Prefer authoritative shippingCode (snapshot) to detect depot service;
+      // fall back to depot address presence for older rows without a shippingCode.
+      isDepot: String(r.snapshot_shipping_code ?? "").startsWith("depot_delivery::") || Boolean(r.depotAddress1 || r.depotCity || r.depotZip),
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",

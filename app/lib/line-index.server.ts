@@ -72,12 +72,37 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
     });
   });
 
-  await prisma.$transaction([
-    prisma.orderLineItemIndex.deleteMany({
-      where: { shop, orderId, variantId: { notIn: variantIds.length ? variantIds : ["__none__"] } },
-    }),
-    ...upserts,
-  ]);
+  // Retry the transaction a few times on P2002 (rare race when concurrent
+  // workers insert the same index rows). Exponential backoff between attempts.
+  const maxRetries = 3;
+  let attempt = 0;
+  while (true) {
+    try {
+      await prisma.$transaction([
+        prisma.orderLineItemIndex.deleteMany({
+          where: { shop, orderId, variantId: { notIn: variantIds.length ? variantIds : ["__none__"] } },
+        }),
+        ...upserts,
+      ]);
+      break; // success
+    } catch (error) {
+      const code = (error as any)?.code;
+      const message = (error as any)?.message ?? "";
+      if (code === "P2002" || message.includes("Unique constraint failed")) {
+        attempt++;
+        if (attempt > maxRetries) {
+          console.warn(`[Reindex][${orderId}] P2002 after ${attempt} attempts, giving up`);
+          break;
+        }
+        const backoff = 100 * Math.pow(2, attempt - 1);
+        console.warn(`[Reindex][${orderId}] P2002 on attempt ${attempt}, retrying after ${backoff}ms`);
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((res) => setTimeout(res, backoff));
+        continue;
+      }
+      throw error;
+    }
+  }
 
   return items.length;
 }
