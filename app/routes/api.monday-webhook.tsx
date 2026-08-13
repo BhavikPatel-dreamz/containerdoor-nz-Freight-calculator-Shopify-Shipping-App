@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { fetchMondayItem, fetchMondayUpdates } from "../lib/monday.server";
+import { fetchMondayItem, fetchMondayUpdates, resolveMondayStatusColor } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { companyLabels } from "../lib/freight";
@@ -168,8 +168,11 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.carrier = newCarrier;
       }
 
-      // Capture Monday's live badge color from the raw webhook event — fetchMondayItem
-      // only returns text, never color, so this is the only place the hex is available.
+      // Capture Monday's live badge color from the raw webhook event when present
+      // (fast path). Fall back to resolveMondayStatusColor (board settings lookup)
+      // whenever the carrier text actually changed — the webhook event's color
+      // field isn't reliably present on every event shape, so this guarantees
+      // the badge color stays correct even when the fast path is empty.
       const columnTitleLower = String(event?.columnTitle ?? "").trim().toLowerCase();
       const badgeColorHex = String(event?.value?.label?.style?.color ?? "").trim();
       const recordAny = record as any;
@@ -177,8 +180,18 @@ export async function action({ request }: ActionFunctionArgs) {
       const currentCustomerStatusColor = String(recordAny?.customerStatusColor ?? "").trim();
       const currentPaymentStatusColor = String(recordAny?.paymentStatusColor ?? "").trim();
 
-      if (columnTitleLower === "carrier" && badgeColorHex && badgeColorHex !== currentCarrierColor) {
+      if (badgeColorHex && columnTitleLower === "carrier" && badgeColorHex !== currentCarrierColor) {
         updates.carrierColor = badgeColorHex;
+      } else if (mondayData.carriers) {
+        // Re-resolve the color even when the carrier TEXT didn't change — a
+        // board-level label recolor (Monday column settings) doesn't change
+        // any item's value, so the earlier `updates.carrier` check alone
+        // would never catch it. forceRefresh=true bypasses the color cache so
+        // a just-changed board color is picked up immediately, not after TTL.
+        const resolvedCarrierColor = await resolveMondayStatusColor("carriers", mondayData.carriers, true);
+        if (resolvedCarrierColor && resolvedCarrierColor !== currentCarrierColor) {
+          updates.carrierColor = resolvedCarrierColor;
+        }
       }
       if (columnTitleLower === "cust. status" && badgeColorHex && badgeColorHex !== currentCustomerStatusColor) {
         updates.customerStatusColor = badgeColorHex;

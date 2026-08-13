@@ -657,19 +657,28 @@ export function resolveMondayCustomerStatusLabel(raw: string): string | null {
   return resolveMappedLabel(String(raw || ""), statusLabelMap);
 }
 
-let columnColorCache: Record<string, Record<string, string>> = {};
+let columnColorCache: Record<string, { map: Record<string, string>; fetchedAt: number }> = {};
+/** Cache TTL — short enough that a color change in Monday's column settings
+ *  is picked up quickly, long enough to avoid hammering the API on busy syncs. */
+const COLUMN_COLOR_CACHE_TTL_MS = 60_000;
 
-async function getColumnColorMap(columnKey: string): Promise<Record<string, string>> {
-  if (columnColorCache[columnKey]) return columnColorCache[columnKey];
+async function getColumnColorMap(
+  columnKey: string,
+  forceRefresh = false,
+): Promise<Record<string, string>> {
+  const cached = columnColorCache[columnKey];
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < COLUMN_COLOR_CACHE_TTL_MS) {
+    return cached.map;
+  }
   const colIds = await getOrCreateColumnIds();
   const colId = colIds[columnKey];
-  if (!colId) return {};
+  if (!colId) return cached?.map ?? {};
   const data = await mondayRequest(
     `query ($boardId: ID!, $colId: [String!]) { boards(ids: [$boardId]) { columns(ids: $colId) { settings_str } } }`,
     { boardId: process.env.MONDAY_BOARD_ID, colId: [colId] },
   ).catch(() => null);
   const settingsStr = data?.boards?.[0]?.columns?.[0]?.settings_str;
-  if (!settingsStr) return {};
+  if (!settingsStr) return cached?.map ?? {};
   try {
     const settings = JSON.parse(settingsStr);
     const labels: Record<string, string> = settings.labels ?? {};
@@ -679,20 +688,23 @@ async function getColumnColorMap(columnKey: string): Promise<Record<string, stri
       const hex = labelsColors[idx]?.color;
       if (hex) map[String(labelText)] = hex;
     }
-    columnColorCache[columnKey] = map;
+    columnColorCache[columnKey] = { map, fetchedAt: Date.now() };
     return map;
   } catch {
-    return {};
+    return cached?.map ?? {};
   }
 }
 
-/** Resolve the live badge hex color Monday shows for a status-column label. */
+/** Resolve the live badge hex color Monday shows for a status-column label.
+ *  Pass `forceRefresh=true` to bypass the short-lived cache (e.g. inbound
+ *  webhook processing, where staleness would silently keep the wrong color). */
 export async function resolveMondayStatusColor(
   columnKey: "carriers" | "customerStatus" | "paymentStatus",
   label: string | null,
+  forceRefresh = false,
 ): Promise<string> {
   if (!label) return "";
-  const map = await getColumnColorMap(columnKey);
+  const map = await getColumnColorMap(columnKey, forceRefresh);
   return map[label] ?? "";
 }
 

@@ -10,6 +10,8 @@ export type { FreightLineItem, FreightOrderRow, NoteItem, DashboardCounts, Freig
 import type { FreightLineItem, FreightOrderRow, NoteItem, FreightDashboardProps } from "./freight/types";
 
 import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix, resolveDetailTarget } from "./freight/helpers";
+import { getCarrierStatusStyle } from "./freight/helpers";
+import { getCarrierLabel } from "../lib/freight";
 import {
   CUSTOMER_STATUS_OPTIONS,
   WAREHOUSE_STATUS_OPTIONS,
@@ -1436,7 +1438,15 @@ export default function FreightDashboard({
                     onChange={(e) => applyFilters({ carrier: e.target.value })}
                   >
                     <option value="">All carriers</option>
-                    {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {carriers.map((c) => {
+                      const label = getCarrierLabel(c, false) || c;
+                      const { bg, text } = getCarrierStatusStyle(label);
+                      return (
+                        <option key={c} value={c} style={{ background: bg, color: text }}>
+                          {label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
