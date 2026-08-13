@@ -1,7 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { FreightLineItem, FreightOrderRow, NoteItem } from "./types";
 
-export function getCustomerStatusStyle(status: string): { bg: string; text: string; label: string } {
+export function getCustomerStatusStyle(status: string, colorHex?: string): { bg: string; text: string; label: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff", label: status || "—" };
+  }
   switch ((status || "").toLowerCase()) {
     case "dispatched": return { bg: "#e8697d", text: "#ffffff", label: "Dispatched" };
     case "delivered": return { bg: "#339ecd", text: "#ffffff", label: "Delivered" };
@@ -12,7 +15,10 @@ export function getCustomerStatusStyle(status: string): { bg: string; text: stri
   }
 }
 
-export function getPaymentStatusStyle(status: string): { bg: string; text: string; label: string } {
+export function getPaymentStatusStyle(status: string, colorHex?: string): { bg: string; text: string; label: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff", label: status || "—" };
+  }
   switch ((status || "").toLowerCase()) {
     case "paid":
     case "fully_paid":
@@ -70,7 +76,10 @@ export function getDeliveryStatusStyle(status: string): { bg: string; text: stri
   }
 }
 
-export function getCarrierStatusStyle(label: string): { bg: string; text: string } {
+export function getCarrierStatusStyle(label: string, colorHex?: string): { bg: string; text: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff" };
+  }
   switch ((label || "").toLowerCase()) {
     case "fliway - midsize": return { bg: "#33d391", text: "#ffffff" };
     case "fliway - linehaul": return { bg: "#fdbc64", text: "#ffffff" };

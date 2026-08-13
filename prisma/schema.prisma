@@ -177,9 +177,12 @@ model OrderLineItemOperationalData {
   variantId         String
   productTitle      String   @default("")   
   carrier           String   @default("")
+  carrierColor      String   @default("")
   customerStatus    String   @default("")
+  customerStatusColor String @default("")
   customerStatusUpdatedAt DateTime?   // NEW
   paymentStatus     String   @default("")
+  paymentStatusColor String  @default("")
   warehouseStatus   String   @default("")
   warehouseTags     String   @default("")
   dispatchStatus    String   @default("")

@@ -168,6 +168,25 @@ export async function action({ request }: ActionFunctionArgs) {
         updates.carrier = newCarrier;
       }
 
+      // Capture Monday's live badge color from the raw webhook event — fetchMondayItem
+      // only returns text, never color, so this is the only place the hex is available.
+      const columnTitleLower = String(event?.columnTitle ?? "").trim().toLowerCase();
+      const badgeColorHex = String(event?.value?.label?.style?.color ?? "").trim();
+      const recordAny = record as any;
+      const currentCarrierColor = String(recordAny?.carrierColor ?? "").trim();
+      const currentCustomerStatusColor = String(recordAny?.customerStatusColor ?? "").trim();
+      const currentPaymentStatusColor = String(recordAny?.paymentStatusColor ?? "").trim();
+
+      if (columnTitleLower === "carrier" && badgeColorHex && badgeColorHex !== currentCarrierColor) {
+        updates.carrierColor = badgeColorHex;
+      }
+      if (columnTitleLower === "cust. status" && badgeColorHex && badgeColorHex !== currentCustomerStatusColor) {
+        updates.customerStatusColor = badgeColorHex;
+      }
+      if (columnTitleLower === "payment status" && badgeColorHex && badgeColorHex !== currentPaymentStatusColor) {
+        updates.paymentStatusColor = badgeColorHex;
+      }
+
       // ── Pull Monday Updates (operational notes) inbound ──
       try {
         const mondayUpdates = await fetchMondayUpdates(itemId);

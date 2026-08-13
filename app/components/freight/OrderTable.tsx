@@ -70,7 +70,7 @@ export function OrderTable({
             return order.lineItems.map((item, liIdx) => {
               const isSelected = selected.has(item.id);
               const isFirstItem = liIdx === 0;
-              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
+              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus, item.customerStatusColor);
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
@@ -164,7 +164,7 @@ export function OrderTable({
                   {!hiddenColumns.has("payment") && (
                     <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       {(() => {
-                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
+                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor);
                         return (
                           <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
                             {payLabel || "—"}
@@ -177,7 +177,7 @@ export function OrderTable({
                     <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
                       {(() => {
                         const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot));
-                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor);
                         return (
                           <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
                             {carrierLabel || item.company}

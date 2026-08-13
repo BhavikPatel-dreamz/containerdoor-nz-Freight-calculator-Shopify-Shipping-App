@@ -422,7 +422,7 @@ export default function FreightDashboard({
           return { ...o, lineItems: o.lineItems.map((li) => {
             const match = updates.find((u: any) => u.variantId === li.variantId);
             if (!match) return li;
-            return { ...li, eddDate: match.eddDate || li.eddDate, originalEddDate: match.originalEddDate || li.originalEddDate, trackingNumber: match.trackingNumber || li.trackingNumber, freightRef: match.freightRef || li.freightRef, customerStatus: match.customerStatus || li.customerStatus, company: match.carrier || li.company };
+            return { ...li, eddDate: match.eddDate || li.eddDate, originalEddDate: match.originalEddDate || li.originalEddDate, trackingNumber: match.trackingNumber || li.trackingNumber, freightRef: match.freightRef || li.freightRef, customerStatus: match.customerStatus || li.customerStatus, company: match.carrier || li.company, carrierColor: match.carrierColor || li.carrierColor, customerStatusColor: match.customerStatusColor || li.customerStatusColor, paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor };
           }) };
         };
         setRows((prev) => prev.map(applyLatest));

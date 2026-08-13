@@ -179,9 +179,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
       select: {
         variantId: true,
         productTitle: true,
-        carrier: true,
+         carrier: true,
+        carrierColor: true,
         customerStatus: true,
+        customerStatusColor: true,
         paymentStatus: true,
+        paymentStatusColor: true,
         warehouseStatus: true,
         deliveryStatus: true,
         dispatchStatus: true,
