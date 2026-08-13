@@ -173,6 +173,10 @@ export async function buildMondayRowFromOms(args: {
         ? Number(ops.boxes) || ops.boxes
         : "";
 
+   const isDepot =
+    String(snap?.shippingCode ?? "").startsWith("depot_delivery::") ||
+    Boolean(ops.depotAddress1 || ops.depotCity || ops.depotZip);
+
   const row: MondayRow = {
     customerName,
     email,
@@ -208,6 +212,7 @@ export async function buildMondayRowFromOms(args: {
     poNumber: String(orderOps?.poNumber || ops.poNumber || "").trim(),
     depositPaid: String(ops.depositPaid || "").trim(),
     balanceDue: String(ops.balanceDue || "").trim(),
+    isDepot,
   };
 
   return { row, itemName };
@@ -286,6 +291,7 @@ type MondayRow = {
   poNumber: string;
   depositPaid: string;
   balanceDue: string;
+  isDepot: boolean;
 };
 
 const FIELD_DEFS: Partial<
@@ -684,10 +690,21 @@ async function buildColumnValues(row: MondayRow) {
       const carrierVal = String(val || "").trim();
       if (carrierVal) {
         const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
-        const label =
-          carrierLabelMap[carrierVal.toLowerCase()] ||
-          carrierLabelMap[keyNorm] ||
-          (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        let label: string | null = null;
+
+        if (row.isDepot) {
+          if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+          else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+          else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+        }
+
+        if (!label) {
+          label =
+            carrierLabelMap[carrierVal.toLowerCase()] ||
+            carrierLabelMap[keyNorm] ||
+            (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        }
+
         if (label) values[colId] = { label };
         else skipped.push(`${key}:bad-label:${carrierVal}`);
       }

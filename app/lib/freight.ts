@@ -64,15 +64,27 @@ export function getCarrierLabel(company: string, isDepotCollection = false) {
     lowerKey === "linehaulfliway" ||
     lowerKey === "midsizefliway" ||
     lowerKey === "fliwaylinehauldepot" ||
-    lowerKey === "fliwaymidsizedepot"
+    lowerKey === "fliwaymidsizedepot" ||
+    lowerKey === "depotfliway"
   ) {
     return "Depot - Fliway";
   }
-  if (lowerKey === "mainfreight" || lowerKey === "mainfreightdepot" || lowerKey === "mfdepot") {
+  if (
+    lowerKey === "mainfreight" ||
+    lowerKey === "mainfreightdepot" ||
+    lowerKey === "mfdepot" ||
+    lowerKey === "depotmainfreight"
+  ) {
     return "MF Depot";
   }
-  if (lowerKey === "tge" || lowerKey === "tgedepot") {
+  if (lowerKey === "tge" || lowerKey === "tgedepot" || lowerKey === "depottge") {
     return "TGE Depot";
+  }
+
+  // Value already looks like a resolved depot label (e.g. came back from
+  // Monday as text) — don't double-append " Depot".
+  if (/depot/i.test(normalizedCompany)) {
+    return normalizedCompany;
   }
 
   return `${companyLabels[normalizedCompany] ?? normalizedCompany} Depot`;
