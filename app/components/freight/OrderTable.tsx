@@ -23,6 +23,7 @@ type OrderTableProps = {
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
   hiddenColumns?: Set<string>;
+  onShowNotification?: (message: string) => void;
 };
 
 export function OrderTable({
@@ -43,6 +44,7 @@ export function OrderTable({
   mondayFixingId,
   creatingCin7OrderId,
   hiddenColumns = new Set(),
+  onShowNotification,
 }: OrderTableProps) {
   return (
     <div className="fo-table-scroll">
@@ -225,6 +227,20 @@ export function OrderTable({
                             );
                           }
                           if (status === "error") {
+                            const isNoSku = (item.cin7Mismatches ?? []).includes("SKU not found");
+                            if (isNoSku) {
+                              return (
+                                <button
+                                  type="button"
+                                  className="fo-sync-pill red"
+                                  title="SKU not found — click for details"
+                                  onClick={() => onShowNotification?.("Cin7 sync failed: SKU not found for this line item.")}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  CIN7 ✕
+                                </button>
+                              );
+                            }
                             return (
                               <span className="fo-sync-pill amber" title="Order is voided or duplicated in Cin7 — cannot sync">
                                 CIN7 ⚠️

@@ -499,6 +499,10 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
       if (!sku) {
         console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { cin7CachedStatus: "error", cin7CachedMismatches: "SKU not found" },
+        });
         skipped++;
         continue;
       }

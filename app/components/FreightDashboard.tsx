@@ -1590,6 +1590,10 @@ export default function FreightDashboard({
                 creatingCin7OrderId={creatingCin7OrderId}
                 hiddenColumns={hiddenColumns}
                 navigate={navigate}
+                onShowNotification={(msg) => {
+                  setSyncNotification(msg);
+                  window.setTimeout(() => setSyncNotification(null), 4500);
+                }}
               />
             )}
 
