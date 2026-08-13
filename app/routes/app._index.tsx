@@ -137,6 +137,17 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const rowWhere = Prisma.join(rowConds, " AND ");
 
   const rows = await prisma.$queryRaw<any[]>`
+    WITH order_carrier_counts AS (
+      -- Use the ORIGINAL carrier from the freight code (o."company") only —
+      -- not the live/editable ops carrier — so isDepot never flips after
+      -- checkout due to a later per-line sync/edit.
+      SELECT
+        o."orderId",
+        COUNT(DISTINCT o."company") AS distinct_carrier_count
+      FROM "OrderLineItemIndex" o
+      WHERE o."shop" = ${shop}
+      GROUP BY o."orderId"
+    )
     SELECT
       idx."id" AS line_index_id,
       idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
@@ -150,7 +161,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."depotAddress1", ops."depotCity", ops."depotZip",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
-      snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code
+      snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code,
+      occ."distinct_carrier_count" AS distinct_carrier_count
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -158,6 +170,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ON idx."shop" = ood."shop" AND idx."orderId" = ood."orderId"
     LEFT JOIN "OrderSnapshot" snap
       ON idx."shop" = snap."shop" AND idx."orderId" = snap."orderId"
+    LEFT JOIN order_carrier_counts occ
+      ON occ."orderId" = idx."orderId"
     WHERE ${rowWhere}
     ORDER BY idx."createdAt" DESC, idx."orderId" DESC, idx."letterSuffix" ASC
     LIMIT ${PAGE_SIZE} OFFSET ${offset}
@@ -195,9 +209,14 @@ export async function loader({ request }: LoaderFunctionArgs) {
       depotAddress1: r.depotAddress1 ?? "",
       depotCity: r.depotCity ?? "",
       depotZip: r.depotZip ?? "",
-      // Prefer authoritative shippingCode (snapshot) to detect depot service;
-      // fall back to depot address presence for older rows without a shippingCode.
-      isDepot: String(r.snapshot_shipping_code ?? "").startsWith("depot_delivery::") || Boolean(r.depotAddress1 || r.depotCity || r.depotZip),
+      // Business rule: depot orders always ship every line via the same carrier;
+      // standard orders can have a different carrier per line. If the
+      // shippingCode says "depot" but the order's lines actually have
+      // different carriers, it can't really be depot — same check as the
+      // detail page (buildRowFromSnapshot) so both pages always agree.
+      isDepot:
+        String(r.snapshot_shipping_code ?? "").startsWith("depot_delivery::") &&
+        Number(r.distinct_carrier_count ?? 1) <= 1,
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",

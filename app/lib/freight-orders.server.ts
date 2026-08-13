@@ -144,7 +144,15 @@ export function buildRowFromSnapshot(
 
   const itemSnaps = buildLineItemSnapshots(snap);
   if (itemSnaps.length === 0) return null;
-  const isDepotService = String(snap.shippingCode ?? "").startsWith("depot_delivery::");
+  // Business rule: depot orders always ship every line via the same carrier;
+  // standard orders can have a different (calculated) carrier per line. Use
+  // the ORIGINAL carrier recorded in the freight code at checkout (it.company)
+  // — not the live ops.carrier override — so a later per-line edit/sync
+  // (Monday, Cin7, manual) can never flip depot/standard status after the
+  // fact. isDepot must stay exactly what it was at checkout.
+  const finalCarriersInOrder = new Set(itemSnaps.map((it) => it.company));
+  const isDepotService =
+    String(snap.shippingCode ?? "").startsWith("depot_delivery::") && finalCarriersInOrder.size <= 1;
 
   const lineItems = itemSnaps.map((it) => {
     const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);

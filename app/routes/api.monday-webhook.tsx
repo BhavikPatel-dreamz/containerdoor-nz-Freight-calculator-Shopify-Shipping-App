@@ -19,14 +19,17 @@ function normalizeMondayCarrierToOmsCode(raw: string): string {
   );
   if (byLabel) return byLabel[0];
 
-  // Common alias fallback from Monday status labels.
+  // Common alias fallback from Monday status labels. Monday's dropdown text
+  // is word-order-reversed from our companyLabels (e.g. "Linehaul - Fliway"
+  // vs our "Fliway - Linehaul"), so match both orders to avoid the raw label
+  // being written unmapped and briefly displayed before a later sync fixes it.
   const keyNorm = lower.replace(/[\s_-]+/g, "");
-  if (keyNorm === "fliwaylinehaul" || keyNorm === "fliway") return "FLIWAYLINEHAUL";
-  if (keyNorm === "fliwaymidsize") return "FLIWAYMIDSIZE";
+  if (keyNorm === "fliwaylinehaul" || keyNorm === "fliway" || keyNorm === "linehaulfliway") return "FLIWAYLINEHAUL";
+  if (keyNorm === "fliwaymidsize" || keyNorm === "midsizefliway") return "FLIWAYMIDSIZE";
   if (keyNorm === "nzp") return "NZP";
   if (keyNorm === "nzpage restricted" || keyNorm === "nzpagerestricted") return "NZP_AGE_RESTRICTED";
   if (keyNorm === "tge" || keyNorm === "teamglobalexpress") return "TGE";
-  if (keyNorm === "m2h") return "M2H";
+  if (keyNorm === "m2h" || keyNorm === "m2hdelivery") return "M2H";
   if (keyNorm === "mainfreight") return "MAINFREIGHT";
   if (keyNorm === "castle") return "CASTLE";
 
