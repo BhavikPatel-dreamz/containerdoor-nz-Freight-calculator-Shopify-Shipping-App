@@ -2,7 +2,8 @@
 import prisma from "../db.server";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "./monday.server";
-import { createCin7SalesOrder } from "./cin7.server";
+import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal } from "./cin7.server";
+import { getAppSettings } from "../models/freight.server";
 import {
   buildCin7CustomerOrderNo,
   buildCin7SalesOrderReference,
@@ -114,6 +115,20 @@ export function extractCarrierFromOrder(order: OrderPayload): string {
     if (first) return first;
   }
   return shippingLines.find((l) => l?.title)?.title ?? "";
+}
+
+/** Fraction of the order total that's actually been paid, per Shopify's financial_status. */
+function resolveOrderPaidRatio(order: OrderPayload): number {
+  const status = String((order as any).financial_status ?? "").toLowerCase();
+  if (status === "paid") return 1;
+  if (status === "partially_paid") {
+    const total = Number(order.total_price ?? 0);
+    const current = Number(order.current_total_price ?? total);
+    if (total > 0) return Math.min(Math.max(current / total, 0), 1);
+    return 0;
+  }
+  // pending, authorized, partially_refunded (with nothing left owed handled by "paid"), etc.
+  return 0;
 }
 
 // ─── Depot child-address helper (from checkout cart attribute) ──────────────
@@ -410,6 +425,16 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
     const currencyCode =
       order.current_total_price_set?.presentment_money?.currency_code ?? "NZD";
 
+    // Freight prices already have OUR OWN GST margin baked in — calculateFreightRate
+    // multiplies by settings.gstRate before the customer ever sees the price at
+    // checkout. That is NOT the same as Shopify's order.tax_lines rate, which can
+    // be 0/unrelated and caused a silent no-op division — Cin7 then added its own
+    // 15% on top of an already-taxed number (double tax). Pull the real rate from
+    // AppSettings (same value the freight calculator used, same one shown on the
+    // Settings page as "GST %") instead of any hardcoded percentage.
+    const appSettings = await getAppSettings(shop);
+    const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+
     // Ensure order-ops row exists (claim marker for UI "has Cin7 work").
     // Retry the upsert a few times on P2002 races (concurrent workers).
     {
@@ -442,6 +467,34 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
         }
       }
     }
+
+    // Real freight charge for the whole order, as actually shown/charged at
+    // Shopify checkout (freightLine.price) — NOT li.amount from the parsed
+    // freight code, which is an internal per-carrier calc that can come back
+    // as 0 for some rate types (confirmed: depot collection gave amount=0
+    // even though checkout charged real freight). Split across per-line SOs
+    // weighted by boxes so the sum of all line SOs' freight equals the
+    // order's real total shipping charge.
+    const totalFreightCharge = Number(freightLine.price ?? 0);
+    const totalBoxesAcrossLines = breakdown.lineItems.reduce(
+      (sum, x) => sum + (Number(x.boxes) || 0),
+      0,
+    );
+    const validLineCount = breakdown.lineItems.filter((x) => x.variantId).length || 1;
+    // Derive the order-level pre-tax total using our GST rate so we can
+    // compute the freight pre-tax as: orderPreTax - sum(productTotals).
+    const orderTotalInclTax = Number(
+      order.current_total_price_set?.presentment_money?.amount ?? order.total_price ?? 0,
+    );
+    const orderTotalPreTax = Number((orderTotalInclTax / (1 + ourGstRate)) || 0);
+    const productTotalsSum = (order.line_items ?? []).reduce(
+      (s, li) =>
+        s +
+        (Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0) * (Number(li.quantity ?? 1) || 1)),
+      0,
+    );
+    let totalFreightPreTax = orderTotalPreTax - productTotalsSum;
+    if (!Number.isFinite(totalFreightPreTax) || totalFreightPreTax < 0) totalFreightPreTax = 0;
 
     let created = 0;
     let skipped = 0;
@@ -522,6 +575,20 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
         const unitPrice = Number(
           shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
         );
+        // Compute per-line freight: split checkout total (weighted by boxes)
+        // and remove our GST margin so Cin7 applies tax consistently.
+        // Derive this line's share of the order-level freight (pre-tax).
+        const freightRaw =
+          totalBoxesAcrossLines > 0
+            ? totalFreightPreTax * ((Number(li.boxes) || 0) / totalBoxesAcrossLines)
+            : totalFreightPreTax / validLineCount;
+        const freightFinal = Number(Number(freightRaw).toFixed(2));
+        console.log(
+          `[Cin7][Webhook][${orderId}] Freight calc line=${letterSuffix} variant=${li.variantId} li.amount=${Number(
+            (li as any).amount ?? 0,
+          )} totalFreightCharge=${totalFreightCharge} totalFreightPreTax=${totalFreightPreTax} boxes=${li.boxes} totalBoxes=${totalBoxesAcrossLines} ourGstRate=${ourGstRate} freightRaw=${freightRaw} freightFinal=${freightFinal}`,
+        );
+
         const result = await createCin7SalesOrder({
           reference,
           firstName: shipping.first_name ?? customer.first_name ?? "",
@@ -549,6 +616,11 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
           internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
           taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
           taxStatus: order.taxes_included ? "Incl" : "Excl",
+          // Freight for THIS line, split from the real checkout freight
+          // amount (`freightLine.price`). Attempts to weight by boxes; if
+          // box counts are not available, split evenly across valid lines.
+          freightTotal: freightFinal,
+          freightDescription: freightLine.title || li.company || "",
           lineItems: [
             {
               code: sku,
@@ -572,6 +644,40 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
         console.log(
           `[Cin7][Webhook][${orderId}] line ${letterSuffix} OK id=${result.id} ref=${reference}`,
         );
+
+        // Record a Payment for this line's Cin7 SO so Cin7 shows Paid/Owing
+        // reflecting the real Shopify financial status (0-100% range).
+        // IMPORTANT: Cin7 applies its OWN account-level tax settings to the
+        // order regardless of the taxRate we send (confirmed: we sent
+        // taxRate:0 but Cin7 still added 15% GST) — so we can't compute the
+        // total locally. Instead, fetch back the Cin7-computed total for this
+        // SO and pay against that, so Paid always matches Cin7's own total.
+        const paidRatio = resolveOrderPaidRatio(order);
+        const lineSubtotal = qty * unitPrice;
+        const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
+        const lineTotalInclTax = cin7Total ?? lineSubtotal; // fallback if fetch fails
+        const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
+        if (linePaidAmount > 0) {
+          const paymentResult = await createCin7Payment({
+            orderId: result.id,
+            amount: linePaidAmount,
+            comments: `Auto-paid from Shopify order ${customerOrderNo} line ${letterSuffix}`,
+          });
+          if (!paymentResult.ok) {
+            console.error(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment FAILED`,
+              paymentResult.error,
+            );
+          } else {
+            console.log(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment OK id=${paymentResult.id} amount=${linePaidAmount}`,
+            );
+          }
+        } else {
+          console.log(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
+          );
+        }
       } catch (e: any) {
         failed++;
         if (e?.isDuplicate) {
