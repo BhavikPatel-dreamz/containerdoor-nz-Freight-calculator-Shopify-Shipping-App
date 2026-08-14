@@ -173,6 +173,7 @@ export function buildRowFromSnapshot(
       // Prefer OMS carrier override when set
       company: (ops?.carrier && String(ops.carrier).trim()) || it.company,
       carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
       boxes: it.boxes,
       amount: it.amount,
       letterSuffix: it.letterSuffix,
@@ -281,6 +282,7 @@ export function buildRow(
       sku: variantSkuMap.get(variantId) ?? "",
       company: company ?? "",
       carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),
       letterSuffix: LETTERS[idx % 26],

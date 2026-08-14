@@ -178,6 +178,7 @@ model OrderLineItemOperationalData {
   productTitle      String   @default("")   
   carrier           String   @default("")
   carrierColor      String   @default("")
+  carrierColorLabel String   @default("")
   customerStatus    String   @default("")
   customerStatusColor String @default("")
   customerStatusUpdatedAt DateTime?   // NEW

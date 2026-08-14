@@ -12,6 +12,7 @@ export type FreightLineItem = {
   productId?: string;
   company: string;
   carrierColor?: string;
+  carrierColorLabel?: string;
   boxes: number;
   amount: number;
   letterSuffix: string;
