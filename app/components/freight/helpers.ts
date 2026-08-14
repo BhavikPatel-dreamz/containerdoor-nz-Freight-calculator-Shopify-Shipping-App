@@ -76,8 +76,15 @@ export function getDeliveryStatusStyle(status: string): { bg: string; text: stri
   }
 }
 
-export function getCarrierStatusStyle(label: string, colorHex?: string): { bg: string; text: string } {
-  if (colorHex && colorHex.trim()) {
+function normalizeCarrierLabelForCompare(v: string): string {
+  return String(v || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+export function getCarrierStatusStyle(label: string, colorHex?: string, colorLabel?: string): { bg: string; text: string } {
+  const colorStillValid =
+    colorHex && colorHex.trim() && colorLabel && colorLabel.trim() &&
+    normalizeCarrierLabelForCompare(colorLabel) === normalizeCarrierLabelForCompare(label);
+  if (colorStillValid) {
     return { bg: colorHex.trim(), text: "#ffffff" };
   }
   // Fallback colors matched to Monday's actual board badge colors (Carrier

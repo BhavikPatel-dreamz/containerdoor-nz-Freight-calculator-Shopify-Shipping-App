@@ -74,7 +74,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           service_code: "manual_quote",
           description: "Please contact us for a freight quote for your location.",
           currency: payload.rate?.currency || "NZD",
-          total_price: "0",
+          total_price: "1",
         }],
       });
     }
@@ -83,11 +83,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log(`[FREIGHT] No shared delivery method across cart items for ${shop}`);
       return Response.json({
         rates: [{
-          service_name: "Please Order Items Separately",
+          service_name: "Please Order Items Separately – Cannot Process",
           service_code: "separate_orders_required",
           description: "Items in your cart require different delivery methods. Please place separate orders for these items.",
           currency: payload.rate?.currency || "NZD",
-          total_price: "0",
+          total_price: "1",
         }],
       });
     }

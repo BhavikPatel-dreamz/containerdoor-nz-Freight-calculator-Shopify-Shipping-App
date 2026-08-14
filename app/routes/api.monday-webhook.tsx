@@ -185,6 +185,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
       if (badgeColorHex && columnTitleLower === "carrier" && badgeColorHex !== currentCarrierColor) {
         updates.carrierColor = badgeColorHex;
+        updates.carrierColorLabel = String(event?.value?.label?.text ?? "").trim();
       } else if (mondayData.carriers) {
         // Re-resolve the color even when the carrier TEXT didn't change — a
         // board-level label recolor (Monday column settings) doesn't change
@@ -194,6 +195,7 @@ export async function action({ request }: ActionFunctionArgs) {
         const resolvedCarrierColor = await resolveMondayStatusColor("carriers", mondayData.carriers, true);
         if (resolvedCarrierColor && resolvedCarrierColor !== currentCarrierColor) {
           updates.carrierColor = resolvedCarrierColor;
+          updates.carrierColorLabel = mondayData.carriers;
         }
       }
       if (columnTitleLower === "cust. status" && badgeColorHex && badgeColorHex !== currentCustomerStatusColor) {

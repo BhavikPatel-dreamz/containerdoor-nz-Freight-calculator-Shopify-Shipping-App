@@ -179,8 +179,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       select: {
         variantId: true,
         productTitle: true,
-         carrier: true,
+        carrier: true,
         carrierColor: true,
+        carrierColorLabel: true,
         customerStatus: true,
         customerStatusColor: true,
         paymentStatus: true,
@@ -871,7 +872,7 @@ export async function action({ request }: ActionFunctionArgs) {
           data: {
             mondayItemId: newMondayId,
             mondayItemName: itemName,
-            ...(carrierColor ? { carrierColor } : {}),
+            ...(carrierColor ? { carrierColor, carrierColorLabel: carrierLabelUsed } : {}),
             ...(customerStatusColor ? { customerStatusColor } : {}),
             ...(paymentStatusColor ? { paymentStatusColor } : {}),
           },

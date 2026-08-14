@@ -47,7 +47,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
           <span className="fo-detail-value">
             {(() => {
               const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot)) || item.company || "—";
-              const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor);
+              const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor, item.carrierColorLabel);
               return (
                 <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: carBg, color: carText }}>
                   {carrierLabel}
