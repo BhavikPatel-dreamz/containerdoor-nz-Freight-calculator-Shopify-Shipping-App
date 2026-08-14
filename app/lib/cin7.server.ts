@@ -299,6 +299,49 @@ export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7Ord
   }
 }
 
+/** Fetch the Cin7-computed order total (post their own tax rules) for a Sales Order. */
+export async function fetchCin7SalesOrderTotal(salesOrderId: string): Promise<number | null> {
+  const id = salesOrderId?.trim();
+  if (!id || id === "pending" || !CIN7_API_URL) return null;
+  try {
+    const url = getCin7OrderUrl(id);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrder (for total) failed (${res.status}) for id=${id}`);
+      return null;
+    }
+    const json: any = await res.json();
+
+    // Confirmed via testing: Cin7's `total` field on this endpoint is in the
+    // ACCOUNT'S HOME/BASE CURRENCY, not the order's own currency — e.g. a
+    // 230.00 INR order came back as total=4.1186 (NZD base). The order also
+    // carries its own currency conversion rate, so convert home->order
+    // currency before using this as a payment amount, or Paid % is wrong.
+    const homeTotal = Number(json.total ?? json.Total ?? json.orderTotal ?? json.grandTotal ?? 0);
+    const currencyRate = Number(
+      json.currencyRate ?? json.exchangeRate ?? json.CurrencyRate ?? json.ExchangeRate ?? 1,
+    );
+    const rate = Number.isFinite(currencyRate) && currencyRate > 0 ? currencyRate : 1;
+    const orderCurrencyTotal = homeTotal * rate;
+
+    debug(
+      "Cin7",
+      `GET SalesOrder total for id=${id}: home=${homeTotal} rate=${rate} orderCurrencyTotal=${orderCurrencyTotal}`,
+    );
+    // Full raw response logged so the currencyRate field name can be verified
+    // against Cin7's actual response shape if this ever drifts.
+    debug("Cin7", `GET SalesOrder (for total) raw response for id=${id}:`, json);
+
+    return Number.isFinite(orderCurrencyTotal) && orderCurrencyTotal > 0 ? orderCurrencyTotal : null;
+  } catch (error) {
+    debug("Cin7", "GET SalesOrder (for total) failed:", error);
+    return null;
+  }
+}
+
 export function diffCin7Fields(
   item: { trackingNumber?: string; eddDate?: string; company?: string },
   cin7: Cin7OrderSnapshot,
@@ -575,4 +618,75 @@ export async function createCin7SalesOrder(
   }
 
   return { id: result.id, code: result.code };
+}
+
+function getCin7PaymentsUrl(): string {
+  // Same base as SalesOrders, swap the resource segment.
+  return getCin7UpdateUrl().replace(/\/SalesOrders$/i, "/Payments");
+}
+
+export type Cin7PaymentInput = {
+  orderId: number;
+  amount: number;
+  method?: string;
+  paymentDate?: string; // ISO date; defaults to now
+  isAuthorized?: boolean;
+  transactionRef?: string;
+  comments?: string;
+};
+
+/**
+ * Create a Payment against a Cin7 Sales Order so Cin7's Total Paid / Total
+ * Owing reflects what was actually paid on the Shopify order (0–100% range).
+ * Best-effort: caller should treat failure as non-fatal (SO already exists).
+ */
+export async function createCin7Payment(
+  input: Cin7PaymentInput,
+): Promise<{ ok: boolean; id?: number; error?: string }> {
+  if (!input.orderId || !input.amount) {
+    debug("Cin7", "createCin7Payment: SKIP - missing orderId or amount");
+    return { ok: false, error: "Missing orderId or amount" };
+  }
+
+  const body = [
+    {
+      orderId: input.orderId,
+      amount: input.amount,
+      method: input.method ?? "Shopify",
+      isAuthorized: input.isAuthorized ?? true,
+      paymentDate: input.paymentDate ?? new Date().toISOString(),
+      ...(input.transactionRef ? { transactionRef: input.transactionRef } : {}),
+      ...(input.comments ? { comments: input.comments } : {}),
+    },
+  ];
+
+  debug("Cin7", "POST Payment", body);
+
+  try {
+    const res = await fetch(getCin7PaymentsUrl(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const json: any = await res.json().catch(() => null);
+    debug("Cin7", "POST Payment response:", json);
+
+    if (!res.ok) {
+      return { ok: false, error: `Cin7 API error ${res.status}: ${JSON.stringify(json)}` };
+    }
+
+    const result = Array.isArray(json) ? json[0] : null;
+    if (!result || !result.success) {
+      return { ok: false, error: `Cin7 Payment creation failed: ${JSON.stringify(result?.errors ?? json)}` };
+    }
+
+    return { ok: true, id: result.id };
+  } catch (error) {
+    debug("Cin7", "POST Payment request failed:", error);
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

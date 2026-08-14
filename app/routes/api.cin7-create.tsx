@@ -2,7 +2,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { createCin7SalesOrder, fetchCin7SalesOrder } from "../lib/cin7.server";
+import { createCin7SalesOrder, fetchCin7SalesOrder, createCin7Payment } from "../lib/cin7.server";
 import { buildCin7SalesOrderUrl } from "../lib/cin7-adapter.server";
 
 type RequestPayload = {
@@ -115,6 +115,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               presentmentMoney {
                 amount
                 currencyCode
+              }
+            }
+            totalOutstandingSet {
+              presentmentMoney {
+                amount
               }
             }
             totalDiscountsSet {
@@ -268,6 +273,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     console.log(`[Cin7][API][${orderIdStr}] SUCCESS - id=${result.id}, code=${result.code}`);
+
+    // Record whatever was actually paid on the Shopify order (not the full
+    // total) so Cin7's Total Paid / Total Owing shows the real 0–100% range.
+    const totalPrice = Number(orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
+    const totalOutstanding = Number(orderData.totalOutstandingSet?.presentmentMoney?.amount ?? 0);
+    const paidAmount = Math.max(totalPrice - totalOutstanding, 0);
+
+    if (paidAmount > 0) {
+      const paymentResult = await createCin7Payment({
+        orderId: Number(result.id),
+        amount: paidAmount,
+        comments: `Auto-paid from Shopify order ${orderData.name ?? orderIdStr}`,
+      });
+      if (!paymentResult.ok) {
+        console.error(`[Cin7][API][${orderIdStr}] Payment creation failed:`, paymentResult.error);
+      } else {
+        console.log(`[Cin7][API][${orderIdStr}] Payment created — id=${paymentResult.id}, amount=${paidAmount} of ${totalPrice}`);
+      }
+    } else {
+      console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (outstanding=${totalOutstanding})`);
+    }
+
     return Response.json({
       ok: true,
       cin7SalesOrderId: String(result.id),
