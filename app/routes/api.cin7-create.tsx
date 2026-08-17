@@ -2,12 +2,22 @@
 import type { ActionFunctionArgs } from "react-router";
 import { unauthenticated } from "../shopify.server";
 import prisma from "../db.server";
-import { createCin7SalesOrder, fetchCin7SalesOrder, createCin7Payment } from "../lib/cin7.server";
-import { buildCin7SalesOrderUrl } from "../lib/cin7-adapter.server";
+import {
+  createCin7SalesOrder,
+  fetchCin7SalesOrder,
+  fetchCin7SalesOrderTotal,
+  createCin7Payment,
+  findCin7SalesOrderByReference,
+} from "../lib/cin7.server";
+import {
+  buildCin7SalesOrderReference,
+  buildCin7SalesOrderUrl,
+} from "../lib/cin7-adapter.server";
 
 type RequestPayload = {
   shop?: string;
   orderId?: string | number;
+  variantId?: string;
 };
 
 function extractCarrierFromShippingCode(code?: string): string {
@@ -27,7 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   try {
     const payload = (await request.json()) as RequestPayload;
-    const { shop, orderId } = payload;
+    const { shop, orderId, variantId } = payload;
 
     if (!shop || !orderId) {
       return Response.json({ error: "Missing shop or orderId" }, { status: 400 });
@@ -35,34 +45,71 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const orderIdStr = String(orderId);
 
-    // Check if already processed
-    let existing = await prisma.orderOperationalData.findUnique({
-      where: { shop_orderId: { shop, orderId: orderIdStr } },
-      select: { cin7SalesOrderId: true },
-    });
+    const normalizedVariantId = variantId ? String(variantId).trim() : "";
 
-    if (existing?.cin7SalesOrderId && existing.cin7SalesOrderId !== "pending") {
-      const snapshot = await fetchCin7SalesOrder(existing.cin7SalesOrderId);
+    let existing: { cin7SalesOrderId: string } | null = null;
+    let variantExisting: { cin7SalesOrderId: string } | null = null;
+
+    if (normalizedVariantId) {
+      variantExisting = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
+        select: { cin7SalesOrderId: true },
+      });
+    }
+
+    if (variantExisting?.cin7SalesOrderId && variantExisting.cin7SalesOrderId !== "pending") {
+      const snapshot = await fetchCin7SalesOrder(variantExisting.cin7SalesOrderId);
 
       if (snapshot) {
         console.log(
-          `[Cin7][API][${orderIdStr}] Verified — order still exists in Cin7 with ID: ${existing.cin7SalesOrderId}`,
+          `[Cin7][API][${orderIdStr}] Verified variant ${normalizedVariantId} still exists in Cin7 with ID: ${variantExisting.cin7SalesOrderId}`,
         );
         return Response.json({
           ok: true,
-          cin7SalesOrderId: existing.cin7SalesOrderId,
-          cin7SalesOrderUrl: buildCin7SalesOrderUrl(existing.cin7SalesOrderId) ?? "",
+          cin7SalesOrderId: variantExisting.cin7SalesOrderId,
+          cin7SalesOrderUrl: buildCin7SalesOrderUrl(variantExisting.cin7SalesOrderId) ?? "",
         });
       }
 
       console.log(
-        `[Cin7][API][${orderIdStr}] Cached Cin7 ID ${existing.cin7SalesOrderId} no longer exists in Cin7 — will recreate`,
+        `[Cin7][API][${orderIdStr}] Variant ${normalizedVariantId} cached Cin7 ID ${variantExisting.cin7SalesOrderId} no longer exists in Cin7 — will recreate`,
       );
-      await prisma.orderOperationalData.update({
-        where: { shop_orderId: { shop, orderId: orderIdStr } },
+      await prisma.orderLineItemOperationalData.update({
+        where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
         data: { cin7SalesOrderId: "pending" },
       });
-      existing = { cin7SalesOrderId: "pending" };
+      variantExisting = { cin7SalesOrderId: "pending" };
+    }
+
+    if (!normalizedVariantId) {
+      existing = await prisma.orderOperationalData.findUnique({
+        where: { shop_orderId: { shop, orderId: orderIdStr } },
+        select: { cin7SalesOrderId: true },
+      });
+
+      if (existing?.cin7SalesOrderId && existing.cin7SalesOrderId !== "pending") {
+        const snapshot = await fetchCin7SalesOrder(existing.cin7SalesOrderId);
+
+        if (snapshot) {
+          console.log(
+            `[Cin7][API][${orderIdStr}] Verified — order still exists in Cin7 with ID: ${existing.cin7SalesOrderId}`,
+          );
+          return Response.json({
+            ok: true,
+            cin7SalesOrderId: existing.cin7SalesOrderId,
+            cin7SalesOrderUrl: buildCin7SalesOrderUrl(existing.cin7SalesOrderId) ?? "",
+          });
+        }
+
+        console.log(
+          `[Cin7][API][${orderIdStr}] Cached Cin7 ID ${existing.cin7SalesOrderId} no longer exists in Cin7 — will recreate`,
+        );
+        await prisma.orderOperationalData.update({
+          where: { shop_orderId: { shop, orderId: orderIdStr } },
+          data: { cin7SalesOrderId: "pending" },
+        });
+        existing = { cin7SalesOrderId: "pending" };
+      }
     }
 
     // Fetch the order from Shopify
@@ -138,6 +185,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 title
                 quantity
                 variant {
+                  id
                   sku
                 }
                 originalUnitPriceSet {
@@ -179,6 +227,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         name: li.title ?? "",
         qty: li.quantity ?? 1,
         unitPrice: Number(li.originalUnitPriceSet?.presentmentMoney?.amount ?? 0),
+        variantId: li.variant?.id ?? null,
       }))
       .filter((li: { code: any; }) => li.code);
 
@@ -190,10 +239,33 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    // Create or get the record
+    const targetLineItems = normalizedVariantId
+      ? lineItems.filter((li: any) => {
+          const currentId = String(li.variantId ?? "");
+          return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+        })
+      : lineItems;
+
+    if (normalizedVariantId && targetLineItems.length === 0) {
+      console.log(`[Cin7][API][${orderIdStr}] SKIP - variant ${normalizedVariantId} not found on order`);
+      return Response.json(
+        { ok: false, error: "Selected variant not found on order" },
+        { status: 404 },
+      );
+    }
+
+    // Create or get the record safely. This is a legacy order-level row used only
+    // as a compatibility fallback; never let repeated per-line clicks crash on
+    // the unique `(shop, orderId)` constraint.
     if (!existing) {
-      existing = await prisma.orderOperationalData.create({
-        data: { shop, orderId: orderIdStr, cin7SalesOrderId: "pending" },
+      await prisma.orderOperationalData.upsert({
+        where: { shop_orderId: { shop, orderId: orderIdStr } },
+        create: { shop, orderId: orderIdStr, cin7SalesOrderId: "pending" },
+        update: { cin7SalesOrderId: "pending" },
+      });
+      existing = await prisma.orderOperationalData.findUnique({
+        where: { shop_orderId: { shop, orderId: orderIdStr } },
+        select: { cin7SalesOrderId: true },
       });
     }
 
@@ -217,10 +289,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const taxRate = Number(orderData.taxLines?.[0]?.rate ?? 0) * 100;
     const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";
 
+    const allOrderLineItems = orderData.lineItems?.nodes ?? [];
+    const targetLineIndex = normalizedVariantId
+      ? allOrderLineItems.findIndex((li: any) => {
+          const currentId = String(li?.variant?.id ?? "");
+          return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+        })
+      : 0;
+    const lineLetter = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.max(targetLineIndex, 0) % 26] ?? "A";
+    const cin7Reference = buildCin7SalesOrderReference({
+      orderName: orderData.name ?? orderIdStr,
+      letterSuffix: lineLetter,
+      orderId: orderIdStr,
+      variantId: normalizedVariantId || undefined,
+    });
+
     let result;
     try {
       result = await createCin7SalesOrder({
-        reference: `Shopify-${orderData.name ?? orderIdStr}`,
+        reference: cin7Reference,
         firstName: shippingAddress.firstName ?? billingAddress.firstName ?? "",
         lastName: shippingAddress.lastName ?? billingAddress.lastName ?? "",
         company: shippingAddress.company ?? billingAddress.company ?? "",
@@ -242,21 +329,99 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         logisticsCarrier: carrier,
         currencyCode: currencyCode,
         customerOrderNo: orderData.name ?? orderIdStr,
-        internalComments: `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
-        freightTotal,
+        internalComments: normalizedVariantId
+          ? `Auto-created from Shopify order ${orderData.name ?? orderIdStr} variant ${normalizedVariantId}`
+          : `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
+        freightTotal: freightTotal,
         freightDescription,
         discountTotal,
         discountDescription,
         taxRate,
         taxStatus,
-        lineItems,
+        lineItems: targetLineItems.map((li: any) => ({
+          code: li.code,
+          name: li.name ?? "",
+          qty: li.qty ?? 1,
+          unitPrice: li.unitPrice ?? 0,
+        })),
       });
     } catch (err) {
       if ((err as any)?.isDuplicate) {
-        await prisma.orderOperationalData.update({
+        let knownSalesOrderId = "";
+
+        if (normalizedVariantId) {
+          const lineRow = await prisma.orderLineItemOperationalData.findUnique({
+            where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
+            select: { cin7SalesOrderId: true, cin7SalesOrderRef: true },
+          });
+          knownSalesOrderId = String(lineRow?.cin7SalesOrderId ?? "").trim();
+          if ((!knownSalesOrderId || ["pending", "duplicate"].includes(knownSalesOrderId)) && lineRow?.cin7SalesOrderRef) {
+            const byRef = await findCin7SalesOrderByReference(lineRow.cin7SalesOrderRef);
+            if (byRef?.id) {
+              knownSalesOrderId = byRef.id;
+            }
+          }
+        }
+
+        if (!knownSalesOrderId) {
+          const orderRow = await prisma.orderOperationalData.findUnique({
+            where: { shop_orderId: { shop, orderId: orderIdStr } },
+            select: { cin7SalesOrderId: true },
+          });
+          knownSalesOrderId = String(orderRow?.cin7SalesOrderId ?? "").trim();
+        }
+
+        if (!knownSalesOrderId || ["pending", "duplicate"].includes(knownSalesOrderId)) {
+          const byRef = await findCin7SalesOrderByReference(cin7Reference);
+          if (byRef?.id) {
+            knownSalesOrderId = byRef.id;
+          }
+        }
+
+        if (knownSalesOrderId && knownSalesOrderId !== "pending" && knownSalesOrderId !== "duplicate") {
+          await prisma.orderLineItemOperationalData.upsert({
+            where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId || "" } },
+            create: {
+              shop,
+              orderId: orderIdStr,
+              variantId: normalizedVariantId || "",
+              cin7SalesOrderId: knownSalesOrderId,
+              cin7SalesOrderRef: cin7Reference,
+            },
+            update: {
+              cin7SalesOrderId: knownSalesOrderId,
+              cin7SalesOrderRef: cin7Reference,
+            },
+          });
+          console.log(`[Cin7][API][${orderIdStr}] DUPLICATE - reference already exists in Cin7; existing SO id=${knownSalesOrderId}`);
+          return Response.json({
+            ok: true,
+            cin7SalesOrderId: knownSalesOrderId,
+            cin7SalesOrderUrl: buildCin7SalesOrderUrl(knownSalesOrderId) ?? "",
+            duplicate: true,
+          });
+        }
+
+        if (normalizedVariantId) {
+          await prisma.orderLineItemOperationalData.upsert({
+            where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
+            create: { shop, orderId: orderIdStr, variantId: normalizedVariantId, cin7SalesOrderId: "duplicate" },
+            update: { cin7SalesOrderId: "duplicate" },
+          });
+        }
+
+        const orderRow = await prisma.orderOperationalData.findUnique({
           where: { shop_orderId: { shop, orderId: orderIdStr } },
-          data: { cin7SalesOrderId: "duplicate" },
+          select: { cin7SalesOrderId: true },
         });
+        const currentOrderLink = String(orderRow?.cin7SalesOrderId ?? "").trim();
+        if (!currentOrderLink || currentOrderLink === "pending" || currentOrderLink === "duplicate") {
+          await prisma.orderOperationalData.upsert({
+            where: { shop_orderId: { shop, orderId: orderIdStr } },
+            create: { shop, orderId: orderIdStr, cin7SalesOrderId: "duplicate" },
+            update: { cin7SalesOrderId: "duplicate" },
+          });
+        }
         console.log(`[Cin7][API][${orderIdStr}] DUPLICATE - reference already exists in Cin7`);
         return Response.json(
           { ok: false, cin7Status: "error", error: err instanceof Error ? err.message : "Duplicate reference" },
@@ -266,30 +431,73 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       throw err;
     }
 
-    // Update the record with the Cin7 ID
-    await prisma.orderOperationalData.update({
+    // Update the per-line record with the Cin7 ID. Keep the legacy order-level
+    // field only as a first-valid-link fallback; never overwrite an existing real
+    // order SO with a different line's SO ID.
+    const orderRow = await prisma.orderOperationalData.findUnique({
       where: { shop_orderId: { shop, orderId: orderIdStr } },
-      data: { cin7SalesOrderId: String(result.id), cin7StatusCheckedAt: null },
+      select: { cin7SalesOrderId: true },
     });
+    const currentOrderLink = String(orderRow?.cin7SalesOrderId ?? "").trim();
+    if (!currentOrderLink || currentOrderLink === "pending" || currentOrderLink === "duplicate") {
+      await prisma.orderOperationalData.upsert({
+        where: { shop_orderId: { shop, orderId: orderIdStr } },
+        create: { shop, orderId: orderIdStr, cin7SalesOrderId: String(result.id), cin7StatusCheckedAt: null },
+        update: { cin7SalesOrderId: String(result.id), cin7StatusCheckedAt: null },
+      });
+    }
+
+    if (normalizedVariantId) {
+      await prisma.orderLineItemOperationalData.upsert({
+        where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
+        create: {
+          shop,
+          orderId: orderIdStr,
+          variantId: normalizedVariantId,
+          productTitle: targetLineItems[0]?.name ?? "",
+          carrier,
+          cin7SalesOrderId: String(result.id),
+          cin7SalesOrderCode: String(result.code ?? ""),
+          cin7SalesOrderRef: cin7Reference,
+        },
+        update: {
+          cin7SalesOrderId: String(result.id),
+          cin7SalesOrderCode: String(result.code ?? ""),
+          cin7SalesOrderRef: cin7Reference,
+          productTitle: targetLineItems[0]?.name ?? "",
+          carrier,
+        },
+      });
+    }
 
     console.log(`[Cin7][API][${orderIdStr}] SUCCESS - id=${result.id}, code=${result.code}`);
 
-    // Record whatever was actually paid on the Shopify order (not the full
-    // total) so Cin7's Total Paid / Total Owing shows the real 0–100% range.
+    // Match the cron job payment logic exactly: compute the paid ratio from the
+    // Shopify order and apply it to the created Cin7 SO total, never the full
+    // order total for a single line item.
     const totalPrice = Number(orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
     const totalOutstanding = Number(orderData.totalOutstandingSet?.presentmentMoney?.amount ?? 0);
     const paidAmount = Math.max(totalPrice - totalOutstanding, 0);
+    const paidRatio = totalPrice > 0 ? Math.min(Math.max(paidAmount / totalPrice, 0), 1) : 0;
 
-    if (paidAmount > 0) {
-      const paymentResult = await createCin7Payment({
-        orderId: Number(result.id),
-        amount: paidAmount,
-        comments: `Auto-paid from Shopify order ${orderData.name ?? orderIdStr}`,
-      });
-      if (!paymentResult.ok) {
-        console.error(`[Cin7][API][${orderIdStr}] Payment creation failed:`, paymentResult.error);
+    if (paidRatio > 0) {
+      const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
+      const lineTotalInclTax = cin7Total ?? totalPrice;
+      const paymentAmount = Math.round(Number(lineTotalInclTax) * paidRatio * 100) / 100;
+
+      if (paymentAmount > 0) {
+        const paymentResult = await createCin7Payment({
+          orderId: Number(result.id),
+          amount: paymentAmount,
+          comments: `Auto-paid from Shopify order ${orderData.name ?? orderIdStr}`,
+        });
+        if (!paymentResult.ok) {
+          console.error(`[Cin7][API][${orderIdStr}] Payment creation failed:`, paymentResult.error);
+        } else {
+          console.log(`[Cin7][API][${orderIdStr}] Payment created — id=${paymentResult.id}, amount=${paymentAmount} of ${lineTotalInclTax} (paidRatio=${paidRatio})`);
+        }
       } else {
-        console.log(`[Cin7][API][${orderIdStr}] Payment created — id=${paymentResult.id}, amount=${paidAmount} of ${totalPrice}`);
+        console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (paidRatio=${paidRatio})`);
       }
     } else {
       console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (outstanding=${totalOutstanding})`);

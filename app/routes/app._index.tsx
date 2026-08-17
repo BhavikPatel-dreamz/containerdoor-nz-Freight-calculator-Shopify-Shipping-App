@@ -155,14 +155,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
-      ops."customerStatus", ops."carrier" AS ops_carrier, ops."carrierColor" AS ops_carrier_color, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
-      ops."warehouseStatus", ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
+       ops."customerStatus", ops."customerStatusColor" AS ops_customer_status_color, ops."carrier" AS ops_carrier, ops."carrierColor" AS ops_carrier_color, ops."paymentStatus" AS ops_payment_status, ops."paymentStatusColor" AS ops_payment_status_color, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
+      ops."warehouseStatus", ops."warehouseStatusColor" AS ops_warehouse_status_color, ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
       ops."depotAddress1", ops."depotCity", ops."depotZip",
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
       snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code,
-      occ."distinct_carrier_count" AS distinct_carrier_count
+      occ."distinct_carrier_count" AS distinct_carrier_count,
+      COUNT(*) OVER (PARTITION BY idx."orderId") AS order_line_count
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -181,10 +182,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const variantId = String(r.variantId);
     const lineCin7 = String(r.ops_cin7 || "").trim();
     const orderCin7 = String(r.ood_cin7 || "").trim();
-    const cin7Exists = Boolean(
-      (lineCin7 && lineCin7 !== "pending" && lineCin7 !== "duplicate") ||
-        (orderCin7 && orderCin7 !== "pending" && orderCin7 !== "duplicate"),
-    );
+    const orderLineCount = Number(r.order_line_count ?? 1);
+    const cin7Exists = Boolean(lineCin7 && lineCin7 !== "pending" && lineCin7 !== "duplicate") || (Boolean(orderCin7 && orderCin7 !== "pending" && orderCin7 !== "duplicate") && orderLineCount <= 1);
     const item = {
       id: `${r.orderId}-${variantId}`,
       lineIndexId: String(r.line_index_id || ""),
@@ -201,7 +200,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       amount: Number(r.amount ?? 0),
       letterSuffix: r.letterSuffix || "",
       customerStatus: r.customerStatus ?? "",
-      paymentStatus: normalizePaymentStatus(r.financialStatus),
+      customerStatusColor: r.ops_customer_status_color || "",
+      paymentStatus: (r.ops_payment_status && String(r.ops_payment_status).trim()) || normalizePaymentStatus(r.financialStatus),
+      paymentStatusColor: r.ops_payment_status_color || "",
       trackingNumber: r.trackingNumber ?? "",
       freightRef: r.freightRef ?? "",
       eddDate: r.eddDate ?? "",
@@ -220,6 +221,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",
+      warehouseStatusColor: r.ops_warehouse_status_color || "",
       dispatchStatus: r.dispatchStatus ?? "",
       deliveryStatus: r.deliveryStatus ?? "",
       depositPaid: r.depositPaid ?? "",

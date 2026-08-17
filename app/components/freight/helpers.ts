@@ -43,7 +43,10 @@ export function getPaymentStatusStyle(status: string, colorHex?: string): { bg: 
 }
 
 
-export function getWarehouseStatusStyle(status: string): { bg: string; text: string; label: string } {
+export function getWarehouseStatusStyle(status: string, colorHex?: string): { bg: string; text: string; label: string } {
+  if (colorHex && colorHex.trim()) {
+    return { bg: colorHex.trim(), text: "#ffffff", label: status || "—" };
+  }
   switch ((status || "").toLowerCase()) {
     case "received": return { bg: "#33d391", text: "#ffffff", label: "Received" };
     case "not received": return { bg: "#fdbc64", text: "#ffffff", label: "Not received" };

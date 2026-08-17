@@ -657,7 +657,11 @@ export function resolveMondayCustomerStatusLabel(raw: string): string | null {
   return resolveMappedLabel(String(raw || ""), statusLabelMap);
 }
 
-let columnColorCache: Record<string, { map: Record<string, string>; fetchedAt: number }> = {};
+export function resolveMondayWarehouseStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), warehouseStatusLabelMap);
+}
+
+const columnColorCache: Record<string, { map: Record<string, string>; fetchedAt: number }> = {};
 /** Cache TTL — short enough that a color change in Monday's column settings
  *  is picked up quickly, long enough to avoid hammering the API on busy syncs. */
 const COLUMN_COLOR_CACHE_TTL_MS = 60_000;
@@ -699,7 +703,7 @@ async function getColumnColorMap(
  *  Pass `forceRefresh=true` to bypass the short-lived cache (e.g. inbound
  *  webhook processing, where staleness would silently keep the wrong color). */
 export async function resolveMondayStatusColor(
-  columnKey: "carriers" | "customerStatus" | "paymentStatus",
+  columnKey: "carriers" | "customerStatus" | "paymentStatus" | "warehouseStatus",
   label: string | null,
   forceRefresh = false,
 ): Promise<string> {

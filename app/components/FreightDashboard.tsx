@@ -424,11 +424,32 @@ export default function FreightDashboard({
           return { ...o, lineItems: o.lineItems.map((li) => {
             const match = updates.find((u: any) => u.variantId === li.variantId);
             if (!match) return li;
-            return { ...li, eddDate: match.eddDate || li.eddDate, originalEddDate: match.originalEddDate || li.originalEddDate, trackingNumber: match.trackingNumber || li.trackingNumber, freightRef: match.freightRef || li.freightRef, customerStatus: match.customerStatus || li.customerStatus, company: match.carrier || li.company, carrierColor: match.carrierColor || li.carrierColor, customerStatusColor: match.customerStatusColor || li.customerStatusColor, paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor };
+            return {
+              ...li,
+              eddDate: match.eddDate || li.eddDate,
+              originalEddDate: match.originalEddDate || li.originalEddDate,
+              trackingNumber: match.trackingNumber || li.trackingNumber,
+              freightRef: match.freightRef || li.freightRef,
+              customerStatus: match.customerStatus || li.customerStatus,
+              company: match.carrier || li.company,
+              carrierColor: match.carrierColor || li.carrierColor,
+              customerStatusColor: match.customerStatusColor || li.customerStatusColor,
+              paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor,
+              // Update warehouse text AND color so badge updates immediately
+              warehouseStatus: match.warehouseStatus || li.warehouseStatus,
+              warehouseStatusColor: match.warehouseStatusColor || li.warehouseStatusColor,
+            };
           }) };
         };
         setRows((prev) => prev.map(applyLatest));
         if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+        // Also update open detail view (if any) so the detail badge text updates live
+        setDetailView((prev) => {
+          if (!prev) return prev;
+          const updatedOrder = applyLatest(prev.order);
+          const updatedItem = updatedOrder.lineItems.find((li) => li.variantId === prev.item.variantId) ?? prev.item;
+          return { ...prev, order: updatedOrder, item: updatedItem };
+        });
       } catch (e) { console.error("Failed to poll line item field updates", e); }
     };
     const interval = setInterval(pollFieldUpdates, 15000);
@@ -986,19 +1007,30 @@ export default function FreightDashboard({
     await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
   };
 
-  const handleCreateCin7Order = async (order: FreightOrderRow) => {
+  const handleCreateCin7Order = async (order: FreightOrderRow, item?: FreightLineItem) => {
     if (creatingCin7OrderId) return; setCreatingCin7OrderId(order.id);
     try {
-      const response = await fetch("/api/cin7-create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId }) });
+      const response = await fetch("/api/cin7-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: order.shopifyOrderId,
+          variantId: item?.variantId ?? undefined,
+        }),
+      });
       if (!response.ok) { const errorJson = await response.json().catch(() => null); throw new Error(errorJson?.error || `Failed to create Cin7 order (${response.status})`); }
       const payload = await response.json();
       if (!payload.ok) throw new Error(payload.error || "Failed to create Cin7 order");
       const cin7Exists = Boolean(payload.cin7SalesOrderId && payload.cin7SalesOrderId !== "pending");
       const cin7SalesOrderUrl = String(payload.cin7SalesOrderUrl ?? "");
-      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })) };
+      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => {
+        const matchesTarget = item ? li.variantId === item.variantId : true;
+        return matchesTarget ? { ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] } : li;
+      }) };
       setRows((prevRows = []) => prevRows.map(applyCin7));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7) : prev);
-      if (detailView?.order.id === order.id) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
+      if (detailView?.order.id === order.id && item && detailView.item.variantId === item.variantId) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
       setSyncNotification("Cin7 order created successfully");
     } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to create Cin7 order"); } finally { setCreatingCin7OrderId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
   };

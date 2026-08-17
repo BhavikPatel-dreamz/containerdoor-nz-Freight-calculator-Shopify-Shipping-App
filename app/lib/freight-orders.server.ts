@@ -160,6 +160,7 @@ export function buildRowFromSnapshot(
     // Prefer per-line Cin7 link; fall back to legacy order-level SO id (same as list loader).
     const lineCin7Id = String(ops?.cin7SalesOrderId ?? "").trim();
     const orderCin7Id = String(orderCin7IdMap?.get(String(snap.orderId)) ?? "").trim();
+    const legacyOrderFallbackAllowed = Boolean(orderCin7Id) && itemSnaps.length <= 1;
     const resolvedCin7Id =
       lineCin7Id && !["", "pending", "duplicate"].includes(lineCin7Id) ? lineCin7Id : orderCin7Id;
     return {
@@ -187,6 +188,7 @@ export function buildRowFromSnapshot(
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
       warehouseStatus: ops?.warehouseStatus ?? "",
+      warehouseStatusColor: ops?.warehouseStatusColor ?? "",
       dispatchStatus: ops?.dispatchStatus ?? "",
       deliveryStatus: ops?.deliveryStatus ?? "",
       depositPaid: ops?.depositPaid ?? "",
@@ -201,10 +203,12 @@ export function buildRowFromSnapshot(
       cin7SalesOrderId: resolvedCin7Id,
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(resolvedCin7Id) ?? "",
       poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
-      // Prefer per-line Cin7 link; fall back to legacy order-level SO
+      // The tick is per-line, not per-order. We still retain the legacy
+      // order-level SO as a fallback for single-line historical orders, but
+      // multi-line orders must not inherit the first line's SO state.
       cin7Exists:
         Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
-        (orderCin7Map?.get(snap.orderId) ?? false),
+        (legacyOrderFallbackAllowed),
       cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
         ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
         : undefined,

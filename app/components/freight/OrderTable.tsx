@@ -18,7 +18,7 @@ type OrderTableProps = {
   onOpenTracking: (order: FreightOrderRow, item: FreightLineItem) => void;
   onFixCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   onSyncMonday: (order: FreightOrderRow, item: FreightLineItem) => void;
-  onCreateCin7: (order: FreightOrderRow) => void;
+  onCreateCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   cin7FixingId: string | null;
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
@@ -52,9 +52,9 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line #</th><th>Customer</th><th>Product</th><th style={{ width: "44px" }}>Qty</th>
-            {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th style={{ textAlign: "center" }}>EDD</th>
+            <th style={{ textAlign: "center", width: "80px" }}>Line #</th><th>Customer</th><th >Product</th><th style={{ width: "34px" }}>Qty</th>
+            {!hiddenColumns.has("supplier") && <th style={{ textAlign: "center", width: "100px" }} >Supplier</th>}
+            <th style={{ textAlign: "center", width: "80px" }}>EDD</th>
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse." style={{textAlign: "center" , width: "130px"}}>Customer status</th>
             {!hiddenColumns.has("warehouse") && <th style={{ textAlign: "center" }}>Warehouse</th>}
             {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" }}>Payment</th>}
@@ -154,7 +154,7 @@ export function OrderTable({
                   {!hiddenColumns.has("warehouse") && (
                     <td className="fo-td" style={{ textAlign: "center", width: "50px" }}>
                       {(() => {
-                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "");
+                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "", item.warehouseStatusColor);
                         return (
                           <span className="fo-cust-status" style={{ background: whBg, color: whText }}>
                             {whLabel || "—"}
@@ -271,7 +271,7 @@ export function OrderTable({
                               type="button"
                               className="fo-sync-pill red"
                               title="Create order in Cin7"
-                              onClick={() => onCreateCin7(order)}
+                              onClick={() => onCreateCin7(order, item)}
                               disabled={creatingCin7OrderId === order.id}
                               style={{ cursor: creatingCin7OrderId === order.id ? "wait" : "pointer" }}
                             >

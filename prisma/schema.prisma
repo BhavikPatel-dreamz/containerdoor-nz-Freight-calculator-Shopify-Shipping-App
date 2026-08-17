@@ -184,6 +184,7 @@ model OrderLineItemOperationalData {
   customerStatusUpdatedAt DateTime?   // NEW
   paymentStatus     String   @default("")
   paymentStatusColor String  @default("")
+  warehouseStatusColor String @default("")
   warehouseStatus   String   @default("")
   warehouseTags     String   @default("")
   dispatchStatus    String   @default("")
