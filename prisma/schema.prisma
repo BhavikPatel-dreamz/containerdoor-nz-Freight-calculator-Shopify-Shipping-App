@@ -290,6 +290,35 @@ model OrderLineItemIndex {
   @@index([shop, createdAt])
 }
 
+enum ShopifyWebhookJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ShopifyWebhookJob {
+  id            String                  @id @default(cuid())
+  shop          String
+  eventTopic    String                  @default("")
+  webhookId     String                  @default("")
+  orderId       String                  @default("")
+  payload       Json
+  status        ShopifyWebhookJobStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  maxAttempts   Int                     @default(5)
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  lastAttemptAt DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([shop, webhookId])
+  @@index([shop, status, createdAt(sort: Asc)])
+  @@index([status, createdAt(sort: Asc)])
+}
+
 model ExternalUser {
   id            String            @id @default(cuid())
   shop          String
