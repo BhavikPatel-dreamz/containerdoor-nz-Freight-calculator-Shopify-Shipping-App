@@ -112,19 +112,38 @@ export async function enqueueOrderWebhookJob(
     // swallow any logging error
   }
 
-  return prisma.shopifyWebhookJob.create({
-    data: {
-      shop,
-      eventTopic: topic,
-      webhookId,
-      orderId: String(order.id ?? ""),
-      payload: order as unknown as Prisma.InputJsonValue,
-      status: "PENDING",
-      attempts: 0,
-      maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
-      error: null,
-    },
-  });
+  try {
+    return await prisma.shopifyWebhookJob.upsert({
+      where: { shop_webhookId: { shop, webhookId } },
+      update: {
+        payload: order as unknown as Prisma.InputJsonValue,
+        eventTopic: topic,
+        orderId: String(order.id ?? ""),
+        status: "PENDING",
+        attempts: 0,
+        maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
+        error: null,
+      },
+      create: {
+        shop,
+        eventTopic: topic,
+        webhookId,
+        orderId: String(order.id ?? ""),
+        payload: order as unknown as Prisma.InputJsonValue,
+        status: "PENDING",
+        attempts: 0,
+        maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
+        error: null,
+      },
+    });
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      return prisma.shopifyWebhookJob.findUnique({
+        where: { shop_webhookId: { shop, webhookId } },
+      });
+    }
+    throw error;
+  }
 }
 
 /**

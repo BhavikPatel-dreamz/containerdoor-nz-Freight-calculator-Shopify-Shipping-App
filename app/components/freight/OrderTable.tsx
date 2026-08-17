@@ -18,7 +18,7 @@ type OrderTableProps = {
   onOpenTracking: (order: FreightOrderRow, item: FreightLineItem) => void;
   onFixCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   onSyncMonday: (order: FreightOrderRow, item: FreightLineItem) => void;
-  onCreateCin7: (order: FreightOrderRow) => void;
+  onCreateCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   cin7FixingId: string | null;
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
@@ -271,7 +271,7 @@ export function OrderTable({
                               type="button"
                               className="fo-sync-pill red"
                               title="Create order in Cin7"
-                              onClick={() => onCreateCin7(order)}
+                              onClick={() => onCreateCin7(order, item)}
                               disabled={creatingCin7OrderId === order.id}
                               style={{ cursor: creatingCin7OrderId === order.id ? "wait" : "pointer" }}
                             >

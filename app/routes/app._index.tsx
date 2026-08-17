@@ -162,7 +162,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       ops."cin7SalesOrderId" AS ops_cin7, ops."cin7CachedStatus", ops."cin7CachedMismatches", ops."mondayCachedStatus", ops."mondayCachedMismatches",
       ood."cin7SalesOrderId" AS ood_cin7, ood."poNumber" AS ood_po,
       snap."id" AS snapshot_id, snap."shippingCode" AS snapshot_shipping_code,
-      occ."distinct_carrier_count" AS distinct_carrier_count
+      occ."distinct_carrier_count" AS distinct_carrier_count,
+      COUNT(*) OVER (PARTITION BY idx."orderId") AS order_line_count
     FROM "OrderLineItemIndex" idx
     LEFT JOIN "OrderLineItemOperationalData" ops
       ON idx."shop" = ops."shop" AND idx."orderId" = ops."orderId" AND idx."variantId" = ops."variantId"
@@ -181,10 +182,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const variantId = String(r.variantId);
     const lineCin7 = String(r.ops_cin7 || "").trim();
     const orderCin7 = String(r.ood_cin7 || "").trim();
-    const cin7Exists = Boolean(
-      (lineCin7 && lineCin7 !== "pending" && lineCin7 !== "duplicate") ||
-        (orderCin7 && orderCin7 !== "pending" && orderCin7 !== "duplicate"),
-    );
+    const orderLineCount = Number(r.order_line_count ?? 1);
+    const cin7Exists = Boolean(lineCin7 && lineCin7 !== "pending" && lineCin7 !== "duplicate") || (Boolean(orderCin7 && orderCin7 !== "pending" && orderCin7 !== "duplicate") && orderLineCount <= 1);
     const item = {
       id: `${r.orderId}-${variantId}`,
       lineIndexId: String(r.line_index_id || ""),
@@ -222,7 +221,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       cin7SalesOrderId: lineCin7 || "",
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(lineCin7 || orderCin7) || "",
       warehouseStatus: r.warehouseStatus ?? "",
-      	warehouseStatusColor: r.ops_warehouse_status_color || "",
+      warehouseStatusColor: r.ops_warehouse_status_color || "",
       dispatchStatus: r.dispatchStatus ?? "",
       deliveryStatus: r.deliveryStatus ?? "",
       depositPaid: r.depositPaid ?? "",

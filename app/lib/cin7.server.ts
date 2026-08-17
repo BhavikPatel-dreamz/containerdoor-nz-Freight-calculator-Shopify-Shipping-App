@@ -262,9 +262,39 @@ export type Cin7OrderSnapshot = {
   lineItems: { code: string; qty: number }[];
 };
 
+export async function findCin7SalesOrderByReference(reference: string): Promise<{ id: string; code?: string } | null> {
+  const ref = String(reference ?? "").trim();
+  if (!ref || ref === "pending" || ref === "duplicate" || !CIN7_API_URL) return null;
+
+  try {
+    const url = getCin7UpdateUrl();
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrders list failed (${res.status}) for reference=${ref}`);
+      return null;
+    }
+
+    const json: any = await res.json();
+    const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.items) ? json.items : [];
+    const matched = rows.find((row: any) => String(row?.reference ?? row?.Reference ?? "").trim() === ref);
+    if (!matched) return null;
+
+    return {
+      id: String(matched.id ?? matched.Id ?? ""),
+      code: String(matched.code ?? matched.Code ?? ""),
+    };
+  } catch (error) {
+    debug("Cin7", "GET SalesOrders list by reference failed:", error);
+    return null;
+  }
+}
+
 export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7OrderSnapshot | null> {
   const id = salesOrderId?.trim();
-  if (!id || id === "pending" || !CIN7_API_URL) return null;
+  if (!id || ["pending", "duplicate"].includes(id) || !CIN7_API_URL) return null;
 
   try {
     const url = getCin7OrderUrl(id);
