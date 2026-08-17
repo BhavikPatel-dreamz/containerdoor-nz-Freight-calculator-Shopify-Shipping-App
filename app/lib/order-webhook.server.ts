@@ -1,15 +1,19 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
+import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
+import { reindexOrderById } from "./line-index.server";
 import {
   buildCin7CustomerOrderNo,
   buildCin7SalesOrderReference,
   getCin7SoStrategy,
   isLinkedCin7Id,
   saveCin7LineLink,
+  resolveCin7SalesOrderId,
 } from "./cin7-adapter.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
@@ -33,6 +37,7 @@ export type OrderPayload = {
     zip?: string;
     province?: string;
     address1?: string;
+    address2?: string;
     country?: string;
     country_code?: string;
     phone?: string;
@@ -43,6 +48,7 @@ export type OrderPayload = {
     last_name?: string;
     company?: string;
     address1?: string;
+    address2?: string;
     city?: string;
     province?: string;
     zip?: string;
@@ -80,6 +86,289 @@ export type OrderPayload = {
 };
 
 // ─── Address helpers ─────────────────────────────────────────────────────────
+
+export async function enqueueOrderWebhookJob(
+  shop: string,
+  topic: string,
+  webhookId: string,
+  order: OrderPayload,
+) {
+  const existing = await prisma.shopifyWebhookJob.findUnique({
+    where: { shop_webhookId: { shop, webhookId } },
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  // Diagnostic: record key payment-related fields at enqueue time so we can
+  // compare against what the worker later reads. Remove these logs after
+  // diagnosis. Do NOT log customer-sensitive fields.
+  try {
+    console.log(
+      `[WebhookEnqueue] shop=${shop} webhookId=${webhookId} orderId=${String(order.id ?? "")} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")}`,
+    );
+  } catch (e) {
+    // swallow any logging error
+  }
+
+  return prisma.shopifyWebhookJob.create({
+    data: {
+      shop,
+      eventTopic: topic,
+      webhookId,
+      orderId: String(order.id ?? ""),
+      payload: order as unknown as Prisma.InputJsonValue,
+      status: "PENDING",
+      attempts: 0,
+      maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
+      error: null,
+    },
+  });
+}
+
+/**
+ * Attempt payments for an existing order only (payment-only flow).
+ * Idempotent per operational line using `OrderLineItemOperationalData.paymentStatus`.
+ */
+export async function attemptCreatePaymentsForOrder(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  // If the webhook payload is partial (some shops send minimal update payloads),
+  // fall back to the most recent saved OrderSnapshot so payment detection can
+  // use consistent fields. Do not change business rules here — snapshot is
+  // only used as a best-effort supplement when fields are missing.
+  if (!((order as any).financial_status) || ((order as any).current_total_price === undefined && (order as any).total_price === undefined)) {
+    try {
+      const snap = await prisma.orderSnapshot.findUnique({ where: { shop_orderId: { shop, orderId } } });
+      if (snap) {
+        // Merge snapshot fields into webhook payload for ratio calculation only
+        (order as any).financial_status = (order as any).financial_status || String(snap.financialStatus || "");
+        (order as any).current_total_price = (order as any).current_total_price ?? String(snap.totalPrice ?? "0");
+        (order as any).total_price = (order as any).total_price ?? String(snap.totalPrice ?? "0");
+        (order as any).current_subtotal_price = (order as any).current_subtotal_price ?? String(snap.totalPrice ?? "0");
+        (order as any).subtotal_price = (order as any).subtotal_price ?? String(snap.totalPrice ?? "0");
+        console.log(`[Cin7PaymentRetry] orderId=${orderId} using saved OrderSnapshot for missing webhook fields financial_status=${String((order as any).financial_status)} current_total_price=${String((order as any).current_total_price)}`);
+      }
+    } catch (e) {
+      console.error(`[Cin7PaymentRetry] failed to read OrderSnapshot for order ${orderId}:`, e);
+    }
+  }
+
+  const paidRatio = resolveOrderPaidRatio(order);
+  // Diagnostic log for payment retry attempts
+  try {
+    console.log(
+      `[Cin7PaymentRetry] orderId=${orderId} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")} paidRatio=${paidRatio}`,
+    );
+  } catch (e) {}
+
+  if (!orderId || paidRatio <= 0) {
+    console.log(`[Cin7Payment] Order ${orderId} not paid yet; payment deferred`);
+    return;
+  }
+
+  const opsRows = await prisma.orderLineItemOperationalData.findMany({
+    where: { shop, orderId },
+  });
+
+  for (const ops of opsRows) {
+    let soId = String(ops.cin7SalesOrderId || "");
+    // If the operational line isn't linked, attempt to resolve via adapter
+    if (!isLinkedCin7Id(soId)) {
+      try {
+        const resolved = await resolveCin7SalesOrderId({ shop, orderId, variantId: ops.variantId });
+        if (resolved.salesOrderId) {
+          soId = resolved.salesOrderId;
+          console.log(`[Cin7PaymentRetry] found existing Cin7 SalesOrder id=${soId} source=${resolved.source}`);
+          // Mirror link back onto the ops row so future retries are faster
+          await prisma.orderLineItemOperationalData.update({ where: { id: ops.id }, data: { cin7SalesOrderId: soId } }).catch(() => {});
+        }
+      } catch (e) {
+        console.error(`[Cin7PaymentRetry] error resolving Cin7 SO for order ${orderId} variant ${ops.variantId}:`, e);
+      }
+    }
+
+    if (!isLinkedCin7Id(soId)) {
+      console.log(`[Cin7PaymentRetry] orderId=${orderId} variant=${ops.variantId} no linked Cin7 SO found; skipping`);
+      continue;
+    }
+    if (String(ops.paymentStatus || "").toLowerCase() === "paid") {
+      console.log(`[Cin7Payment] Payment already exists for order ${orderId} variant ${ops.variantId}; skipping`);
+      continue;
+    }
+
+    try {
+      const cin7Total = await fetchCin7SalesOrderTotal(soId);
+      if (!cin7Total || Number(cin7Total) <= 0) {
+        console.log(`[Cin7Payment] Cin7 total not available for SO ${soId}; skipping`);
+        continue;
+      }
+
+      const linePaidAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
+      console.log(`[Cin7PaymentRetry] orderId=${orderId} variant=${ops.variantId} calculated payment amount=${linePaidAmount} using cin7Total=${cin7Total} paidRatio=${paidRatio}`);
+      if (linePaidAmount <= 0) {
+        console.log(`[Cin7Payment] Order ${orderId} variant ${ops.variantId} nothing to pay; deferred`);
+        continue;
+      }
+
+      console.log(`[Cin7PaymentRetry] creating payment for order ${orderId} variant ${ops.variantId} SO ${soId} amount=${linePaidAmount}`);
+      const paymentResult = await createCin7Payment({
+        orderId: Number(soId),
+        amount: linePaidAmount,
+        comments: `Auto-paid from Shopify order ${order.name ?? orderId} variant ${ops.variantId}`,
+      });
+
+      if (paymentResult.ok) {
+        console.log(`[Cin7Payment] Payment created for order ${orderId} variant ${ops.variantId} SO ${soId}`);
+        try {
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { paymentStatus: "paid" },
+          });
+        } catch (e) {
+          console.error(`[Cin7Payment] Failed to mark ops paid for order ${orderId} variant ${ops.variantId}`, e);
+        }
+      } else {
+        console.error(`[Cin7Payment] Payment creation failed for order ${orderId} SO ${soId}:`, paymentResult.error);
+      }
+    } catch (e) {
+      console.error(`[Cin7Payment] Error processing payment for order ${orderId} variant ${ops.variantId}:`, e);
+    }
+  }
+}
+
+export async function processQueuedOrderWebhookJobs(limit = 10) {
+  console.log("[WebhookWorker] started");
+  const jobs = await prisma.shopifyWebhookJob.findMany({
+    where: { status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  console.log(`[WebhookWorker] found ${jobs.length} pending jobs`);
+
+  const results = [] as Array<{ ok: boolean; jobId?: string; retry?: boolean; error?: string }>;
+
+  for (const job of jobs) {
+    console.log(`[WebhookWorker] processing job ${job.id} webhookId=${job.webhookId}`);
+    const result = await processQueuedOrderWebhookJob(job);
+    results.push(result);
+    if (result.ok) console.log(`[WebhookWorker] completed job ${job.id}`);
+    else console.warn(`[WebhookWorker] failed job ${job.id} error=${result.error} retry=${String(result.retry)}`);
+  }
+
+  return {
+    ok: true,
+    processed: results.filter((result) => result.ok).length,
+    queued: jobs.length,
+    results,
+  };
+}
+
+async function processQueuedOrderWebhookJob(job: any) {
+  const nextAttempt = job.attempts + 1;
+  const maxAttempts = job.maxAttempts || Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5");
+
+  // Attempt an atomic claim: only proceed if we can flip status from PENDING -> PROCESSING
+  const claimed = await prisma.shopifyWebhookJob.updateMany({
+    where: { id: job.id, status: "PENDING" },
+    data: {
+      status: "PROCESSING",
+      attempts: nextAttempt,
+      startedAt: new Date(),
+      completedAt: null,
+      lastAttemptAt: new Date(),
+      error: null,
+    },
+  });
+
+  if (claimed.count === 0) {
+    // Someone else claimed or the job is not pending anymore — skip safely.
+    console.log(`[WebhookWorker] job ${job.id} already claimed or not pending, skipping`);
+    return { ok: false, jobId: job.id, retry: true, error: "already claimed" };
+  }
+
+  try {
+    const order = job.payload as OrderPayload;
+    const { admin } = await unauthenticated.admin(job.shop);
+
+    // Diagnostic: log the payload fields read by the worker for comparison
+    try {
+      console.log(
+        `[WebhookWorkerRead] job=${job.id} webhookId=${String(job.webhookId ?? "")} orderId=${String(order.id ?? "")} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")}`,
+      );
+    } catch (e) {
+      // swallow logging errors
+    }
+
+    // Persist snapshot + line-items + freight + Monday using the original
+    // webhook payload to avoid changing the webhook flow semantics.
+    await saveOrderSnapshot(job.shop, order);
+    await reindexOrderById(job.shop, String(order.id ?? job.orderId));
+    await createOrderLineItemRecords(job.shop, order);
+    await writeFreightMetafield(admin, order);
+    await createMondayEntriesForOrder(job.shop, order);
+
+    await createCin7EntryForOrder(job.shop, order);
+
+    const targets = [
+      {
+        name: "Monday",
+        url: process.env.MONDAY_SYNC_URL,
+        token: process.env.MONDAY_SYNC_TOKEN,
+      },
+    ];
+
+    const syncPayload = buildOrderSyncPayload(job.shop, order);
+    await Promise.all(
+      targets.map(async (target) => {
+        if (!target.url) return;
+        try {
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (target.token) {
+            headers.Authorization = `Bearer ${target.token}`;
+          }
+          const response = await fetch(target.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(syncPayload),
+          });
+          if (!response.ok) {
+            console.error(`Order sync failed for ${target.name}: ${response.status}`);
+          }
+        } catch (error) {
+          console.error(`Order sync request failed for ${target.name}`, error);
+        }
+      }),
+    );
+
+    await prisma.shopifyWebhookJob.update({
+      where: { id: job.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        error: null,
+      },
+    });
+
+    return { ok: true, jobId: job.id };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldRetry = nextAttempt < maxAttempts;
+
+    await prisma.shopifyWebhookJob.update({
+      where: { id: job.id },
+      data: {
+        status: shouldRetry ? "PENDING" : "FAILED",
+        error: message,
+        completedAt: shouldRetry ? null : new Date(),
+        lastAttemptAt: new Date(),
+      },
+    });
+
+    console.error(`[WebhookWorker] job ${job.id} error: ${message}`);
+    return { ok: false, jobId: job.id, retry: shouldRetry, error: message };
+  }
+}
 
 export function getShippingAddress(order: OrderPayload) {
   return order.shipping_address ?? {};
@@ -121,7 +410,7 @@ export function extractCarrierFromOrder(order: OrderPayload): string {
 function resolveOrderPaidRatio(order: OrderPayload): number {
   const status = String((order as any).financial_status ?? "").toLowerCase();
   if (status === "paid") return 1;
-  if (status === "partially_paid") {
+  if (status === "partially_paid" || status === "authorized") {
     const total = Number(order.total_price ?? 0);
     const current = Number(order.current_total_price ?? total);
     if (total > 0) return Math.min(Math.max(current / total, 0), 1);
@@ -672,6 +961,15 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload) {
             console.log(
               `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment OK id=${paymentResult.id} amount=${linePaidAmount}`,
             );
+            // Mark operational line as paid to avoid duplicate payments later
+            try {
+              await prisma.orderLineItemOperationalData.update({
+                where: { id: ops.id },
+                data: { paymentStatus: "paid" },
+              });
+            } catch (e) {
+              console.error(`[Cin7][Webhook][${orderId}] Failed to mark ops paid for variant ${li.variantId}`, e);
+            }
           }
         } else {
           console.log(

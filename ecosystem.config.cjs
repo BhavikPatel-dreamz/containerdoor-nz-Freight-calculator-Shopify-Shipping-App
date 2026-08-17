@@ -64,5 +64,20 @@ module.exports = {
         EMAIL_CRON_INTERVAL_MS: "60000",
       },
     },
+    {
+      name: "oms-order-webhook-cron",
+      cwd: __dirname,
+      script: "scripts/order-webhook-cron.mjs",
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "150M",
+      env: {
+        NODE_ENV: "production",
+        ORDER_WEBHOOK_CRON_APP_URL: "http://127.0.0.1:3000",
+        ORDER_WEBHOOK_CRON_INTERVAL_MS: "30000",
+      },
+    },
   ],
 };
