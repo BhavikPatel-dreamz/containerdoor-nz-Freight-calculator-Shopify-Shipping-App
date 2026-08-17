@@ -85,8 +85,8 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row">
           <span className="fo-detail-label">Warehouse status</span>
           <span className="fo-detail-value">
-            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getWarehouseStatusStyle(item.warehouseStatus || "").bg, color: getWarehouseStatusStyle(item.warehouseStatus || "").text }}>
-              {getWarehouseStatusStyle(item.warehouseStatus || "").label || "—"}
+            <span style={{ padding: "2px 10px", borderRadius: "9px", fontSize: "11px", fontWeight: 600, background: getWarehouseStatusStyle(item.warehouseStatus || "", item.warehouseStatusColor).bg, color: getWarehouseStatusStyle(item.warehouseStatus || "", item.warehouseStatusColor).text }}>
+              {getWarehouseStatusStyle(item.warehouseStatus || "", item.warehouseStatusColor).label || "—"}
             </span>
           </span>
         </div>

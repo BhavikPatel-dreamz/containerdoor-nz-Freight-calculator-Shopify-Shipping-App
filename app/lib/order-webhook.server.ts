@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayStatusColor } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -1248,10 +1248,14 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
       const payLabelUsed = mondayRowForColor
         ? resolveMondayPaymentLabel(mondayRowForColor.paymentStatus)
         : null;
-      const [carrierColor, customerStatusColor, paymentStatusColor] = await Promise.all([
+      const wareLabelUsed = mondayRowForColor
+        ? resolveMondayWarehouseStatusLabel(mondayRowForColor.warehouseStatus)
+        : null;
+      const [carrierColor, customerStatusColor, paymentStatusColor, warehouseStatusColor] = await Promise.all([
         resolveMondayStatusColor("carriers", carrierLabelUsed),
         resolveMondayStatusColor("customerStatus", custLabelUsed),
         resolveMondayStatusColor("paymentStatus", payLabelUsed),
+        resolveMondayStatusColor("warehouseStatus", wareLabelUsed),
       ]);
 
       try {
@@ -1267,6 +1271,7 @@ export async function createMondayEntriesForOrder(shop: string, order: OrderPayl
             ...(carrierColor ? { carrierColor } : {}),
             ...(customerStatusColor ? { customerStatusColor } : {}),
             ...(paymentStatusColor ? { paymentStatusColor } : {}),
+            ...(warehouseStatusColor ? { warehouseStatusColor } : {}),
           },
         });
         createdCount++;

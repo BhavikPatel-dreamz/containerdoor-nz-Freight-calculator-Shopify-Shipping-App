@@ -25,6 +25,7 @@ export type FreightLineItem = {
   eddDate: string;
   originalEddDate: string;
   warehouseStatus?: string;
+  warehouseStatusColor?: string;
   dispatchStatus?: string;
   deliveryStatus?: string;
   depositPaid?: string;

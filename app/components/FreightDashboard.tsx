@@ -424,11 +424,32 @@ export default function FreightDashboard({
           return { ...o, lineItems: o.lineItems.map((li) => {
             const match = updates.find((u: any) => u.variantId === li.variantId);
             if (!match) return li;
-            return { ...li, eddDate: match.eddDate || li.eddDate, originalEddDate: match.originalEddDate || li.originalEddDate, trackingNumber: match.trackingNumber || li.trackingNumber, freightRef: match.freightRef || li.freightRef, customerStatus: match.customerStatus || li.customerStatus, company: match.carrier || li.company, carrierColor: match.carrierColor || li.carrierColor, customerStatusColor: match.customerStatusColor || li.customerStatusColor, paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor };
+            return {
+              ...li,
+              eddDate: match.eddDate || li.eddDate,
+              originalEddDate: match.originalEddDate || li.originalEddDate,
+              trackingNumber: match.trackingNumber || li.trackingNumber,
+              freightRef: match.freightRef || li.freightRef,
+              customerStatus: match.customerStatus || li.customerStatus,
+              company: match.carrier || li.company,
+              carrierColor: match.carrierColor || li.carrierColor,
+              customerStatusColor: match.customerStatusColor || li.customerStatusColor,
+              paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor,
+              // Update warehouse text AND color so badge updates immediately
+              warehouseStatus: match.warehouseStatus || li.warehouseStatus,
+              warehouseStatusColor: match.warehouseStatusColor || li.warehouseStatusColor,
+            };
           }) };
         };
         setRows((prev) => prev.map(applyLatest));
         if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+        // Also update open detail view (if any) so the detail badge text updates live
+        setDetailView((prev) => {
+          if (!prev) return prev;
+          const updatedOrder = applyLatest(prev.order);
+          const updatedItem = updatedOrder.lineItems.find((li) => li.variantId === prev.item.variantId) ?? prev.item;
+          return { ...prev, order: updatedOrder, item: updatedItem };
+        });
       } catch (e) { console.error("Failed to poll line item field updates", e); }
     };
     const interval = setInterval(pollFieldUpdates, 15000);

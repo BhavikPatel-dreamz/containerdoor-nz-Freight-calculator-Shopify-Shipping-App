@@ -182,6 +182,7 @@ export async function action({ request }: ActionFunctionArgs) {
       const currentCarrierColor = String(recordAny?.carrierColor ?? "").trim();
       const currentCustomerStatusColor = String(recordAny?.customerStatusColor ?? "").trim();
       const currentPaymentStatusColor = String(recordAny?.paymentStatusColor ?? "").trim();
+      const currentWarehouseStatusColor = String(recordAny?.warehouseStatusColor ?? "").trim();
 
       if (badgeColorHex && columnTitleLower === "carrier" && badgeColorHex !== currentCarrierColor) {
         updates.carrierColor = badgeColorHex;
@@ -196,6 +197,14 @@ export async function action({ request }: ActionFunctionArgs) {
         if (resolvedCarrierColor && resolvedCarrierColor !== currentCarrierColor) {
           updates.carrierColor = resolvedCarrierColor;
           updates.carrierColorLabel = mondayData.carriers;
+        }
+      }
+      if (badgeColorHex && columnTitleLower === "warehouse status" && badgeColorHex !== currentWarehouseStatusColor) {
+        updates.warehouseStatusColor = badgeColorHex;
+      } else if (mondayData.warehouseStatus) {
+        const resolvedWarehouseColor = await resolveMondayStatusColor("warehouseStatus", mondayData.warehouseStatus, true);
+        if (resolvedWarehouseColor && resolvedWarehouseColor !== currentWarehouseStatusColor) {
+          updates.warehouseStatusColor = resolvedWarehouseColor;
         }
       }
       if (columnTitleLower === "cust. status" && badgeColorHex && badgeColorHex !== currentCustomerStatusColor) {
