@@ -698,6 +698,84 @@ export default function FreightDashboard({
     setBulkActionsOpen(false);
   };
 
+  const handleFreightCsvExport = async (carrier: string) => {
+    if (!selectedTargets.length) {
+      throw new Error("Select at least one operational line item for the export");
+    }
+
+    const exportCarrierLabels: Record<string, string> = {
+      FLIWAYLINEHAUL: "Fliway Linehaul",
+      FLIWAYMIDSIZE: "Fliway Midsize",
+      FLIWAYDEPOT: "Fliway Depot",
+      M2H: "Mainfreight 2Home",
+      NZP: "NZ Post",
+      NZP_AGE_RESTRICTED: "NZ Post Age Restricted",
+      CASTLE: "Castle Parcels",
+    };
+
+    const normalizeCarrierValue = (value: string) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const matchesSelectedCarrier = (target: { item: FreightLineItem }, exportType: string) => {
+      const lineCompany = String(target.item.company || "").trim();
+      const lineLabel = getCarrierLabel(lineCompany, Boolean(target.item.isDepot)) || lineCompany;
+      const normalizedLineCompany = normalizeCarrierValue(lineCompany);
+      const normalizedLineLabel = normalizeCarrierValue(lineLabel);
+      const normalizedExportType = normalizeCarrierValue(exportType);
+
+      switch (exportType) {
+        case "FLIWAYLINEHAUL":
+          return normalizedLineCompany === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehauldepot";
+        case "FLIWAYMIDSIZE":
+          return normalizedLineCompany === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsizedepot";
+        case "FLIWAYDEPOT":
+          return Boolean(target.item.isDepot) || normalizedLineLabel === "depotfliway" || normalizedLineLabel === "fliwaydepot" || normalizedLineLabel === "fliwaylinehauldepot" || normalizedLineLabel === "fliwaymidsizedepot";
+        case "M2H": {
+          const isHomeDeliveryMainfreight = !Boolean(target.item.isDepot) && (normalizedLineCompany === "mainfreight" || normalizedLineLabel === "mainfreight");
+          return (
+            normalizedLineCompany === "m2h" ||
+            normalizedLineLabel === "m2h" ||
+            normalizedLineLabel === "mainfreight2home" ||
+            normalizedLineLabel === "mainfreightdelivery" ||
+            normalizedLineLabel === "m2hdelivery" ||
+            isHomeDeliveryMainfreight
+          );
+        }
+        case "NZP":
+          return normalizedLineCompany === "nzp" || normalizedLineLabel === "nzp";
+        case "NZP_AGE_RESTRICTED":
+          return normalizedLineCompany === "nzpagerestricted" || normalizedLineLabel === "nzpagerestricted" || normalizedLineLabel === "nzpostagerestricted";
+        case "CASTLE":
+          return normalizedLineCompany === "castle" || normalizedLineLabel === "castle" || normalizedLineLabel === "castleparcels";
+        default:
+          return normalizedLineCompany === normalizedExportType || normalizedLineLabel === normalizedExportType;
+      }
+    };
+
+    const matchingTargets = selectedTargets.filter((target) => matchesSelectedCarrier(target, carrier));
+    if (!matchingTargets.length) {
+      const label = exportCarrierLabels[carrier] || carrier;
+      throw new Error(`No selected line items match the selected ${label} export type.`);
+    }
+
+    const items = matchingTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+    const res = await fetch("/api/freight-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "export", carrier, items }),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `API error: ${res.status}`);
+    const blob = new Blob([payload.csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    const fileName = `freight-export-${carrier.toLowerCase()}.csv`;
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    return { summary: { total: items.length, succeeded: items.length, failed: 0 } } as BulkActionsResult;
+  };
+
   // ── Tracking save ──
   // Writes tracking/freightRef + CommunicationLog (tracking_update) via API.
   // Carrier is read-only (set at checkout per line item). Does NOT sync to Shopify.
@@ -1733,6 +1811,7 @@ export default function FreightDashboard({
           onClose={handleBulkActionsClose}
           targets={selectedTargets}
           onRun={handleBulkActionsRun}
+          onExportFreightCsv={handleFreightCsvExport}
           onNotifyJobQueued={(jobId) => {
             watchQueuedEmail(jobId, 1);
           }}

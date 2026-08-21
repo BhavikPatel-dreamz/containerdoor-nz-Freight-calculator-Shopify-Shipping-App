@@ -649,12 +649,17 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
   let created = 0;
   let skipped = 0;
 
+  const isDepotCollectionOrder = freightLine?.code?.startsWith("depot_delivery::") ?? false;
+
   for (const li of lineItems) {
     const variantId = li.variant_id != null ? String(li.variant_id) : null;
     if (!variantId) {
       skipped++;
       continue;
     }
+
+    const lineCarrier = carrierByVariant.get(variantId) ?? "";
+    const isFliwayDepotCollectionLine = lineCarrier === "FLIWAYLINEHAUL" && isDepotCollectionOrder;
 
     try {
       await prisma.orderLineItemOperationalData.create({
@@ -663,11 +668,11 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
           orderId,
           variantId,
           productTitle: li.title ?? "",
-          carrier: carrierByVariant.get(variantId) ?? "",
+          carrier: lineCarrier,
           paymentStatus: "",
           // Depot fields only — shippingAddress1/City/Zip are NOT touched here.
           // Those remain reserved for customer address overrides via order-amendments.server.ts.
-          ...(selectedDepot
+          ...(selectedDepot && isFliwayDepotCollectionLine
             ? {
                 depotAddress1: selectedDepot.address1 ?? "",
                 depotCity: selectedDepot.city ?? "",
