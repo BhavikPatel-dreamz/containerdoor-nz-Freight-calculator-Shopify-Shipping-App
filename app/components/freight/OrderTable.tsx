@@ -52,7 +52,7 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th style={{ textAlign: "center", width: "100px" }}>Line #</th><th>Customer</th><th >Product</th><th style={{ width: "34px" }}>Qty</th>
+            <th style={{ textAlign: "center", width: "110px" }}>Line #</th><th>Customer</th><th >Product</th><th style={{ width: "34px" }}>Qty</th>
             {!hiddenColumns.has("supplier") && <th style={{ textAlign: "center", width: "100px" }} >Supplier</th>}
             <th style={{ textAlign: "center", width: "80px" }}>EDD</th>
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse." style={{textAlign: "center" , width: "130px"}}>Customer status</th>
