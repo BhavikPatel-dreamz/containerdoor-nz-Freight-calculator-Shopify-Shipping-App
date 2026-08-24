@@ -465,9 +465,60 @@ function parseFreightTotalsFromShippingCode(code?: string | null): { weightKg: s
   return { weightKg, cubicM3 };
 }
 
+function normalizeFliwayLinehaulOrderReference(orderName: string | number | null | undefined) {
+  const raw = String(orderName ?? "").replace(/^#/, "").trim();
+  if (!raw) return "";
+
+  const withoutPrefixes = raw.replace(/^(?:CDL|CNDR)+/i, "");
+  return withoutPrefixes.replace(/[^a-zA-Z0-9]/g, "");
+}
+
+function normalizeNzpPurchaseId(orderReference: string | number | null | undefined) {
+  const raw = String(orderReference ?? "").trim();
+  if (!raw) return "";
+
+  return String(raw)
+    .replace(/^#/, "")
+    .replace(/^(?:CDL|CNDR)/i, "")
+    .replace(/[^0-9]/g, "");
+}
+
+function normalizeM2hConsignmentNoteNumber(orderReference: string | number | null | undefined) {
+  const raw = String(orderReference ?? "").trim();
+  if (!raw) return "";
+
+  return String(raw)
+    .replace(/^#/, "")
+    .replace(/^(?:CDL|CNDR)+/i, "")
+    .replace(/[^a-zA-Z0-9]/g, "");
+}
+
+function normalizeCastleDeliveryReference(orderReference: string | number | null | undefined) {
+  const raw = String(orderReference ?? "").trim();
+  if (!raw) return "";
+
+  return String(raw)
+    .replace(/^#/, "")
+    .replace(/^(?:CDL|CNDR)/i, "")
+    .replace(/[^0-9]/g, "");
+}
+
 function buildFliwayCustOrderRef(orderName: string, quantity: number | string, productName: string) {
   const base = `#${String(orderName || "").replace(/^#/, "")} ${String(quantity || 1).trim()} ${String(productName || "").trim()}`.replace(/\s+/g, " ").trim();
-  return base.length > 20 ? base.slice(0, 20).trim().replace(/\s+$/, "") : base;
+  if (base.length <= 20) return base;
+
+  const orderRef = String(orderName || "").replace(/^#/, "").trim();
+  const cleanOrderRef = orderRef.replace(/^(?:CDL|CNDR)+/i, "").replace(/[^a-zA-Z0-9]/g, "");
+  const productRef = String(productName || "").trim();
+  const quantityRef = String(quantity || 1).trim();
+
+  const primary = `#${cleanOrderRef || orderRef || ""} ${quantityRef} ${productRef}`.replace(/\s+/g, " ").trim();
+  if (primary.length <= 20) return primary;
+
+  const fallback = `#${cleanOrderRef || orderRef || ""}`.trim();
+  if (fallback.length <= 20) return fallback;
+
+  return `#${(cleanOrderRef || orderRef || "").slice(0, Math.max(0, 20 - 1))}`;
 }
 
 async function loadNzpBoxDimensions(shop: string, variantId: string) {
@@ -626,9 +677,12 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
         boxMeta.weightGrams > 0 ? (boxMeta.weightGrams / 1000).toFixed(2) : freightTotals.weightKg;
       const totalCubicM3 =
         boxMeta.volumeCm3 > 0 ? (boxMeta.volumeCm3 / 1_000_000).toFixed(4) : freightTotals.cubicM3;
+      const rawOrderReference = String(baseRow.orderName || baseRow.orderId || "");
+      const normalizedOrderReference = normalizeFliwayLinehaulOrderReference(rawOrderReference) || normalizeFliwayLinehaulOrderReference(baseRow.orderId);
+      const conNoteNo = `CNDR${normalizedOrderReference || rawOrderReference.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`;
 
       return [
-        `CNDR${baseRow.orderName.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`,
+        conNoteNo,
         customerName || baseRow.orderName,
         snapshot?.shippingAddress1 || "",
         snapshot?.shippingAddress2 || "",
@@ -665,13 +719,16 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       const orderRef = String(baseRow.orderName || baseRow.orderId || "");
       const productRef = product || sku || "Freight item";
       const custOrderRef = buildFliwayCustOrderRef(orderRef, boxes, productRef);
+      const rawOrderReference = String(baseRow.orderName || baseRow.orderId || "");
+      const normalizedOrderReference = normalizeFliwayLinehaulOrderReference(rawOrderReference) || normalizeFliwayLinehaulOrderReference(baseRow.orderId);
+      const conNoteNo = `CNDR${normalizedOrderReference || rawOrderReference.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`;
       const shippingCity = String(snapshot?.shippingCity || city || "").trim();
       const shippingAddress2Raw = String(snapshot?.shippingAddress2 || "").trim();
       const address2 = shippingAddress2Raw && shippingAddress2Raw.toLowerCase() !== shippingCity.toLowerCase() ? shippingAddress2Raw : "";
       const suburb = shippingCity || "";
 
       return [
-        `CNDR${baseRow.orderName.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`,
+        conNoteNo,
         customerName || baseRow.orderName,
         snapshot?.shippingAddress1 || "",
         address2,
@@ -730,10 +787,13 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const orderRef = String(baseRow.orderName || baseRow.orderId || "");
     const productRef = product || sku || "Freight item";
     const custOrderRef = buildFliwayCustOrderRef(orderRef, boxes, productRef);
+    const rawOrderReference = String(baseRow.orderName || baseRow.orderId || "");
+    const normalizedOrderReference = normalizeFliwayLinehaulOrderReference(rawOrderReference) || normalizeFliwayLinehaulOrderReference(baseRow.orderId);
+    const conNoteNo = `CNDR${normalizedOrderReference || rawOrderReference.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`;
     const depotInstructionLabel = resolvedDepotCity || fallbackDepot?.name || "";
 
     return [
-      `CNDR${baseRow.orderName.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`,
+      conNoteNo,
       customerName || baseRow.orderName,
       depotCsvAddress1,
       "",
@@ -766,7 +826,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
   }
 
   if (carrier === "M2H") {
-    const cleanOrderReference = String(baseRow.orderName || baseRow.orderId).replace(/[^a-zA-Z0-9]/g, "") || "000000";
+    const cleanOrderReference = normalizeM2hConsignmentNoteNumber(baseRow.orderName || baseRow.orderId) || "000000";
     const senderRefBase = String(sku || product || "Freight item").trim();
     const senderRef = senderRefBase.length > 20 ? senderRefBase.slice(0, 20).trim() : senderRefBase;
     const receiverCode = "";
@@ -790,6 +850,16 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const senderPostalCode = "1072";
     const senderState = "";
     const senderPhone = "09 526 5098";
+    const chargeCode = "CONDOOR14";
+    const chargeName = senderName;
+    const chargeAddr1 = senderAddr1;
+    const chargeAddr2 = senderAddr2;
+    const chargeSuburb = senderSuburb;
+    const chargeCity = senderCity;
+    const chargePostalCode = senderPostalCode;
+    const chargeState = senderState;
+    const chargePhone = senderPhone;
+    const emailDocsTo = "";
 
     return [
       "1370981",
@@ -801,16 +871,15 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       "LCL",
       senderRef,
       product || baseRow.orderName || "Freight item",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
-      "",
+      chargeCode,
+      chargeName,
+      chargeAddr1,
+      chargeAddr2,
+      chargeSuburb,
+      chargeCity,
+      chargePostalCode,
+      chargeState,
+      chargePhone,
       senderCode,
       senderName,
       senderAddr1,
@@ -820,7 +889,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       senderPostalCode,
       senderState,
       senderPhone,
-      "",
+      emailDocsTo,
       receiverCode,
       receiverName,
       receiverAddr1,
@@ -831,6 +900,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       receiverState,
       receiverPhone,
       deliveryInstructions,
+      "",
       "",
       "",
       "",
@@ -875,9 +945,10 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const packageLength = boxDimensions.length;
     const colour = String((indexRow as any)?.variantTitle || product || "").trim();
     const size = "";
+    const purchaseId = normalizeNzpPurchaseId(baseRow.orderName || baseRow.orderId);
 
     return [
-      baseRow.orderName || baseRow.orderId,
+      purchaseId,
       shipmentDate,
       customerName || baseRow.orderName,
       destinationBuilding,
@@ -930,9 +1001,10 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const packageLength = boxDimensions.length;
     const colour = String((indexRow as any)?.variantTitle || product || "").trim();
     const size = "";
+    const purchaseId = normalizeNzpPurchaseId(baseRow.orderName || baseRow.orderId);
 
     return [
-      baseRow.orderName || baseRow.orderId,
+      purchaseId,
       shipmentDate,
       customerName || baseRow.orderName,
       destinationBuilding,
@@ -969,7 +1041,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
   }
 
   if (carrier === "CASTLE") {
-    const deliveryReference = String(baseRow.orderId || baseRow.orderName || "").replace(/^#/, "").trim();
+    const deliveryReference = normalizeCastleDeliveryReference(baseRow.orderName || baseRow.orderId);
     const building = String((snapshot as any)?.shippingCompany || "").trim();
     const streetAddress = String(snapshot?.shippingAddress1 || address || "").trim();
     const suburb = String(snapshot?.shippingAddress2 || snapshot?.shippingCity || city || "").trim();
