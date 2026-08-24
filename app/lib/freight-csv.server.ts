@@ -690,15 +690,14 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       }
     }
 
-    if (!resolvedDepotAddress1 && !resolvedDepotCity && !resolvedDepotZip) {
-      throw new Error("Missing selected Fliway depot for this line item");
-    }
+    // No selected depot on this line item — export the row with empty depot
+    // address fields rather than failing the whole export.
 
     const freightTotals = parseFreightTotalsFromShippingCode(snapshot?.shippingCode);
     const orderRef = String(baseRow.orderName || baseRow.orderId || "");
     const productRef = product || sku || "Freight item";
     const custOrderRef = buildFliwayCustOrderRef(orderRef, boxes, productRef);
-    const depotInstructionLabel = resolvedDepotCity || fallbackDepot?.name || "Depot";
+    const depotInstructionLabel = resolvedDepotCity || fallbackDepot?.name || "";
 
     return [
       `CNDR${baseRow.orderName.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`,
@@ -993,6 +992,12 @@ function isSupportedCarrier(carrier: string): carrier is FreightCsvCarrier {
   return FREIGHT_CSV_CARRIERS.includes(carrier as FreightCsvCarrier);
 }
 
+export type FreightCsvExportSkipped = {
+  orderId: string;
+  variantId: string;
+  error: string;
+};
+
 export async function exportFreightCsv(shop: string, carrier: string, items: FreightCsvExportItem[]) {
   if (!items.length) {
     throw new Error("No operational line items selected for export");
@@ -1009,9 +1014,22 @@ export async function exportFreightCsv(shop: string, carrier: string, items: Fre
         ? EXPORT_TEMPLATE[carrier]
         : [...EXPORT_TEMPLATE[carrier], "Carrier"];
   const rows = [csvHeaders];
+  const skipped: FreightCsvExportSkipped[] = [];
 
   for (const item of items) {
-    const record = await buildExportRow(shop, item, carrier);
+    let record: string[];
+    try {
+      record = await buildExportRow(shop, item, carrier);
+    } catch (error) {
+      // A single unusable line item (e.g. no selected Fliway depot) must not
+      // abort the whole export — skip it and let the caller report it.
+      skipped.push({
+        orderId: String(item.orderId),
+        variantId: String(item.variantId),
+        error: error instanceof Error ? error.message : "Export row failed",
+      });
+      continue;
+    }
     const nextRow =
       carrier === "CASTLE"
         ? record
@@ -1021,7 +1039,15 @@ export async function exportFreightCsv(shop: string, carrier: string, items: Fre
     rows.push(nextRow);
   }
 
-  return rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(",")).join("\n");
+  if (skipped.length && skipped.length === items.length) {
+    // Nothing could be exported — surface the underlying reason.
+    throw new Error(skipped[0]?.error || "No selected line items could be exported");
+  }
+
+  return {
+    csv: rows.map((row) => row.map((cell) => escapeCsvCell(cell)).join(",")).join("\n"),
+    skipped,
+  };
 }
 
 function findMatchingOmsRecord(shop: string, row: Record<string, string>, carrier: FreightCsvCarrier) {

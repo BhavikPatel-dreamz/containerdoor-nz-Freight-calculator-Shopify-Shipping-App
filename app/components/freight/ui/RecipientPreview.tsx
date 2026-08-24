@@ -72,6 +72,8 @@ export function RecipientPreview({
 
 type CompletionStats = {
   updated: number;
+  /** Label for the primary count — defaults to "Updated" (e.g. "Exported" for CSV exports). */
+  updatedLabel?: string;
   emailsQueued: number;
   skippedNoEmail: number;
   failed?: number;
@@ -89,7 +91,7 @@ export function CompletionPanel({ stats, onViewLog, logText }: CompletionPanelPr
       <div className="fo-completion-hero">✅ Completed</div>
       <ul className="fo-completion-stats">
         <li>
-          <strong>{stats.updated}</strong> Updated
+          <strong>{stats.updated}</strong> {stats.updatedLabel ?? "Updated"}
         </li>
         {stats.emailsQueued > 0 ? (
           <li>

@@ -764,6 +764,7 @@ export default function FreightDashboard({
     });
     const payload = await res.json();
     if (!res.ok) throw new Error(payload.error || `API error: ${res.status}`);
+    const skipped: Array<{ orderId: string; variantId: string; error?: string }> = Array.isArray(payload.skipped) ? payload.skipped : [];
     const blob = new Blob([payload.csv], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
     const fileName = `freight-export-${carrier.toLowerCase()}.csv`;
@@ -773,7 +774,10 @@ export default function FreightDashboard({
     link.click();
     link.remove();
     URL.revokeObjectURL(link.href);
-    return { summary: { total: items.length, succeeded: items.length, failed: 0 } } as BulkActionsResult;
+    return {
+      summary: { total: items.length, succeeded: items.length - skipped.length, failed: skipped.length },
+      results: skipped.map((s) => ({ orderId: s.orderId, variantId: s.variantId, success: false, error: s.error })),
+    } as BulkActionsResult;
   };
 
   // ── Tracking save ──

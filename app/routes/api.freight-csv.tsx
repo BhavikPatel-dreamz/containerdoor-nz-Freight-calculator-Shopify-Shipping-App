@@ -30,8 +30,8 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!body.carrier) {
         return Response.json({ ok: false, error: "Select a carrier format for export" }, { status: 400 });
       }
-      const csv = await exportFreightCsv(shop, body.carrier, body.items);
-      return Response.json({ ok: true, csv });
+      const { csv, skipped } = await exportFreightCsv(shop, body.carrier, body.items);
+      return Response.json({ ok: true, csv, skipped });
     }
 
     return Response.json({ ok: false, error: "Unsupported freight CSV request" }, { status: 400 });
