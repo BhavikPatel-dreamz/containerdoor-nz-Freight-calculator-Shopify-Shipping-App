@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import type { FreightLineItem, FreightOrderRow } from "./types";
 import { CUSTOMER_STATUS_OPTIONS } from "../../lib/status-options";
+import { getCarrierLabel } from "../../lib/freight";
 import {
   Modal,
   ModalHeader,
@@ -30,6 +31,7 @@ export type BulkActionsPayload = {
   note?: string;
   noteOptions?: { sendToMonday?: boolean; sendToCin7?: boolean; addToShopify?: boolean };
   notify?: { subject: string; body: string };
+  freightCsvExportCarrier?: string;
 };
 
 export type BulkActionsResult = {
@@ -48,6 +50,7 @@ type BulkActionsWorkspaceProps = {
   onClose: () => void;
   targets: Target[];
   onRun: (payload: BulkActionsPayload) => Promise<BulkActionsResult>;
+  onExportFreightCsv?: (carrier: string) => Promise<BulkActionsResult>;
   onNotifyJobQueued?: (jobId: string) => void;
 };
 
@@ -76,6 +79,7 @@ export function BulkActionsWorkspace({
   onClose,
   targets,
   onRun,
+  onExportFreightCsv,
   onNotifyJobQueued,
 }: BulkActionsWorkspaceProps) {
   const [phase, setPhase] = useState<Phase>("compose");
@@ -87,6 +91,7 @@ export function BulkActionsWorkspace({
   const [enablePayment, setEnablePayment] = useState(false);
   const [enableCustomerStatus, setEnableCustomerStatus] = useState(false);
   const [enableSupplier, setEnableSupplier] = useState(false);
+  const [enableExport, setEnableExport] = useState(false);
   const [enableNote, setEnableNote] = useState(false);
   const [enableNotify, setEnableNotify] = useState(false);
 
@@ -94,6 +99,7 @@ export function BulkActionsWorkspace({
   const [paymentStatus, setPaymentStatus] = useState("");
   const [customerStatus, setCustomerStatus] = useState("");
   const [supplier, setSupplier] = useState("");
+  const [exportCarrier, setExportCarrier] = useState("FLIWAYLINEHAUL");
   const [noteText, setNoteText] = useState("");
   const [sendToMonday, setSendToMonday] = useState(false);
   const [sendToCin7, setSendToCin7] = useState(false);
@@ -108,13 +114,21 @@ export function BulkActionsWorkspace({
   >([]);
   const [currentItem, setCurrentItem] = useState<{ label: string; meta: string } | null>(null);
   const [result, setResult] = useState<BulkActionsResult | null>(null);
+  const [ranExport, setRanExport] = useState(false);
 
   const selectedCount = targets.length;
 
   const supplierGroups = useMemo(() => {
     const map = new Map<string, number>();
     for (const t of targets) {
-      const key = t.item.supplierContainer?.trim() || t.item.company || "Unassigned";
+      // Group by the same carrier label used across the dashboard and CSV
+      // export matching, so depot-collection lines (e.g. Fliway linehaul +
+      // isDepot) count under "Depot - Fliway" instead of the raw enum.
+      const key =
+        t.item.supplierContainer?.trim() ||
+        getCarrierLabel(t.item.company, Boolean(t.item.isDepot)) ||
+        t.item.company ||
+        "Unassigned";
       map.set(key, (map.get(key) ?? 0) + 1);
     }
     return [...map.entries()]
@@ -141,23 +155,26 @@ export function BulkActionsWorkspace({
     { id: "payment", label: "Payment Status", active: enablePayment },
     { id: "customer-status", label: "Customer Status", active: enableCustomerStatus },
     { id: "supplier", label: "Supplier", active: enableSupplier },
+    { id: "export", label: "Freight CSV Export", active: enableExport },
     { id: "note", label: "Internal Note", active: enableNote },
     { id: "email", label: "Customer Email", active: enableNotify },
   ];
 
-  const hasAction = enableEdd || enablePayment || enableCustomerStatus || enableSupplier || enableNote || enableNotify;
+  const hasAction = enableEdd || enablePayment || enableCustomerStatus || enableSupplier || enableExport || enableNote || enableNotify;
 
   function resetForm() {
     setEnableEdd(false);
     setEnablePayment(false);
     setEnableCustomerStatus(false);
     setEnableSupplier(false);
+    setEnableExport(false);
     setEnableNote(false);
     setEnableNotify(false);
     setEddDate("");
     setPaymentStatus("");
     setCustomerStatus("");
     setSupplier("");
+    setExportCarrier("FLIWAYLINEHAUL");
     setNoteText("");
     setSendToMonday(true);
     setSendToCin7(false);
@@ -169,6 +186,7 @@ export function BulkActionsWorkspace({
     setError("");
     setPhase("compose");
     setResult(null);
+    setRanExport(false);
     setCurrentItem(null);
     setProgressDone(0);
     setProgressTotal(0);
@@ -193,6 +211,13 @@ export function BulkActionsWorkspace({
     if (enablePayment) payload.paymentStatus = paymentStatus;
     if (enableCustomerStatus) payload.customerStatus = customerStatus;
     if (enableSupplier) payload.supplier = supplier;
+    if (enableExport) {
+      if (!exportCarrier) {
+        setError("Select a carrier format for CSV export");
+        return null;
+      }
+      payload.freightCsvExportCarrier = exportCarrier;
+    }
     if (enableNote) {
       if (!noteText.trim()) {
         setError("Enter an internal note");
@@ -227,6 +252,27 @@ export function BulkActionsWorkspace({
     setError("");
     const payload = buildPayload();
     if (!payload) return;
+
+    if (enableExport && onExportFreightCsv) {
+      try {
+        setRanExport(true);
+        setPhase("running");
+        setProgressTotal(targets.length);
+        setProgressDone(0);
+        setProgressSteps([{ id: "export", label: "Exporting CSV", status: "active" }]);
+        setCurrentItem({ label: `Carrier ${exportCarrier}`, meta: `${targets.length} selected` });
+        const res = await onExportFreightCsv(exportCarrier);
+        setProgressDone(targets.length);
+        setProgressSteps([{ id: "export", label: "Exporting CSV", status: "done" }]);
+        setResult(res);
+        setPhase("done");
+      } catch (e) {
+        setProgressSteps([{ id: "export", label: "Exporting CSV", status: "error" }]);
+        setError(e instanceof Error ? e.message : "Freight CSV export failed");
+        setPhase("compose");
+      }
+      return;
+    }
 
     const steps: Array<{ id: string; label: string; status: "pending" | "active" | "done" | "error" }> = [
       { id: "oms", label: "Updating OMS", status: "active" },
@@ -307,6 +353,7 @@ export function BulkActionsWorkspace({
 
   const completionStats = {
     updated: result?.summary.succeeded ?? 0,
+    updatedLabel: ranExport ? "Exported" : undefined,
     emailsQueued: result?.notifyRecipients ?? 0,
     skippedNoEmail: enableNotify ? skippedNoEmail : 0,
     failed: result?.summary.failed ?? 0,
@@ -374,6 +421,20 @@ export function BulkActionsWorkspace({
                       options={SUPPLIER_OPTIONS}
                       placeholder="Search suppliers…"
                     />
+                  </FormSection>
+                </ActionCard>
+
+                <ActionCard enabled={enableExport} onToggle={setEnableExport} title="Freight CSV Export">
+                  <FormSection label="Carrier format" htmlFor="ba-export-carrier">
+                    <FieldSelect id="ba-export-carrier" value={exportCarrier} onChange={(e) => setExportCarrier(e.target.value)}>
+                      <option value="FLIWAYLINEHAUL">Fliway Linehaul</option>
+                      <option value="FLIWAYMIDSIZE">Fliway Midsize</option>
+                      <option value="FLIWAYDEPOT">Fliway Depot</option>
+                      <option value="M2H">Mainfreight 2Home</option>
+                      <option value="NZP">NZ Post</option>
+                      <option value="NZP_AGE_RESTRICTED">NZ Post Age Restricted</option>
+                      <option value="CASTLE">Castle Parcels</option>
+                    </FieldSelect>
                   </FormSection>
                 </ActionCard>
 
