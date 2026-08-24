@@ -471,7 +471,7 @@ function buildFliwayCustOrderRef(orderName: string, quantity: number | string, p
 }
 
 async function loadNzpBoxDimensions(shop: string, variantId: string) {
-  const empty = { height: "", width: "", length: "" };
+  const empty = { height: "", width: "", length: "", weightGrams: 0, volumeCm3: 0 };
 
   if (!variantId) {
     return empty;
@@ -502,10 +502,33 @@ async function loadNzpBoxDimensions(shop: string, variantId: string) {
     const width = String(fields.box_width_cm ?? "").trim();
     const length = String(fields.box_length_cm ?? "").trim();
 
+    // Same per-box aggregation used by the checkout freight calculation
+    // (api.shipping-rates.tsx getFreightPackages): comma-separated per-box
+    // dimensions/weights summed into total volume (cm3) and weight (grams).
+    const lengths = length.split(",").map((v) => Number(v.trim())).filter((v) => Number.isFinite(v) && v > 0);
+    const widths = width.split(",").map((v) => Number(v.trim())).filter((v) => Number.isFinite(v) && v > 0);
+    const heights = height.split(",").map((v) => Number(v.trim())).filter((v) => Number.isFinite(v) && v > 0);
+    const weights = String(fields.weight_grams ?? "")
+      .split(",")
+      .map((v) => Number(v.trim()))
+      .filter((v) => Number.isFinite(v) && v > 0);
+
+    const boxCount = Math.max(lengths.length, widths.length, heights.length, 1);
+    let volumeCm3 = 0;
+    for (let i = 0; i < boxCount; i++) {
+      const l = lengths[i] ?? 0;
+      const w = widths[i] ?? 0;
+      const h = heights[i] ?? 0;
+      if (l > 0 && w > 0 && h > 0) volumeCm3 += l * w * h;
+    }
+    const weightGrams = weights.reduce((sum, w) => sum + w, 0);
+
     return {
       height: height || "",
       width: width || "",
       length: length || "",
+      weightGrams,
+      volumeCm3,
     };
   } catch {
     return empty;
@@ -594,6 +617,16 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
   if (carrier === "FLIWAYLINEHAUL" || carrier === "FLIWAYMIDSIZE" || carrier === "FLIWAYDEPOT") {
     const linehaulMobilePhone = mobilePhone || "";
     if (carrier === "FLIWAYLINEHAUL") {
+      // Total Weight / Total Cubic from this line's own freight/variant
+      // metadata (same source as checkout); fall back to the order shipping
+      // code totals when the variant metafields hold no data.
+      const boxMeta = await loadNzpBoxDimensions(shop, item.variantId);
+      const freightTotals = parseFreightTotalsFromShippingCode(snapshot?.shippingCode);
+      const totalWeightKg =
+        boxMeta.weightGrams > 0 ? (boxMeta.weightGrams / 1000).toFixed(2) : freightTotals.weightKg;
+      const totalCubicM3 =
+        boxMeta.volumeCm3 > 0 ? (boxMeta.volumeCm3 / 1_000_000).toFixed(4) : freightTotals.cubicM3;
+
       return [
         `CNDR${baseRow.orderName.replace(/[^a-zA-Z0-9]/g, "") || baseRow.orderId}`,
         customerName || baseRow.orderName,
@@ -610,8 +643,8 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
         "Carton",
         product || `${sku || "Freight item"}`,
         boxes,
-        "0",
-        "0",
+        totalWeightKg,
+        totalCubicM3,
         "",
         "",
         DEFAULT_FROM.company,
