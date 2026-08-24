@@ -723,7 +723,13 @@ export default function FreightDashboard({
 
       switch (exportType) {
         case "FLIWAYLINEHAUL":
-          return normalizedLineCompany === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehauldepot";
+          // Only lines the OMS displays as "Fliway - Linehaul" (non-depot
+          // FLIWAYLINEHAUL carrier). Depot-collection Fliway lines display as
+          // "Depot - Fliway" and must go through the Fliway Depot export.
+          return (
+            !Boolean(target.item.isDepot) &&
+            (normalizedLineCompany === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehaul")
+          );
         case "FLIWAYMIDSIZE":
           return normalizedLineCompany === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsizedepot";
         case "FLIWAYDEPOT":
