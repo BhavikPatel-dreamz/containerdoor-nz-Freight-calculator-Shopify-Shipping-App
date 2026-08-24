@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import type { FreightLineItem, FreightOrderRow } from "./types";
 import { CUSTOMER_STATUS_OPTIONS } from "../../lib/status-options";
+import { getCarrierLabel } from "../../lib/freight";
 import {
   Modal,
   ModalHeader,
@@ -113,13 +114,21 @@ export function BulkActionsWorkspace({
   >([]);
   const [currentItem, setCurrentItem] = useState<{ label: string; meta: string } | null>(null);
   const [result, setResult] = useState<BulkActionsResult | null>(null);
+  const [ranExport, setRanExport] = useState(false);
 
   const selectedCount = targets.length;
 
   const supplierGroups = useMemo(() => {
     const map = new Map<string, number>();
     for (const t of targets) {
-      const key = t.item.supplierContainer?.trim() || t.item.company || "Unassigned";
+      // Group by the same carrier label used across the dashboard and CSV
+      // export matching, so depot-collection lines (e.g. Fliway linehaul +
+      // isDepot) count under "Depot - Fliway" instead of the raw enum.
+      const key =
+        t.item.supplierContainer?.trim() ||
+        getCarrierLabel(t.item.company, Boolean(t.item.isDepot)) ||
+        t.item.company ||
+        "Unassigned";
       map.set(key, (map.get(key) ?? 0) + 1);
     }
     return [...map.entries()]
@@ -177,6 +186,7 @@ export function BulkActionsWorkspace({
     setError("");
     setPhase("compose");
     setResult(null);
+    setRanExport(false);
     setCurrentItem(null);
     setProgressDone(0);
     setProgressTotal(0);
@@ -245,6 +255,7 @@ export function BulkActionsWorkspace({
 
     if (enableExport && onExportFreightCsv) {
       try {
+        setRanExport(true);
         setPhase("running");
         setProgressTotal(targets.length);
         setProgressDone(0);
@@ -342,6 +353,7 @@ export function BulkActionsWorkspace({
 
   const completionStats = {
     updated: result?.summary.succeeded ?? 0,
+    updatedLabel: ranExport ? "Exported" : undefined,
     emailsQueued: result?.notifyRecipients ?? 0,
     skippedNoEmail: enableNotify ? skippedNoEmail : 0,
     failed: result?.summary.failed ?? 0,
