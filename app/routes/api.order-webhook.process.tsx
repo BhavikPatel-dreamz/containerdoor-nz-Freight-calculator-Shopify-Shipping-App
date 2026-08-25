@@ -5,8 +5,16 @@ function verifyCronSecret(request: Request): boolean {
   const secret = process.env.CRON_SECRET;
   if (!secret) return false;
 
+  // Check header first
   const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
-  return authHeader === `Bearer ${secret}` || authHeader === secret;
+  if (authHeader === `Bearer ${secret}` || authHeader === secret) {
+    return true;
+  }
+
+  // Fall back to query parameter
+  const url = new URL(request.url);
+  const querySecret = url.searchParams.get("secret");
+  return querySecret === secret;
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
