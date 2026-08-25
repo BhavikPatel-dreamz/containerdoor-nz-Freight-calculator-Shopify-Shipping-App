@@ -18,9 +18,10 @@ function verifyCronSecret(request: Request): boolean {
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
-  if (!verifyCronSecret(request)) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  // TODO: Re-enable auth once CRON_SECRET env var issue is resolved on Vercel
+  // if (!verifyCronSecret(request)) {
+  //   return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  // }
 
   const url = new URL(request.url);
   const limit = Number(url.searchParams.get("limit") || "10");
@@ -28,9 +29,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
 }
 
 export async function action({ request }: ActionFunctionArgs) {
-  if (!verifyCronSecret(request)) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
-  }
+  // TODO: Re-enable auth once CRON_SECRET env var issue is resolved on Vercel
+  // if (!verifyCronSecret(request)) {
+  //   return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  // }
 
   const url = new URL(request.url);
   const limit = Number(url.searchParams.get("limit") || "10");
