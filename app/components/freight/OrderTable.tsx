@@ -1,7 +1,7 @@
 /* eslint-disable jsx-a11y/click-events-have-key-events */
 /* eslint-disable jsx-a11y/no-static-element-interactions */
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import { getCustomerStatusStyle, getPaymentStatusStyle, getWarehouseStatusStyle, getCarrierStatusStyle, getCin7CellStatus } from "./helpers";
 import { IconEye, IconChat, IconCalendar, IconPlus } from "./icons";
 
@@ -18,11 +18,12 @@ type OrderTableProps = {
   onOpenTracking: (order: FreightOrderRow, item: FreightLineItem) => void;
   onFixCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   onSyncMonday: (order: FreightOrderRow, item: FreightLineItem) => void;
-  onCreateCin7: (order: FreightOrderRow) => void;
+  onCreateCin7: (order: FreightOrderRow, item: FreightLineItem) => void;
   cin7FixingId: string | null;
   mondayFixingId: string | null;
   creatingCin7OrderId: string | null;
   hiddenColumns?: Set<string>;
+  onShowNotification?: (message: string) => void;
 };
 
 export function OrderTable({
@@ -43,6 +44,7 @@ export function OrderTable({
   mondayFixingId,
   creatingCin7OrderId,
   hiddenColumns = new Set(),
+  onShowNotification,
 }: OrderTableProps) {
   return (
     <div className="fo-table-scroll">
@@ -50,12 +52,12 @@ export function OrderTable({
         <thead>
           <tr>
             <th><input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} /></th>
-            <th>Line #</th><th>Customer</th><th>Product</th><th style={{ width: "44px" }}>Qty</th>
-            {!hiddenColumns.has("supplier") && <th>Supplier</th>}
-            <th style={{ textAlign: "center" }}>EDD</th>
+            <th style={{ textAlign: "center", width: "110px" }}>Line #</th><th>Customer</th><th >Product</th><th style={{ width: "34px" }}>Qty</th>
+            {!hiddenColumns.has("supplier") && <th style={{ textAlign: "center", width: "100px" }} >Supplier</th>}
+            <th style={{ textAlign: "center", width: "80px" }}>EDD</th>
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse." style={{textAlign: "center" , width: "130px"}}>Customer status</th>
             {!hiddenColumns.has("warehouse") && <th style={{ textAlign: "center" }}>Warehouse</th>}
-            {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" }}>Payment</th>}
+            {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" ,width: "70px"  }}>Payment</th>}
             {!hiddenColumns.has("carrier") && <th style={{ width: "120px" , textAlign: "center" }}>Carrier</th>}
             {!hiddenColumns.has("tracking") && <th style={{ textAlign: "center" }}>Tracking</th>}
             {!hiddenColumns.has("freightRef") && <th>Ref</th>}
@@ -70,7 +72,7 @@ export function OrderTable({
             return order.lineItems.map((item, liIdx) => {
               const isSelected = selected.has(item.id);
               const isFirstItem = liIdx === 0;
-              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus);
+              const { bg: stBg, text: stText, label: stLabel } = getCustomerStatusStyle(item.customerStatus, item.customerStatusColor);
 
               return (
                 <tr key={item.id} style={{ background: isSelected ? "#eff6ff" : undefined }}>
@@ -152,7 +154,7 @@ export function OrderTable({
                   {!hiddenColumns.has("warehouse") && (
                     <td className="fo-td" style={{ textAlign: "center", width: "50px" }}>
                       {(() => {
-                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "");
+                        const { bg: whBg, text: whText, label: whLabel } = getWarehouseStatusStyle(item.warehouseStatus || "", item.warehouseStatusColor);
                         return (
                           <span className="fo-cust-status" style={{ background: whBg, color: whText }}>
                             {whLabel || "—"}
@@ -164,7 +166,7 @@ export function OrderTable({
                   {!hiddenColumns.has("payment") && (
                     <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                       {(() => {
-                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "");
+                        const { bg: payBg, text: payText, label: payLabel } = getPaymentStatusStyle(item.paymentStatus || "", item.paymentStatusColor);
                         return (
                           <span className="fo-cust-status" style={{ background: payBg, color: payText }}>
                             {payLabel || "—"}
@@ -176,11 +178,11 @@ export function OrderTable({
                   {!hiddenColumns.has("carrier") && (
                     <td className="fo-td"  style={{ textAlign: "center", width: "120px" }}>
                       {(() => {
-                        const carrierLabel = companyLabels[item.company as keyof typeof companyLabels] ?? item.company;
-                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel);
+                        const carrierLabel = getCarrierLabel(item.company, Boolean(item.isDepot));
+                        const { bg: carBg, text: carText } = getCarrierStatusStyle(carrierLabel, item.carrierColor, item.carrierColorLabel);
                         return (
                           <span className="fo-carrier-badge" style={{ background: carBg, color: carText }}>
-                            {carrierLabel}
+                            {carrierLabel || item.company}
                           </span>
                         );
                       })()}
@@ -225,6 +227,20 @@ export function OrderTable({
                             );
                           }
                           if (status === "error") {
+                            const isNoSku = (item.cin7Mismatches ?? []).includes("SKU not found");
+                            if (isNoSku) {
+                              return (
+                                <button
+                                  type="button"
+                                  className="fo-sync-pill red"
+                                  title="SKU not found — click for details"
+                                  onClick={() => onShowNotification?.("Cin7 sync failed: SKU not found for this line item.")}
+                                  style={{ cursor: "pointer" }}
+                                >
+                                  CIN7 ✕
+                                </button>
+                              );
+                            }
                             return (
                               <span className="fo-sync-pill amber" title="Order is voided or duplicated in Cin7 — cannot sync">
                                 CIN7 ⚠️
@@ -255,7 +271,7 @@ export function OrderTable({
                               type="button"
                               className="fo-sync-pill red"
                               title="Create order in Cin7"
-                              onClick={() => onCreateCin7(order)}
+                              onClick={() => onCreateCin7(order, item)}
                               disabled={creatingCin7OrderId === order.id}
                               style={{ cursor: creatingCin7OrderId === order.id ? "wait" : "pointer" }}
                             >

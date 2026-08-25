@@ -173,6 +173,10 @@ export async function buildMondayRowFromOms(args: {
         ? Number(ops.boxes) || ops.boxes
         : "";
 
+   const isDepot =
+    String(snap?.shippingCode ?? "").startsWith("depot_delivery::") ||
+    Boolean(ops.depotAddress1 || ops.depotCity || ops.depotZip);
+
   const row: MondayRow = {
     customerName,
     email,
@@ -208,6 +212,7 @@ export async function buildMondayRowFromOms(args: {
     poNumber: String(orderOps?.poNumber || ops.poNumber || "").trim(),
     depositPaid: String(ops.depositPaid || "").trim(),
     balanceDue: String(ops.balanceDue || "").trim(),
+    isDepot,
   };
 
   return { row, itemName };
@@ -286,6 +291,7 @@ type MondayRow = {
   poNumber: string;
   depositPaid: string;
   balanceDue: string;
+  isDepot: boolean;
 };
 
 const FIELD_DEFS: Partial<
@@ -300,14 +306,19 @@ const FIELD_DEFS: Partial<
     type: "status",
     defaults: JSON.stringify({
       labels: {
-        "0": "Fliway - Linehaul",
-        "1": "Fliway - Midsize",
+        "0": "Linehaul - Fliway",
+        "1": "Midsize - Fliway",
         "2": "NZP",
         "3": "NZP - Age Restricted",
-        "4": "Castle",
-        "5": "Team Global Express",
-        "6": "M2H",
-        "7": "Mainfreight",
+        "4": "MAINFREIGHT",
+        "5": "Castle",
+        "6": "Special",
+        "7": "M2H Delivery",
+        "8": "MF Depot",
+        "9": "TGE Depot",
+        "10": "Depot - Fliway",
+        "11": "Van Run",
+        "12": "TGE",
       },
     }),
   },
@@ -555,7 +566,7 @@ const paymentStatusLabelMap: Record<string, string> = {
 /** Monday Payment Status board labels only — omit unknown to avoid whole-mutation fail. */
 const MONDAY_PAYMENT_LABELS = new Set(["Paid", "Partial", "Pending", "Overdue"]);
 
-function resolveMondayPaymentLabel(raw: string): string | null {
+export function resolveMondayPaymentLabel(raw: string): string | null {
   const v = String(raw || "").trim();
   if (!v) return null;
   const key = v.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
@@ -601,18 +612,105 @@ const deliveryStatusLabelMap: Record<string, string> = {
 };
 
 const carrierLabelMap: Record<string, string> = {
-  fliway: "Fliway - Linehaul",
-  fliwaylinehaul: "Fliway - Linehaul",
-  fliwaymidsize: "Fliway - Midsize",
+  fliway: "Linehaul - Fliway",
+  fliwaylinehaul: "Linehaul - Fliway",
+  "fliway - linehaul": "Linehaul - Fliway",
+  fliwaymidsize: "Midsize - Fliway",
+  "fliway - midsize": "Midsize - Fliway",
   nzp: "NZP",
   nzp_age_restricted: "NZP - Age Restricted",
   castle: "Castle",
-  tge: "Team Global Express",
-  m2h: "M2H",
-  mainfreight: "Mainfreight",
+  tge: "TGE",
+  "team global express": "TGE",
+  m2h: "M2H Delivery",
+  m2h_delivery: "M2H Delivery",
+  mainfreight: "MAINFREIGHT",
+  "mainfreight depot": "MF Depot",
+  "tge depot": "TGE Depot",
+  "depot - fliway": "Depot - Fliway",
+  "fliway depot": "Depot - Fliway",
 };
 
 const MONDAY_CARRIER_LABELS = new Set(Object.values(carrierLabelMap));
+
+export function resolveMondayCarrierLabel(rawCarrier: string, isDepot: boolean): string | null {
+  const carrierVal = String(rawCarrier || "").trim();
+  if (!carrierVal) return null;
+  const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
+  let label: string | null = null;
+
+  if (isDepot) {
+    if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+    else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+    else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+  }
+  if (!label) {
+    label =
+      carrierLabelMap[carrierVal.toLowerCase()] ||
+      carrierLabelMap[keyNorm] ||
+      (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+  }
+  return label;
+}
+
+export function resolveMondayCustomerStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), statusLabelMap);
+}
+
+export function resolveMondayWarehouseStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), warehouseStatusLabelMap);
+}
+
+const columnColorCache: Record<string, { map: Record<string, string>; fetchedAt: number }> = {};
+/** Cache TTL — short enough that a color change in Monday's column settings
+ *  is picked up quickly, long enough to avoid hammering the API on busy syncs. */
+const COLUMN_COLOR_CACHE_TTL_MS = 60_000;
+
+async function getColumnColorMap(
+  columnKey: string,
+  forceRefresh = false,
+): Promise<Record<string, string>> {
+  const cached = columnColorCache[columnKey];
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < COLUMN_COLOR_CACHE_TTL_MS) {
+    return cached.map;
+  }
+  const colIds = await getOrCreateColumnIds();
+  const colId = colIds[columnKey];
+  if (!colId) return cached?.map ?? {};
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $colId: [String!]) { boards(ids: [$boardId]) { columns(ids: $colId) { settings_str } } }`,
+    { boardId: process.env.MONDAY_BOARD_ID, colId: [colId] },
+  ).catch(() => null);
+  const settingsStr = data?.boards?.[0]?.columns?.[0]?.settings_str;
+  if (!settingsStr) return cached?.map ?? {};
+  try {
+    const settings = JSON.parse(settingsStr);
+    const labels: Record<string, string> = settings.labels ?? {};
+    const labelsColors: Record<string, { color?: string }> = settings.labels_colors ?? {};
+    const map: Record<string, string> = {};
+    for (const [idx, labelText] of Object.entries(labels)) {
+      const hex = labelsColors[idx]?.color;
+      if (hex) map[String(labelText)] = hex;
+    }
+    columnColorCache[columnKey] = { map, fetchedAt: Date.now() };
+    return map;
+  } catch {
+    return cached?.map ?? {};
+  }
+}
+
+/** Resolve the live badge hex color Monday shows for a status-column label.
+ *  Pass `forceRefresh=true` to bypass the short-lived cache (e.g. inbound
+ *  webhook processing, where staleness would silently keep the wrong color). */
+export async function resolveMondayStatusColor(
+  columnKey: "carriers" | "customerStatus" | "paymentStatus" | "warehouseStatus",
+  label: string | null,
+  forceRefresh = false,
+): Promise<string> {
+  if (!label) return "";
+  const map = await getColumnColorMap(columnKey, forceRefresh);
+  return map[label] ?? "";
+}
 
 function resolveMappedLabel(
   raw: string,
@@ -671,10 +769,21 @@ async function buildColumnValues(row: MondayRow) {
       const carrierVal = String(val || "").trim();
       if (carrierVal) {
         const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
-        const label =
-          carrierLabelMap[carrierVal.toLowerCase()] ||
-          carrierLabelMap[keyNorm] ||
-          (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        let label: string | null = null;
+
+        if (row.isDepot) {
+          if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+          else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+          else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+        }
+
+        if (!label) {
+          label =
+            carrierLabelMap[carrierVal.toLowerCase()] ||
+            carrierLabelMap[keyNorm] ||
+            (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        }
+
         if (label) values[colId] = { label };
         else skipped.push(`${key}:bad-label:${carrierVal}`);
       }

@@ -9,12 +9,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   const order = payload as OrderPayload;
 
-  // Refresh the DB snapshot + per-line-item index so the freight-orders list
-  // reflects edits (e.g. financial status, added/removed freight lines).
-  // Cin7/Monday entries remain create-time only.
   if (order.id) {
     try {
-      console.log(`[Cin7PaymentWebhook] topic=ORDERS_UPDATED`);
+      console.log(`[Cin7PaymentWebhook] topic=ORDERS_PAID`);
       console.log(`[Cin7PaymentWebhook] orderId=${String(order.id ?? "")}`);
       console.log(`[Cin7PaymentWebhook] orderNumber=${String(order.name ?? "")}`);
       console.log(`[Cin7PaymentWebhook] financial_status=${String((order as any).financial_status ?? "")}`);
@@ -25,13 +22,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } catch (e) {}
     await saveOrderSnapshot(shop, order);
     await reindexOrderById(shop, String(order.id));
-    // Attempt payment-only processing (idempotent, per-line)
+    // Attempt payment-only processing triggered by orders/paid
     try {
       console.log(`[Cin7PaymentWebhook] calling payment retry orderId=${String(order.id)}`);
       await attemptCreatePaymentsForOrder(shop, order);
       console.log(`[Cin7PaymentWebhook] payment retry finished orderId=${String(order.id)} result=ok`);
     } catch (e) {
-      console.error(`[Cin7Payment] orders.update payment attempt failed for ${String(order.id)}:`, e);
+      console.error(`[Cin7Payment] orders.paid payment attempt failed for ${String(order.id)}:`, e);
       try {
         console.log(`[Cin7PaymentWebhook] payment retry finished orderId=${String(order.id)} result=error ${String((e as any)?.message ?? e)}`);
       } catch (e2) {}

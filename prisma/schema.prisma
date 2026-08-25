@@ -177,16 +177,33 @@ model OrderLineItemOperationalData {
   variantId         String
   productTitle      String   @default("")   
   carrier           String   @default("")
+  carrierColor      String   @default("")
+  carrierColorLabel String   @default("")
   customerStatus    String   @default("")
+  customerStatusColor String @default("")
   customerStatusUpdatedAt DateTime?   // NEW
   paymentStatus     String   @default("")
+  paymentStatusColor String  @default("")
+  warehouseStatusColor String @default("")
   warehouseStatus   String   @default("")
   warehouseTags     String   @default("")
   dispatchStatus    String   @default("")
   deliveryStatus    String   @default("")
   trackingNumber    String   @default("")
   trackingNumberUpdatedAt DateTime?   // NEW
-  freightRef        String   @default("")  
+  freightRef        String   @default("")
+  // NEW: per-line delivery address (overrides order-level snapshot address for this line only)
+  shippingFirstName String   @default("")
+  shippingLastName  String   @default("")
+  shippingAddress1  String   @default("")
+  shippingAddress2  String   @default("")
+  shippingCity      String   @default("")
+  shippingProvince  String   @default("")
+  shippingZip       String   @default("")
+  shippingCountry   String   @default("")
+  depotAddress1     String   @default("")
+  depotCity         String   @default("")
+  depotZip          String   @default("")
   eddDate           String   @default("")
   eddDateUpdatedAt        DateTime?   // NEW
   originalEddDate   String   @default("")
@@ -272,6 +289,35 @@ model OrderLineItemIndex {
   // Matches the list ORDER BY so paginated reads are an ordered index scan.
   @@index([shop, createdAt(sort: Desc), orderId(sort: Desc), letterSuffix])
   @@index([shop, createdAt])
+}
+
+enum ShopifyWebhookJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ShopifyWebhookJob {
+  id            String                  @id @default(cuid())
+  shop          String
+  eventTopic    String                  @default("")
+  webhookId     String                  @default("")
+  orderId       String                  @default("")
+  payload       Json
+  status        ShopifyWebhookJobStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  maxAttempts   Int                     @default(5)
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  lastAttemptAt DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([shop, webhookId])
+  @@index([shop, status, createdAt(sort: Asc)])
+  @@index([status, createdAt(sort: Asc)])
 }
 
 model ExternalUser {

@@ -10,6 +10,8 @@ export type { FreightLineItem, FreightOrderRow, NoteItem, DashboardCounts, Freig
 import type { FreightLineItem, FreightOrderRow, NoteItem, FreightDashboardProps } from "./freight/types";
 
 import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix, resolveDetailTarget } from "./freight/helpers";
+import { getCarrierStatusStyle } from "./freight/helpers";
+import { getCarrierLabel } from "../lib/freight";
 import {
   CUSTOMER_STATUS_OPTIONS,
   WAREHOUSE_STATUS_OPTIONS,
@@ -201,6 +203,8 @@ export default function FreightDashboard({
       np.delete("warehouseStatus");
       np.delete("carrier");
       np.delete("paymentStatus");
+      np.delete("eddDate");
+      np.delete("eddDateEnd");
       np.set("page", "1");
       return np;
     });
@@ -208,7 +212,9 @@ export default function FreightDashboard({
   const hasActiveFilters = Boolean(
     searchParams.get("supplier") || searchParams.get("warehouseStatus") ||
     searchParams.get("carrier") ||
-    searchParams.get("paymentStatus")
+    searchParams.get("paymentStatus") ||
+    searchParams.get("eddDate") ||
+    searchParams.get("eddDateEnd")
   );
 
   // Open filter panel by default when URL already has filters (e.g. return from detail).
@@ -220,6 +226,8 @@ export default function FreightDashboard({
     warehouseStatus: searchParams.get("warehouseStatus") ?? "",
     carrier: searchParams.get("carrier") ?? "",
     paymentStatus: searchParams.get("paymentStatus") ?? "",
+    eddDate: searchParams.get("eddDate") ?? "",
+    eddDateEnd: searchParams.get("eddDateEnd") ?? "",
   });
   // Keep staging state in sync when URL params change externally (e.g. back/forward).
   useEffect(() => {
@@ -228,6 +236,8 @@ export default function FreightDashboard({
       warehouseStatus: searchParams.get("warehouseStatus") ?? "",
       carrier: searchParams.get("carrier") ?? "",
       paymentStatus: searchParams.get("paymentStatus") ?? "",
+      eddDate: searchParams.get("eddDate") ?? "",
+      eddDateEnd: searchParams.get("eddDateEnd") ?? "",
     });
   }, [searchParams]);
 
@@ -241,6 +251,8 @@ export default function FreightDashboard({
       set("warehouseStatus", merged.warehouseStatus);
       set("carrier", merged.carrier);
       set("paymentStatus", merged.paymentStatus);
+      set("eddDate", merged.eddDate);
+      set("eddDateEnd", merged.eddDateEnd);
       np.set("page", "1");
       return np;
     });
@@ -248,7 +260,16 @@ export default function FreightDashboard({
   };
 
   const removeFilter = (key: keyof typeof stagedFilters) => {
-    applyFilters({ [key]: "" });
+    if (key === "eddDate") {
+      applyFilters({ eddDate: "", eddDateEnd: "" });
+    } else {
+      applyFilters({ [key]: "" });
+    }
+  };
+
+  const formatDisplayDate = (iso: string) => {
+    const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : iso;
   };
 
   const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
@@ -256,6 +277,7 @@ export default function FreightDashboard({
     stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
     stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
     stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
+    stagedFilters.eddDate || stagedFilters.eddDateEnd ? { key: "eddDate" as const, label: "EDD Range", value: [stagedFilters.eddDate, stagedFilters.eddDateEnd].filter(Boolean).map(formatDisplayDate).join(" → ") } : null,
   ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
 
   const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
@@ -402,11 +424,32 @@ export default function FreightDashboard({
           return { ...o, lineItems: o.lineItems.map((li) => {
             const match = updates.find((u: any) => u.variantId === li.variantId);
             if (!match) return li;
-            return { ...li, eddDate: match.eddDate || li.eddDate, originalEddDate: match.originalEddDate || li.originalEddDate, trackingNumber: match.trackingNumber || li.trackingNumber, freightRef: match.freightRef || li.freightRef, customerStatus: match.customerStatus || li.customerStatus, company: match.carrier || li.company };
+            return {
+              ...li,
+              eddDate: match.eddDate || li.eddDate,
+              originalEddDate: match.originalEddDate || li.originalEddDate,
+              trackingNumber: match.trackingNumber || li.trackingNumber,
+              freightRef: match.freightRef || li.freightRef,
+              customerStatus: match.customerStatus || li.customerStatus,
+              company: match.carrier || li.company,
+              carrierColor: match.carrierColor || li.carrierColor,
+              customerStatusColor: match.customerStatusColor || li.customerStatusColor,
+              paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor,
+              // Update warehouse text AND color so badge updates immediately
+              warehouseStatus: match.warehouseStatus || li.warehouseStatus,
+              warehouseStatusColor: match.warehouseStatusColor || li.warehouseStatusColor,
+            };
           }) };
         };
         setRows((prev) => prev.map(applyLatest));
         if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+        // Also update open detail view (if any) so the detail badge text updates live
+        setDetailView((prev) => {
+          if (!prev) return prev;
+          const updatedOrder = applyLatest(prev.order);
+          const updatedItem = updatedOrder.lineItems.find((li) => li.variantId === prev.item.variantId) ?? prev.item;
+          return { ...prev, order: updatedOrder, item: updatedItem };
+        });
       } catch (e) { console.error("Failed to poll line item field updates", e); }
     };
     const interval = setInterval(pollFieldUpdates, 15000);
@@ -655,6 +698,94 @@ export default function FreightDashboard({
     setBulkActionsOpen(false);
   };
 
+  const handleFreightCsvExport = async (carrier: string) => {
+    if (!selectedTargets.length) {
+      throw new Error("Select at least one operational line item for the export");
+    }
+
+    const exportCarrierLabels: Record<string, string> = {
+      FLIWAYLINEHAUL: "Fliway Linehaul",
+      FLIWAYMIDSIZE: "Fliway Midsize",
+      FLIWAYDEPOT: "Fliway Depot",
+      M2H: "Mainfreight 2Home",
+      NZP: "NZ Post",
+      NZP_AGE_RESTRICTED: "NZ Post Age Restricted",
+      CASTLE: "Castle Parcels",
+    };
+
+    const normalizeCarrierValue = (value: string) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const matchesSelectedCarrier = (target: { item: FreightLineItem }, exportType: string) => {
+      const lineCompany = String(target.item.company || "").trim();
+      const lineLabel = getCarrierLabel(lineCompany, Boolean(target.item.isDepot)) || lineCompany;
+      const normalizedLineCompany = normalizeCarrierValue(lineCompany);
+      const normalizedLineLabel = normalizeCarrierValue(lineLabel);
+      const normalizedExportType = normalizeCarrierValue(exportType);
+
+      switch (exportType) {
+        case "FLIWAYLINEHAUL":
+          // Only lines the OMS displays as "Fliway - Linehaul" (non-depot
+          // FLIWAYLINEHAUL carrier). Depot-collection Fliway lines display as
+          // "Depot - Fliway" and must go through the Fliway Depot export.
+          return (
+            !Boolean(target.item.isDepot) &&
+            (normalizedLineCompany === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehaul")
+          );
+        case "FLIWAYMIDSIZE":
+          return normalizedLineCompany === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsizedepot";
+        case "FLIWAYDEPOT":
+          return Boolean(target.item.isDepot) || normalizedLineLabel === "depotfliway" || normalizedLineLabel === "fliwaydepot" || normalizedLineLabel === "fliwaylinehauldepot" || normalizedLineLabel === "fliwaymidsizedepot";
+        case "M2H": {
+          const isHomeDeliveryMainfreight = !Boolean(target.item.isDepot) && (normalizedLineCompany === "mainfreight" || normalizedLineLabel === "mainfreight");
+          return (
+            normalizedLineCompany === "m2h" ||
+            normalizedLineLabel === "m2h" ||
+            normalizedLineLabel === "mainfreight2home" ||
+            normalizedLineLabel === "mainfreightdelivery" ||
+            normalizedLineLabel === "m2hdelivery" ||
+            isHomeDeliveryMainfreight
+          );
+        }
+        case "NZP":
+          return normalizedLineCompany === "nzp" || normalizedLineLabel === "nzp";
+        case "NZP_AGE_RESTRICTED":
+          return normalizedLineCompany === "nzpagerestricted" || normalizedLineLabel === "nzpagerestricted" || normalizedLineLabel === "nzpostagerestricted";
+        case "CASTLE":
+          return normalizedLineCompany === "castle" || normalizedLineLabel === "castle" || normalizedLineLabel === "castleparcels";
+        default:
+          return normalizedLineCompany === normalizedExportType || normalizedLineLabel === normalizedExportType;
+      }
+    };
+
+    const matchingTargets = selectedTargets.filter((target) => matchesSelectedCarrier(target, carrier));
+    if (!matchingTargets.length) {
+      const label = exportCarrierLabels[carrier] || carrier;
+      throw new Error(`No selected line items match the selected ${label} export type.`);
+    }
+
+    const items = matchingTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+    const res = await fetch("/api/freight-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "export", carrier, items }),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `API error: ${res.status}`);
+    const skipped: Array<{ orderId: string; variantId: string; error?: string }> = Array.isArray(payload.skipped) ? payload.skipped : [];
+    const blob = new Blob([payload.csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    const fileName = `freight-export-${carrier.toLowerCase()}.csv`;
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    return {
+      summary: { total: items.length, succeeded: items.length - skipped.length, failed: skipped.length },
+      results: skipped.map((s) => ({ orderId: s.orderId, variantId: s.variantId, success: false, error: s.error })),
+    } as BulkActionsResult;
+  };
+
   // ── Tracking save ──
   // Writes tracking/freightRef + CommunicationLog (tracking_update) via API.
   // Carrier is read-only (set at checkout per line item). Does NOT sync to Shopify.
@@ -735,7 +866,11 @@ export default function FreightDashboard({
     setAmendError("");
     setIsSavingAmend(false);
     try {
-      const json = await fetchOrderAmendments(shop, detailView.order.shopifyOrderId);
+      const json = await fetchOrderAmendments(
+        shop,
+        detailView.order.shopifyOrderId,
+        detailView.item.variantId,
+      );
       if (!json?.ok) throw new Error(json?.error || "Failed to load order");
       const d = json.draft;
       setAmendForm({
@@ -960,19 +1095,30 @@ export default function FreightDashboard({
     await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
   };
 
-  const handleCreateCin7Order = async (order: FreightOrderRow) => {
+  const handleCreateCin7Order = async (order: FreightOrderRow, item?: FreightLineItem) => {
     if (creatingCin7OrderId) return; setCreatingCin7OrderId(order.id);
     try {
-      const response = await fetch("/api/cin7-create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId }) });
+      const response = await fetch("/api/cin7-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: order.shopifyOrderId,
+          variantId: item?.variantId ?? undefined,
+        }),
+      });
       if (!response.ok) { const errorJson = await response.json().catch(() => null); throw new Error(errorJson?.error || `Failed to create Cin7 order (${response.status})`); }
       const payload = await response.json();
       if (!payload.ok) throw new Error(payload.error || "Failed to create Cin7 order");
       const cin7Exists = Boolean(payload.cin7SalesOrderId && payload.cin7SalesOrderId !== "pending");
       const cin7SalesOrderUrl = String(payload.cin7SalesOrderUrl ?? "");
-      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => ({ ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] })) };
+      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => {
+        const matchesTarget = item ? li.variantId === item.variantId : true;
+        return matchesTarget ? { ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] } : li;
+      }) };
       setRows((prevRows = []) => prevRows.map(applyCin7));
       if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7) : prev);
-      if (detailView?.order.id === order.id) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
+      if (detailView?.order.id === order.id && item && detailView.item.variantId === item.variantId) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
       setSyncNotification("Cin7 order created successfully");
     } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to create Cin7 order"); } finally { setCreatingCin7OrderId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
   };
@@ -1412,7 +1558,15 @@ export default function FreightDashboard({
                     onChange={(e) => applyFilters({ carrier: e.target.value })}
                   >
                     <option value="">All carriers</option>
-                    {carriers.map((c) => <option key={c} value={c}>{c}</option>)}
+                    {carriers.map((c) => {
+                      const label = getCarrierLabel(c, false) || c;
+                      const { bg, text } = getCarrierStatusStyle(label);
+                      return (
+                        <option key={c} value={c} style={{ background: bg, color: text }}>
+                          {label}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
@@ -1428,6 +1582,26 @@ export default function FreightDashboard({
                     <option value="Partial">Partial</option>
                     <option value="Overdue">Overdue</option>
                   </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD from</label>
+                  <input
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDate}
+                    onChange={(e) => applyFilters({ eddDate: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD to</label>
+                  <input
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDateEnd}
+                    onChange={(e) => applyFilters({ eddDateEnd: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
                 </div>
                 {hasActiveFilters && (
                   <button
@@ -1536,6 +1710,10 @@ export default function FreightDashboard({
                 creatingCin7OrderId={creatingCin7OrderId}
                 hiddenColumns={hiddenColumns}
                 navigate={navigate}
+                onShowNotification={(msg) => {
+                  setSyncNotification(msg);
+                  window.setTimeout(() => setSyncNotification(null), 4500);
+                }}
               />
             )}
 
@@ -1643,6 +1821,7 @@ export default function FreightDashboard({
           onClose={handleBulkActionsClose}
           targets={selectedTargets}
           onRun={handleBulkActionsRun}
+          onExportFreightCsv={handleFreightCsvExport}
           onNotifyJobQueued={(jobId) => {
             watchQueuedEmail(jobId, 1);
           }}

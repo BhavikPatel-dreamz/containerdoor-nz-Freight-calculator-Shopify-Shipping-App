@@ -144,6 +144,15 @@ export function buildRowFromSnapshot(
 
   const itemSnaps = buildLineItemSnapshots(snap);
   if (itemSnaps.length === 0) return null;
+  // Business rule: depot orders always ship every line via the same carrier;
+  // standard orders can have a different (calculated) carrier per line. Use
+  // the ORIGINAL carrier recorded in the freight code at checkout (it.company)
+  // — not the live ops.carrier override — so a later per-line edit/sync
+  // (Monday, Cin7, manual) can never flip depot/standard status after the
+  // fact. isDepot must stay exactly what it was at checkout.
+  const finalCarriersInOrder = new Set(itemSnaps.map((it) => it.company));
+  const isDepotService =
+    String(snap.shippingCode ?? "").startsWith("depot_delivery::") && finalCarriersInOrder.size <= 1;
 
   const lineItems = itemSnaps.map((it) => {
     const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
@@ -151,6 +160,7 @@ export function buildRowFromSnapshot(
     // Prefer per-line Cin7 link; fall back to legacy order-level SO id (same as list loader).
     const lineCin7Id = String(ops?.cin7SalesOrderId ?? "").trim();
     const orderCin7Id = String(orderCin7IdMap?.get(String(snap.orderId)) ?? "").trim();
+    const legacyOrderFallbackAllowed = Boolean(orderCin7Id) && itemSnaps.length <= 1;
     const resolvedCin7Id =
       lineCin7Id && !["", "pending", "duplicate"].includes(lineCin7Id) ? lineCin7Id : orderCin7Id;
     return {
@@ -163,20 +173,29 @@ export function buildRowFromSnapshot(
       productId: it.productId,
       // Prefer OMS carrier override when set
       company: (ops?.carrier && String(ops.carrier).trim()) || it.company,
+      carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
       boxes: it.boxes,
       amount: it.amount,
       letterSuffix: it.letterSuffix,
+      isDepot: isDepotService,
       customerStatus: ops?.customerStatus ?? "",
+      customerStatusColor: ops?.customerStatusColor ?? "",
       paymentStatus: opsPayment || normalizePaymentStatus(snap.financialStatus),
+      paymentStatusColor: ops?.paymentStatusColor ?? "",
       trackingNumber: ops?.trackingNumber ?? "",
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",
       originalEddDate: ops?.originalEddDate ?? "",
       warehouseStatus: ops?.warehouseStatus ?? "",
+      warehouseStatusColor: ops?.warehouseStatusColor ?? "",
       dispatchStatus: ops?.dispatchStatus ?? "",
       deliveryStatus: ops?.deliveryStatus ?? "",
       depositPaid: ops?.depositPaid ?? "",
       balanceDue: ops?.balanceDue ?? "",
+      depotAddress1: ops?.depotAddress1 ?? "",
+      depotCity: ops?.depotCity ?? "",
+      depotZip: ops?.depotZip ?? "",
       supplierContainer: ops?.supplierContainer ?? "",
       receivedDate: ops?.receivedDate ?? "",
       portArrivalDate: ops?.portArrivalDate ?? "",
@@ -184,10 +203,12 @@ export function buildRowFromSnapshot(
       cin7SalesOrderId: resolvedCin7Id,
       cin7SalesOrderUrl: buildCin7SalesOrderUrl(resolvedCin7Id) ?? "",
       poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
-      // Prefer per-line Cin7 link; fall back to legacy order-level SO
+      // The tick is per-line, not per-order. We still retain the legacy
+      // order-level SO as a fallback for single-line historical orders, but
+      // multi-line orders must not inherit the first line's SO state.
       cin7Exists:
         Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
-        (orderCin7Map?.get(snap.orderId) ?? false),
+        (legacyOrderFallbackAllowed),
       cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
         ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
         : undefined,
@@ -264,10 +285,13 @@ export function buildRow(
       vendor: variantVendorMap.get(variantId) ?? "",
       sku: variantSkuMap.get(variantId) ?? "",
       company: company ?? "",
+      carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
       boxes: Number(boxesStr ?? 0),
       amount: Number(amountStr ?? 0),
       letterSuffix: LETTERS[idx % 26],
       customerStatus: ops?.customerStatus ?? "",
+      customerStatusColor: ops?.customerStatusColor ?? "",
       trackingNumber: ops?.trackingNumber ?? "",
       freightRef: ops?.freightRef ?? "",
       eddDate: ops?.eddDate ?? "",

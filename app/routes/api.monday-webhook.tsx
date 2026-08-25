@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { fetchMondayItem, fetchMondayUpdates } from "../lib/monday.server";
+import { fetchMondayItem, fetchMondayUpdates, resolveMondayStatusColor } from "../lib/monday.server";
 import { pushLineItemToAllSystems } from "../lib/sync-middleware.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 import { companyLabels } from "../lib/freight";
@@ -19,14 +19,17 @@ function normalizeMondayCarrierToOmsCode(raw: string): string {
   );
   if (byLabel) return byLabel[0];
 
-  // Common alias fallback from Monday status labels.
+  // Common alias fallback from Monday status labels. Monday's dropdown text
+  // is word-order-reversed from our companyLabels (e.g. "Linehaul - Fliway"
+  // vs our "Fliway - Linehaul"), so match both orders to avoid the raw label
+  // being written unmapped and briefly displayed before a later sync fixes it.
   const keyNorm = lower.replace(/[\s_-]+/g, "");
-  if (keyNorm === "fliwaylinehaul" || keyNorm === "fliway") return "FLIWAYLINEHAUL";
-  if (keyNorm === "fliwaymidsize") return "FLIWAYMIDSIZE";
+  if (keyNorm === "fliwaylinehaul" || keyNorm === "fliway" || keyNorm === "linehaulfliway") return "FLIWAYLINEHAUL";
+  if (keyNorm === "fliwaymidsize" || keyNorm === "midsizefliway") return "FLIWAYMIDSIZE";
   if (keyNorm === "nzp") return "NZP";
   if (keyNorm === "nzpage restricted" || keyNorm === "nzpagerestricted") return "NZP_AGE_RESTRICTED";
   if (keyNorm === "tge" || keyNorm === "teamglobalexpress") return "TGE";
-  if (keyNorm === "m2h") return "M2H";
+  if (keyNorm === "m2h" || keyNorm === "m2hdelivery") return "M2H";
   if (keyNorm === "mainfreight") return "MAINFREIGHT";
   if (keyNorm === "castle") return "CASTLE";
 
@@ -166,6 +169,49 @@ export async function action({ request }: ActionFunctionArgs) {
       const newCarrier = normalizeMondayCarrierToOmsCode(mondayData.carriers ?? "");
       if (newCarrier && newCarrier !== (record.carrier ?? "")) {
         updates.carrier = newCarrier;
+      }
+
+      // Capture Monday's live badge color from the raw webhook event when present
+      // (fast path). Fall back to resolveMondayStatusColor (board settings lookup)
+      // whenever the carrier text actually changed — the webhook event's color
+      // field isn't reliably present on every event shape, so this guarantees
+      // the badge color stays correct even when the fast path is empty.
+      const columnTitleLower = String(event?.columnTitle ?? "").trim().toLowerCase();
+      const badgeColorHex = String(event?.value?.label?.style?.color ?? "").trim();
+      const recordAny = record as any;
+      const currentCarrierColor = String(recordAny?.carrierColor ?? "").trim();
+      const currentCustomerStatusColor = String(recordAny?.customerStatusColor ?? "").trim();
+      const currentPaymentStatusColor = String(recordAny?.paymentStatusColor ?? "").trim();
+      const currentWarehouseStatusColor = String(recordAny?.warehouseStatusColor ?? "").trim();
+
+      if (badgeColorHex && columnTitleLower === "carrier" && badgeColorHex !== currentCarrierColor) {
+        updates.carrierColor = badgeColorHex;
+        updates.carrierColorLabel = String(event?.value?.label?.text ?? "").trim();
+      } else if (mondayData.carriers) {
+        // Re-resolve the color even when the carrier TEXT didn't change — a
+        // board-level label recolor (Monday column settings) doesn't change
+        // any item's value, so the earlier `updates.carrier` check alone
+        // would never catch it. forceRefresh=true bypasses the color cache so
+        // a just-changed board color is picked up immediately, not after TTL.
+        const resolvedCarrierColor = await resolveMondayStatusColor("carriers", mondayData.carriers, true);
+        if (resolvedCarrierColor && resolvedCarrierColor !== currentCarrierColor) {
+          updates.carrierColor = resolvedCarrierColor;
+          updates.carrierColorLabel = mondayData.carriers;
+        }
+      }
+      if (badgeColorHex && columnTitleLower === "warehouse status" && badgeColorHex !== currentWarehouseStatusColor) {
+        updates.warehouseStatusColor = badgeColorHex;
+      } else if (mondayData.warehouseStatus) {
+        const resolvedWarehouseColor = await resolveMondayStatusColor("warehouseStatus", mondayData.warehouseStatus, true);
+        if (resolvedWarehouseColor && resolvedWarehouseColor !== currentWarehouseStatusColor) {
+          updates.warehouseStatusColor = resolvedWarehouseColor;
+        }
+      }
+      if (columnTitleLower === "cust. status" && badgeColorHex && badgeColorHex !== currentCustomerStatusColor) {
+        updates.customerStatusColor = badgeColorHex;
+      }
+      if (columnTitleLower === "payment status" && badgeColorHex && badgeColorHex !== currentPaymentStatusColor) {
+        updates.paymentStatusColor = badgeColorHex;
       }
 
       // ── Pull Monday Updates (operational notes) inbound ──

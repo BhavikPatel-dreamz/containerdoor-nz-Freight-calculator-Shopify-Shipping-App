@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useState } from "react";
 import type { FreightOrderRow, FreightLineItem } from "./types";
-import { companyLabels } from "../../lib/freight";
+import { companyLabels, getCarrierLabel } from "../../lib/freight";
 import {
   CUSTOMER_STATUS_OPTIONS,
   WAREHOUSE_STATUS_OPTIONS,
@@ -49,7 +49,7 @@ export function TrackingModal({ trackingModal: tm, trackingForm, trackingError, 
           {trackingError && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{trackingError}</div>}
           {tm.item.company ? (
             <div style={{ fontSize: "13px", color: "#475569" }}>
-              Carrier: <strong style={{ color: "#2563eb" }}>{companyLabels[tm.item.company as keyof typeof companyLabels] ?? tm.item.company}</strong>
+              Carrier: <strong style={{ color: "#2563eb" }}>{getCarrierLabel(tm.item.company, Boolean(tm.item.isDepot)) ?? tm.item.company}</strong>
               <span style={{ display: "block", fontSize: "11px", marginTop: "4px" }}>Set at checkout — not editable here</span>
             </div>
           ) : null}
@@ -347,7 +347,7 @@ export function DispatchEditModal({ order, item, form, error, isSaving, setForm,
           {error && <div style={{ padding: "10px 12px", borderRadius: "6px", background: "#fee2e2", border: "1px solid #fecaca", color: "#991b1b", fontSize: "13px" }}>{error}</div>}
           {item.company ? (
             <div style={{ fontSize: "13px", color: "#475569" }}>
-              Carrier: <strong style={{ color: "#2563eb" }}>{companyLabels[item.company as keyof typeof companyLabels] ?? item.company}</strong>
+              Carrier: <strong style={{ color: "#2563eb" }}>{getCarrierLabel(item.company, Boolean(item.isDepot)) ?? item.company}</strong>
             </div>
           ) : null}
           {/* EDD + carrier edit — future phase */}

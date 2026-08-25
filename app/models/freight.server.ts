@@ -401,11 +401,30 @@ export async function importRatesCsv(shop: string, csv: string) {
 
   return { ok: true, message: `${created} rates created, ${updated} rates updated` };
 }
+export type ServiceRatesResult = {
+  rates: CalculatedServiceRate[];
+  issue: "QUOTE_REQUIRED_VARIANTS" | "SEPARATE_ORDERS" | null;
+  quoteRequiredVariantIds: string[];
+};
+
+// Overloads so TS knows exactly which shape comes back at each call site
 export async function calculateServiceRates(
   shop: string,
   destination: { city?: string; postalCode?: string },
   packages: FreightPackage[],
-) {
+): Promise<CalculatedServiceRate[]>;
+export async function calculateServiceRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  packages: FreightPackage[],
+  includeDiagnostics: true,
+): Promise<ServiceRatesResult>;
+export async function calculateServiceRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  packages: FreightPackage[],
+  includeDiagnostics?: boolean,
+): Promise<CalculatedServiceRate[] | ServiceRatesResult> {
   const settings = await getAppSettings(shop);
 
   const packagesByVariant = new Map<string, FreightPackage[]>();
@@ -432,7 +451,10 @@ export async function calculateServiceRates(
   }
 >();
 
+  const quoteRequiredVariantIds: string[] = []; // NEW — variants with zero valid options
+
   for (const [variantId, variantPackages] of packagesByVariant) {
+    
     // For each serviceType, find the cheapest company across all packages for this variant
     // Each package in variantPackages has its own allowed company
     // serviceType -> best per company (depot keeps all companies, others keep cheapest)
@@ -462,6 +484,12 @@ for (const freightPackage of variantPackages) {
       });
     }
   }
+}
+
+// NEW: this product has no deliverable option at all for this destination
+if (bestByService.size === 0) {
+  quoteRequiredVariantIds.push(variantId);
+  continue;
 }
 
 // Accumulate into serviceAccum
@@ -501,7 +529,22 @@ for (const [key, best] of bestByService) {
   });
 }
 
-  return completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
+  completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
+
+  // NEW: skipped unless a caller opts in — existing callers get the same array as before
+  if (!includeDiagnostics) {
+    return completeServiceRates;
+  }
+
+  if (quoteRequiredVariantIds.length > 0) {
+    return { rates: [] as CalculatedServiceRate[], issue: "QUOTE_REQUIRED_VARIANTS" as const, quoteRequiredVariantIds };
+  }
+
+  if (completeServiceRates.length === 0 && packagesByVariant.size > 1) {
+    return { rates: [] as CalculatedServiceRate[], issue: "SEPARATE_ORDERS" as const, quoteRequiredVariantIds: [] as string[] };
+  }
+
+  return { rates: completeServiceRates, issue: null, quoteRequiredVariantIds: [] as string[] };
 }
 
 export async function findMatchingRates(

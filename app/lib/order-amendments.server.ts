@@ -52,6 +52,8 @@ export type AmendmentResult = {
   shopifyOk?: boolean;
   shopifyError?: string;
   mondayOk?: boolean;
+  cin7Ok?: boolean;
+  cin7Error?: string;
   activityLogged: number;
 };
 
@@ -144,24 +146,35 @@ async function pushDeliveryInstructionsMetafield(
 }
 
 /** Load current contact/address for amend form. */
-export async function getOrderAmendmentDraft(shop: string, orderId: string) {
+export async function getOrderAmendmentDraft(shop: string, orderId: string, variantId?: string) {
   const snap = await prisma.orderSnapshot.findUnique({
     where: { shop_orderId: { shop, orderId } },
   });
   if (!snap) return null;
+
+  let lineOps: any = null;
+  if (variantId) {
+    lineOps = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    });
+  }
+  const hasLineAddress = Boolean(
+    lineOps && (lineOps.shippingAddress1 || lineOps.shippingCity || lineOps.shippingZip),
+  );
+
   return {
     orderId: snap.orderId,
     orderName: snap.orderName,
     email: snap.email,
     phone: snap.phone,
-    firstName: snap.shippingFirstName,
-    lastName: snap.shippingLastName,
-    address1: snap.shippingAddress1,
-    address2: snap.shippingAddress2,
-    city: snap.shippingCity,
-    province: snap.shippingProvince,
-    zip: snap.shippingZip,
-    country: snap.shippingCountry,
+    firstName: hasLineAddress ? lineOps.shippingFirstName : snap.shippingFirstName,
+    lastName: hasLineAddress ? lineOps.shippingLastName : snap.shippingLastName,
+    address1: hasLineAddress ? lineOps.shippingAddress1 : snap.shippingAddress1,
+    address2: hasLineAddress ? lineOps.shippingAddress2 : snap.shippingAddress2,
+    city: hasLineAddress ? lineOps.shippingCity : snap.shippingCity,
+    province: hasLineAddress ? lineOps.shippingProvince : snap.shippingProvince,
+    zip: hasLineAddress ? lineOps.shippingZip : snap.shippingZip,
+    country: hasLineAddress ? lineOps.shippingCountry : snap.shippingCountry,
     deliveryInstructions: snap.deliveryInstructions,
   };
 }
@@ -210,7 +223,7 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
   }
 
   // ── Address ──
-  if (input.address) {
+    if (input.address && !input.variantId) {
     const a = input.address;
     const map: Array<[keyof AddressAmendment, string, string]> = [
       ["firstName", "shippingFirstName", "firstName"],
@@ -237,6 +250,43 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
         changes.push({ field: "phone", oldValue: snap.phone, newValue: a.phone.trim() });
         snapUpdate.phone = a.phone.trim();
         shopifyInput.phone = a.phone.trim();
+      }
+    }
+  }
+
+  // ── Address (line/product-level override) ──
+  let lineAddressChanged = false;
+  if (input.address && input.variantId) {
+    const lineOps = await prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId: input.variantId } },
+    });
+    if (lineOps) {
+      const a = input.address;
+      const lineUpdate: Record<string, string> = {};
+      const lmap: Array<[keyof AddressAmendment, string, string]> = [
+        ["firstName", "shippingFirstName", "firstName"],
+        ["lastName", "shippingLastName", "lastName"],
+        ["address1", "shippingAddress1", "address1"],
+        ["address2", "shippingAddress2", "address2"],
+        ["city", "shippingCity", "city"],
+        ["province", "shippingProvince", "province"],
+        ["zip", "shippingZip", "zip"],
+        ["country", "shippingCountry", "country"],
+      ];
+      for (const [inKey, lineKey, label] of lmap) {
+        if (a[inKey] === undefined) continue;
+        const next = String(a[inKey] ?? "").trim();
+        const prev = String((lineOps as any)[lineKey] ?? "");
+        if (next === prev) continue;
+        lineUpdate[lineKey] = next;
+        lineAddressChanged = true;
+        changes.push({ field: label, oldValue: prev, newValue: next });
+      }
+      if (lineAddressChanged) {
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: lineOps.id },
+          data: lineUpdate,
+        });
       }
     }
   }
@@ -385,6 +435,36 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
     }
   }
 
+  // ── Cin7 (per-line delivery address) ──
+  let cin7Ok: boolean | undefined;
+  let cin7Error: string | undefined;
+  if (lineAddressChanged && input.variantId) {
+    try {
+      const { resolveCin7SalesOrderId } = await import("./cin7-adapter.server");
+      const { syncCin7DeliveryAddress } = await import("./cin7.server");
+      const link = await resolveCin7SalesOrderId({ shop, orderId, variantId: input.variantId });
+      if (link.salesOrderId) {
+        const a = input.address!;
+        const r = await syncCin7DeliveryAddress({
+          salesOrderId: link.salesOrderId,
+          firstName: a.firstName ?? snap.shippingFirstName,
+          lastName: a.lastName ?? snap.shippingLastName,
+          address1: a.address1 ?? snap.shippingAddress1,
+          address2: a.address2 ?? snap.shippingAddress2,
+          city: a.city ?? snap.shippingCity,
+          state: a.province ?? snap.shippingProvince,
+          postalCode: a.zip ?? snap.shippingZip,
+          country: a.country ?? snap.shippingCountry,
+        });
+        cin7Ok = r.updated;
+        if (r.error) cin7Error = r.error;
+      }
+    } catch (e) {
+      cin7Ok = false;
+      cin7Error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // ── Monday (name/email on linked items) ──
   let mondayOk: boolean | undefined;
   const nameChanged = changes.some((c) => c.field === "firstName" || c.field === "lastName" || c.field === "email");
@@ -468,6 +548,8 @@ export async function applyOrderAmendment(input: AmendmentInput): Promise<Amendm
     shopifyOk,
     shopifyError,
     mondayOk,
+    cin7Ok,
+    cin7Error,
     activityLogged,
   };
 }

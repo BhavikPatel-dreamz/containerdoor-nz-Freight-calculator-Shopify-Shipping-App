@@ -94,7 +94,7 @@ function CartLineFreightStatus() {
     (cartLine as any)?.title ??
     "";
 
-  // ── Fetch all records for the order, then pick the matching one ───────────
+  // ── Fetch all records for the order, then pick the matching one ─
   const fetchRecord = useCallback(async () => {
     if (!numericOrderId) {
       setLoading(false);
@@ -207,13 +207,17 @@ function FreightStatusRow({ record }: FreightStatusRowProps) {
     <View padding={["none", "none", "tight", "none"]}>
       <BlockStack spacing="extraTight">
 
-        {/* Badge + tracking inline */}
+        {/* Badge + carrier + tracking inline */}
         <InlineStack spacing="base" blockAlignment="center">
           <Badge tone={badge.tone}>{badge.label}</Badge>
+          {record.carrier ? (
+            <Text size="small" appearance="subdued">
+              {record.carrier}
+            </Text>
+          ) : null}
           {record.trackingNumber ? (
             <Text size="small" appearance="subdued">
               {record.trackingNumber}
-              {record.carrier ? ` · ${record.carrier}` : ""}
             </Text>
           ) : null}
         </InlineStack>
@@ -248,7 +252,7 @@ function resolveBadge(
   if (d === "failed") return { label: "Delivery Failed", tone: "critical" };
   if (d === "pending") return { label: "Pending", tone: "warning" };
 
-  // Fall back to customer status
+  // Customer status is only used as a fallback
   if (c === "dispatched") return { label: "Dispatched", tone: "success" };
   if (c === "delivered") return { label: "Delivered", tone: "success" };
   if (c === "cancelled") return { label: "Cancelled", tone: "critical" };
@@ -271,11 +275,9 @@ function resolveDate(
 
   const rawEdd = record.eddDate?.trim() ?? "";
   const rawInTransit = record.inTransitDate?.trim() ?? "";
-  const rawPort = record.portArrivalDate?.trim() ?? "";
 
   const edd = rawEdd ? formatDate(rawEdd) : null;
   const inTransit = rawInTransit ? formatDate(rawInTransit) : null;
-  const port = rawPort ? formatDate(rawPort) : null;
 
   if (d === "delivered") {
     const date = inTransit ?? edd;
@@ -291,11 +293,8 @@ function resolveDate(
     const date = inTransit ?? edd;
     return date ? `Dispatched: ${date}` : null;
   }
-  if (port) {
-    return `Port Arrival: ${port}`;
-  }
 
-  return edd ? `Estimated dispatch: ${edd}` : null;
+  return edd ? `EDD date: ${edd}` : null;
 }
 
 // ─── Date formatter ───────────────────────────────────────────────────────────
