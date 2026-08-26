@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // ─── Email Provider Abstraction ──────────────────────────────────────────────
 // Switch providers by changing EMAIL_PROVIDER env var + corresponding API key.
-// Supported: resend, ses, sendgrid, postmark, mailgun, smtp
+// Supported: resend, smtp, klaviyo, ses, sendgrid, postmark, mailgun
 
 export interface EmailMessage {
   from: string;
@@ -67,6 +67,75 @@ class SmtpProvider implements EmailProvider {
     });
     const info = await transport.sendMail({ from: msg.from, to: msg.to, subject: msg.subject, text: msg.text, html: msg.html });
     return { success: true, id: info.messageId };
+  }
+}
+
+// ─── Klaviyo (Events API) ───────────────────────────────────────────────────
+// Uses POST /api/events to create an event that triggers a Klaviyo Flow.
+// The Flow must be pre-configured in Klaviyo with an email template that reads
+// event properties (e.g. {{ event.Subject }}, {{ event.Body }}).
+// 'from' is ignored — sender is configured in the Flow email settings.
+
+const KLAVIYO_API_URL = "https://a.klaviyo.com/api/events";
+const KLAVIYO_API_REVISION = "2026-07-15";
+
+class KlaviyoProvider implements EmailProvider {
+  readonly name = "klaviyo";
+  private apiKey: string;
+  private metricName: string;
+
+  constructor(apiKey: string, metricName?: string) {
+    this.apiKey = apiKey;
+    this.metricName = metricName || "ContainerDoor Notification";
+  }
+
+  async send(msg: EmailMessage): Promise<EmailSendResult> {
+    const uniqueId = crypto.randomUUID();
+    const body = {
+      data: {
+        type: "event",
+        attributes: {
+          properties: {
+            Subject: msg.subject,
+            Body: msg.text || "",
+            HtmlContent: msg.html || "",
+            From: msg.from,
+          },
+          metric: {
+            data: {
+              type: "metric",
+              attributes: { name: this.metricName },
+            },
+          },
+          profile: {
+            data: {
+              type: "profile",
+              attributes: { email: msg.to },
+            },
+          },
+          unique_id: uniqueId,
+        },
+      },
+    };
+
+    const res = await fetch(KLAVIYO_API_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Klaviyo-API-Key ${this.apiKey}`,
+        revision: KLAVIYO_API_REVISION,
+        "Content-Type": "application/vnd.api+json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      const json = await res.json().catch(() => ({}));
+      return { success: true, id: json?.data?.id };
+    }
+
+    const errJson = await res.json().catch(() => ({}));
+    const detail = errJson?.errors?.[0]?.detail || res.statusText;
+    return { success: false, error: `Klaviyo ${res.status}: ${detail}` };
   }
 }
 
@@ -136,6 +205,11 @@ export function getEmailProvider(): EmailProvider {
         pass: process.env.SMTP_PASS,
       });
     }
+    case "klaviyo": {
+      const apiKey = process.env.KLAVIYO_API_KEY;
+      if (!apiKey) throw new Error("KLAVIYO_API_KEY not configured");
+      return new KlaviyoProvider(apiKey, process.env.KLAVIYO_METRIC_NAME);
+    }
     case "sendgrid": {
       const apiKey = process.env.SENDGRID_API_KEY;
       if (!apiKey) throw new Error("SENDGRID_API_KEY not configured");
@@ -156,7 +230,7 @@ export function getEmailProvider(): EmailProvider {
       return new SesProvider({});
     }
     default:
-      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Supported: resend, smtp, sendgrid, postmark, mailgun, ses`);
+      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Supported: resend, smtp, klaviyo, sendgrid, postmark, mailgun, ses`);
   }
 }
 
