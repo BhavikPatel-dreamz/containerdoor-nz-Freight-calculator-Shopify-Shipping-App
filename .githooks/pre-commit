@@ -3,7 +3,8 @@
 # .githooks/pre-commit — single-file security hook (version controlled)
 #
 # Install:   bash .githooks/pre-commit --install
-#            (sets core.hooksPath=.githooks — nothing is copied into .git/)
+#            (writes .git/hooks/pre-commit trampoline — no git config needed)
+#            npm prepare runs this after clone + npm install
 # Bypass:    SKIP_SECURITY_SCAN=1 git commit ...   or   git commit --no-verify
 # Fast mode: SKIP_SCANNER=1 git commit ...         (skips the npx scanner only)
 #
@@ -15,14 +16,38 @@ YELLOW='\033[0;33m'
 NC='\033[0m'
 
 # ----------------------------------------------------------------------------
-# Self-install: writes .git/hooks/pre-commit that calls this script
+# Self-install: default Git hook path (.git/hooks), no core.hooksPath.
+# After pull, `npm install` / `prepare` writes the trampoline so commits
+# run this script without any local git config.
 # ----------------------------------------------------------------------------
 if [ "${1:-}" = "--install" ]; then
   ROOT=$(git rev-parse --show-toplevel)
-  git -C "$ROOT" config core.hooksPath .githooks
   chmod +x "$ROOT/.githooks/pre-commit"
   git -C "$ROOT" update-index --chmod=+x .githooks/pre-commit 2>/dev/null || true
-  echo "core.hooksPath set to .githooks — pre-commit hook active."
+
+  # Do not overwrite Husky (it owns .git/hooks).
+  if [ -d "$ROOT/.husky" ]; then
+    echo "Husky detected — skipped writing .git/hooks/pre-commit. Use Husky to call .githooks/pre-commit."
+    exit 0
+  fi
+
+  GITDIR=$(git -C "$ROOT" rev-parse --git-dir)
+  case "$GITDIR" in
+    /*) ;;
+    *) GITDIR="$ROOT/$GITDIR" ;;
+  esac
+  mkdir -p "$GITDIR/hooks"
+  cat > "$GITDIR/hooks/pre-commit" <<'EOF'
+#!/usr/bin/env bash
+# Trampoline (not version-controlled). Runs the repo hook after clone/pull.
+ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+HOOK="$ROOT/.githooks/pre-commit"
+[ -f "$HOOK" ] || exit 0
+[ -x "$HOOK" ] || chmod +x "$HOOK" 2>/dev/null || true
+exec "$HOOK"
+EOF
+  chmod +x "$GITDIR/hooks/pre-commit"
+  echo "Installed Git pre-commit trampoline → .githooks/pre-commit (no git config required)."
   exit 0
 fi
 
