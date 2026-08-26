@@ -682,6 +682,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const homeDeliveryFee =
     rate.serviceType === "STANDARD_DELIVERY" &&
     rate.company !== "TGE" &&
+    rate.company !== "FLIWAYMIDSIZE" &&
     resolvedHomeDeliveryFee > 0
       ? resolvedHomeDeliveryFee
       : 0;
