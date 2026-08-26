@@ -84,7 +84,9 @@ function toHtml(text: string) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
   const linked = escaped.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
-  return linked.replace(/\r?\n/g, "<br>");
+  const withParagraphs = linked.replace(/\r?\n\r?\n/g, "<br><br>");
+  const body = withParagraphs.replace(/\r?\n/g, "<br>");
+  return `<div style="max-width:600px;margin:0 auto;padding:24px 32px;line-height:1.6;color:#333;font-size:15px;">${body}</div>`;
 }
 
 // ─── Cancel ─────────────────────────────────────────────────────────────────
