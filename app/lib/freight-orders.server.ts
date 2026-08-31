@@ -128,6 +128,24 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   return out;
 }
 
+// Parse a DB OrderSnapshot's lineItemsJson into a variantId → Shopify ordered
+// quantity map. This is the OMS quantity source of truth (units/items ordered),
+// NOT the carton/box count (which lives in the freight code and is `boxes`).
+export function buildLineItemQuantityMap(snap: any): Map<string, number> {
+  const map = new Map<string, number>();
+  let parsed: Array<{ variantId?: number | string; quantity?: number }> = [];
+  try {
+    parsed = JSON.parse(snap?.lineItemsJson ?? "[]");
+  } catch { /* empty */ }
+  for (const li of parsed) {
+    if (li.variantId != null) {
+      const qty = Math.max(Number(li.quantity ?? 1) || 1, 1);
+      map.set(String(li.variantId), qty);
+    }
+  }
+  return map;
+}
+
 // Build a FreightDashboard row from a DB OrderSnapshot. Used by the list loader
 // and the detail loader so both render identical data (same shape as buildRow,
 // plus per-item paymentStatus derived from the snapshot financial status).
@@ -144,6 +162,7 @@ export function buildRowFromSnapshot(
 
   const itemSnaps = buildLineItemSnapshots(snap);
   if (itemSnaps.length === 0) return null;
+  const quantityByVariant = buildLineItemQuantityMap(snap);
   // Business rule: depot orders always ship every line via the same carrier;
   // standard orders can have a different (calculated) carrier per line. Use
   // the ORIGINAL carrier recorded in the freight code at checkout (it.company)
@@ -176,6 +195,9 @@ export function buildRowFromSnapshot(
       carrierColor: ops?.carrierColor ?? "",
       carrierColorLabel: ops?.carrierColorLabel ?? "",
       boxes: it.boxes,
+      // Shopify ordered quantity (units/items) — OMS Qty source of truth, NOT
+      // the carton/box count.
+      quantity: quantityByVariant.get(it.variantId) ?? 1,
       amount: it.amount,
       letterSuffix: it.letterSuffix,
       isDepot: isDepotService,

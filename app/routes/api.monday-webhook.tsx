@@ -32,6 +32,13 @@ function normalizeMondayCarrierToOmsCode(raw: string): string {
   if (keyNorm === "m2h" || keyNorm === "m2hdelivery") return "M2H";
   if (keyNorm === "mainfreight") return "MAINFREIGHT";
   if (keyNorm === "castle") return "CASTLE";
+  // Depot-collection display labels (getCarrierLabel(..., true) output, e.g.
+  // "MF Depot", "Depot - Fliway") — map back to the same raw enum so a
+  // Monday sync-back never overwrites carrier with a display label instead
+  // of the canonical CarrierCompany code.
+  if (keyNorm === "mfdepot" || keyNorm === "mainfreightdepot") return "MAINFREIGHT";
+  if (keyNorm === "depotfliway" || keyNorm === "fliwaydepot") return "FLIWAYLINEHAUL";
+  if (keyNorm === "tgedepot" || keyNorm === "depottge") return "TGE";
 
   // Preserve raw if unknown so operator can still see value and we can debug.
   return v;

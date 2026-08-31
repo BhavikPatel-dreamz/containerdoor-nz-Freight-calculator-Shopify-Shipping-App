@@ -4,7 +4,7 @@
 // filters, sorts and paginates on in the DB. Mutable status/tracking lives in
 // OrderLineItemOperationalData and is joined at read time.
 import prisma from "../db.server";
-import { buildLineItemSnapshots } from "./freight-orders.server";
+import { buildLineItemSnapshots, buildLineItemQuantityMap } from "./freight-orders.server";
 
 // Re-derive the index rows for one order from its DB snapshot and sync them:
 // upsert the current freight line items, then delete any stale index rows for
@@ -14,6 +14,7 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
   if (!snap) return 0;
   const orderId = String(snap.orderId);
   const items = buildLineItemSnapshots(snap);
+  const quantityByVariant = buildLineItemQuantityMap(snap);
 
   const orderFields = {
     shopifyOrderId: orderId,
@@ -41,6 +42,10 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
   const upserts = items.map((it) => {
     const searchText = [
       orderFields.orderName,
+      it.letterSuffix,
+      // Contiguous `orderNumber + suffix` (e.g. `123456A`) so a search with the
+      // line-order letter matches only that specific line.
+      `${orderFields.orderName}${it.letterSuffix}`,
       orderFields.customerName,
       orderFields.email,
       orderFields.carriers,
@@ -62,6 +67,8 @@ export async function reindexOrderLineItems(shop: string, snap: any): Promise<nu
       vendor: it.vendor,
       company: it.company,
       boxes: it.boxes,
+      // Shopify ordered quantity (units/items) — OMS Qty source of truth.
+      quantity: quantityByVariant.get(it.variantId) ?? 1,
       amount: it.amount,
       searchText,
     };

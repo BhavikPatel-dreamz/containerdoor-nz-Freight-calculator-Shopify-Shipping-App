@@ -257,6 +257,7 @@ export async function exportRatesCsv(shop: string) {
     "residentialFee",       
     "mode",
     "active",
+    "rural",
     "id",
   ],
   ...rates.map((rate) => [
@@ -282,6 +283,7 @@ export async function exportRatesCsv(shop: string) {
     ((rate as any).residentialFee ?? 0).toString(), 
     rate.mode ?? "",
     String(rate.active),
+    Number(rate.ruralSurcharge) > 0 ? "1" : "0",
     rate.id,
   ]),
 ];
@@ -680,6 +682,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const homeDeliveryFee =
     rate.serviceType === "STANDARD_DELIVERY" &&
     rate.company !== "TGE" &&
+    rate.company !== "FLIWAYMIDSIZE" &&
     resolvedHomeDeliveryFee > 0
       ? resolvedHomeDeliveryFee
       : 0;

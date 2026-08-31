@@ -14,6 +14,8 @@ export type FreightLineItem = {
   carrierColor?: string;
   carrierColorLabel?: string;
   boxes: number;
+  /** Shopify ordered line-item quantity (units/items) — OMS Qty source of truth. */
+  quantity: number;
   amount: number;
   letterSuffix: string;
   customerStatus: string;
