@@ -54,6 +54,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     conds.push(Prisma.sql`(
       idx."searchText" LIKE ${like}
       OR lower(idx."orderName") LIKE ${like}
+      -- Combined order name + line-order suffix (e.g. 123456A) so a search
+      -- with the letter suffix matches ONLY that specific line order, while a
+      -- bare order number still matches every line of the overall order.
+      OR lower(idx."orderName" || idx."letterSuffix") LIKE ${like}
+      OR lower(idx."letterSuffix") LIKE ${like}
       OR lower(idx."customerName") LIKE ${like}
       OR lower(idx."email") LIKE ${like}
       OR lower(idx."sku") LIKE ${like}
@@ -154,7 +159,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."letterSuffix", idx."customerName", idx."email", idx."phone", idx."city", idx."zip",
       idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
-      idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus",
+      idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus", idx."quantity",
        ops."customerStatus", ops."customerStatusColor" AS ops_customer_status_color, ops."carrier" AS ops_carrier, ops."carrierColor" AS ops_carrier_color, ops."paymentStatus" AS ops_payment_status, ops."paymentStatusColor" AS ops_payment_status_color, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
       ops."warehouseStatus", ops."warehouseStatusColor" AS ops_warehouse_status_color, ops."dispatchStatus", ops."deliveryStatus", ops."depositPaid", ops."balanceDue",
       ops."supplierContainer", ops."receivedDate", ops."portArrivalDate", ops."inTransitDate",
@@ -197,6 +202,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
       company: (r.ops_carrier && String(r.ops_carrier).trim()) || r.company || "",
       carrierColor: r.ops_carrier_color || "",
       boxes: Number(r.boxes ?? 0),
+      // Shopify ordered line-item quantity — OMS Qty source of truth.
+      quantity: Math.max(Number(r.quantity ?? 1) || 1, 1),
       amount: Number(r.amount ?? 0),
       letterSuffix: r.letterSuffix || "",
       customerStatus: r.customerStatus ?? "",

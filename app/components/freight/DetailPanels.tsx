@@ -171,7 +171,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row"><span className="fo-detail-label">Variant</span><span className="fo-detail-value">{item.variantTitle || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">SKU</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{item.sku || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Product ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "12px" }}>{item.productId || "—"}</span></div>
-        <div className="fo-detail-row"><span className="fo-detail-label">Quantity</span><span className="fo-detail-value">{item.boxes || 1}</span></div>
+        <div className="fo-detail-row"><span className="fo-detail-label">Quantity</span><span className="fo-detail-value">{item.quantity || 1}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label">Order date</span><span className="fo-detail-value">{new Date(order.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}</span></div>
         <div style={{ borderTop: "1px solid #f3f4f6", margin: "6px 0" }} />
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.variantId || "—"}</span></div>

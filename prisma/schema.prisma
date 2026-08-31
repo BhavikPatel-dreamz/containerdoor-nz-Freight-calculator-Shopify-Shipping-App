@@ -274,6 +274,10 @@ model OrderLineItemIndex {
   vendor         String   @default("")
   company        String   @default("")
   boxes          Int      @default(0)
+  // Shopify ordered line-item quantity (units/items) — source of truth for OMS
+  // Qty. Distinct from `boxes` (cartons in the freight code), which must NOT be
+  // used for OMS quantity.
+  quantity       Int      @default(0)
   amount         Decimal  @default(0) @db.Decimal(10, 2)
   financialStatus   String @default("")
   fulfillmentStatus String @default("")
