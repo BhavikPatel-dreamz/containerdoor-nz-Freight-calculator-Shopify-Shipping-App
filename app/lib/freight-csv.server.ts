@@ -712,7 +712,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       if (!custOrderRef) {
         custOrderRef = String(rawProductRef || baseRow.orderName || baseRow.orderId || "").replace(/[^a-zA-Z0-9]/g, "");
       }
-      custOrderRef = custOrderRef.slice(0, 20);
+      custOrderRef = custOrderRef.slice(0, 20).trim();
 
       return [
         conNoteNo,
@@ -761,7 +761,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       if (!custOrderRef) {
         custOrderRef = String(rawProductRef || orderRef || "").replace(/[^a-zA-Z0-9]/g, "");
       }
-      custOrderRef = custOrderRef.slice(0, 20);
+      custOrderRef = custOrderRef.slice(0, 20).trim();
       const rawOrderReference = String(baseRow.orderName || baseRow.orderId || "");
       const normalizedOrderReference = normalizeFliwayLinehaulOrderReference(rawOrderReference) || normalizeFliwayLinehaulOrderReference(baseRow.orderId);
       // ConnoteNo: do not include CNDR/CDL/# prefix here; export layer will append suffix.
@@ -847,7 +847,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const variantPartClean = variantPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
     let custOrderRef = variantPartClean ? `${skuPrefixClean} ${variantPartClean}` : skuPrefixClean;
     if (!custOrderRef) custOrderRef = String(rawProductRef || orderRef || "").replace(/[^a-zA-Z0-9]/g, "");
-    custOrderRef = custOrderRef.slice(0, 20);
+    custOrderRef = custOrderRef.slice(0, 20).trim();
 
     const rawOrderReference = String(baseRow.orderName || baseRow.orderId || "");
     const normalizedOrderReference = normalizeFliwayLinehaulOrderReference(rawOrderReference) || normalizeFliwayLinehaulOrderReference(baseRow.orderId);
@@ -897,7 +897,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       .replace(/[\/\-]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    const senderRef = senderRefBase.slice(0, 20);
+    const senderRef = senderRefBase.slice(0, 20).trim();
 
     // Receiver Ref: first 4 NUMERIC digits of SKU + product name, max 20 chars
     const skuDigits = String(sku || "").replace(/\D/g, "");
@@ -905,7 +905,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const productNamePart = String(product || "").trim();
     const receiverRefCombined =
       skuPrefix && productNamePart ? `${skuPrefix} ${productNamePart}` : `${skuPrefix}${productNamePart}`;
-    let receiverRef = receiverRefCombined.trim().slice(0, 20);
+    let receiverRef = receiverRefCombined.trim().slice(0, 20).trim();
     if (!receiverRef) receiverRef = String(baseRow.orderName || "Freight item").slice(0, 20);
 
     const receiverCode = "";
