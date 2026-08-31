@@ -706,8 +706,8 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       const rawProductRef = String(sku || product || "").trim();
       const skuPart = rawProductRef.includes("-") ? rawProductRef.split("-")[0].trim() : rawProductRef;
       const variantPart = variantTitle;
-      const skuPartClean = skuPart.replace(/[\/\-]/g, "").trim();
-      const variantPartClean = variantPart.replace(/[\/\-]/g, "").trim();
+      const skuPartClean = skuPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
+      const variantPartClean = variantPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
       let custOrderRef = variantPartClean ? `${skuPartClean} ${variantPartClean}` : skuPartClean;
       if (!custOrderRef) {
         custOrderRef = String(rawProductRef || baseRow.orderName || baseRow.orderId || "").replace(/[^a-zA-Z0-9]/g, "");
@@ -755,8 +755,8 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       const rawProductRef = String(sku || product || "").trim();
       const skuPart = rawProductRef.includes("-") ? rawProductRef.split("-")[0].trim() : rawProductRef;
       const variantPart = variantTitle;
-      const skuPartClean = skuPart.replace(/[\/\-]/g, "").trim();
-      const variantPartClean = variantPart.replace(/[\/\-]/g, "").trim();
+      const skuPartClean = skuPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
+      const variantPartClean = variantPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
       let custOrderRef = variantPartClean ? `${skuPartClean} ${variantPartClean}` : skuPartClean;
       if (!custOrderRef) {
         custOrderRef = String(rawProductRef || orderRef || "").replace(/[^a-zA-Z0-9]/g, "");
@@ -843,8 +843,8 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
     const skuSegment = rawProductRef.includes("-") ? rawProductRef.split("-")[0].trim() : rawProductRef;
     const skuPrefix = skuSegment.slice(0, 4); // take up to 4 chars
     const variantPart = variantTitle;
-    const skuPrefixClean = String(skuPrefix).replace(/[\/\-]/g, "").trim();
-    const variantPartClean = variantPart.replace(/[\/\-]/g, "").trim();
+    const skuPrefixClean = String(skuPrefix).replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
+    const variantPartClean = variantPart.replace(/[\/\-]/g, " ").replace(/\s+/g, " ").trim();
     let custOrderRef = variantPartClean ? `${skuPrefixClean} ${variantPartClean}` : skuPrefixClean;
     if (!custOrderRef) custOrderRef = String(rawProductRef || orderRef || "").replace(/[^a-zA-Z0-9]/g, "");
     custOrderRef = custOrderRef.slice(0, 20);
@@ -891,8 +891,12 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
   if (carrier === "M2H") {
     const cleanOrderReference = normalizeM2hConsignmentNoteNumber(baseRow.orderName || baseRow.orderId) || "000000";
 
-    // Sender Ref: Variant, spacer chars removed, max 20 chars
-    const senderRefBase = (variantTitle || sku || product || "Freight item").replace(/[\/\-]/g, "").trim();
+    // Sender Ref: Variant, replace '/' and '-' with a space, collapse
+    // multiple spaces, and trim — keeps consistent spacing with other fixes.
+    const senderRefBase = (variantTitle || sku || product || "Freight item")
+      .replace(/[\/\-]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
     const senderRef = senderRefBase.slice(0, 20);
 
     // Receiver Ref: first 4 NUMERIC digits of SKU + product name, max 20 chars
