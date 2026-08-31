@@ -773,7 +773,12 @@ export default function FreightDashboard({
     const skipped: Array<{ orderId: string; variantId: string; error?: string }> = Array.isArray(payload.skipped) ? payload.skipped : [];
     const blob = new Blob([payload.csv], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a");
-    const fileName = `freight-export-${carrier.toLowerCase()}.csv`;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const time = `${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    const fileBase = String(carrier || "export").toLowerCase();
+    const fileName = `${fileBase}_${date}_${time}.csv`;
     link.href = URL.createObjectURL(blob);
     link.download = fileName;
     document.body.appendChild(link);
