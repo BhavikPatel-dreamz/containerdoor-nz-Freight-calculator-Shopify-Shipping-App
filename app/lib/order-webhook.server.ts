@@ -2,7 +2,7 @@
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
-import { isFreightShippingCode, parseFreightCode, freightServicePrefixes } from "./freight";
+import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
@@ -446,7 +446,14 @@ export function extractSelectedDepotAddress(order: OrderPayload): {
   city?: string;
   zip?: string;
 } | null {
-  const raw = (order.note_attributes ?? []).find((a) => a.name === "selected_depot_address")?.value;
+  // Some checkout sessions wrote the Mainfreight depot selection under
+  // "selected_depot_mainfreight" instead of the standard
+  // "selected_depot_address" key (confirmed via production order payloads).
+  // Accept both so depot orders aren't silently dropped depending on which
+  // attribute name the checkout wrote.
+  const raw = (order.note_attributes ?? []).find(
+    (a) => a.name === "selected_depot_address" || a.name === "selected_depot_mainfreight",
+  )?.value;
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw);
@@ -659,31 +666,57 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
     }
 
     const lineCarrier = carrierByVariant.get(variantId) ?? "";
-    const isFliwayDepotCollectionLine = lineCarrier === "FLIWAYLINEHAUL" && isDepotCollectionOrder;
+    // Previously hardcoded to Fliway only ("FLIWAYLINEHAUL"), which silently
+    // dropped the depot address for every other depot-eligible carrier
+    // (Mainfreight, TGE, Fliway Midsize). Use the same depot-carrier list the
+    // rest of the freight system already relies on so all carriers behave
+    // consistently.
+    const isDepotCollectionLine =
+      isDepotCollectionOrder && freightFormula.depotCollectionCompanies.includes(lineCarrier as any);
+
+    const depotFields =
+      selectedDepot && isDepotCollectionLine
+        ? {
+            depotAddress1: selectedDepot.address1 ?? "",
+            depotCity: selectedDepot.city ?? "",
+            depotZip: selectedDepot.zip ?? "",
+          }
+        : {};
 
     try {
-      await prisma.orderLineItemOperationalData.create({
-        data: {
-          shop,
-          orderId,
-          variantId,
-          productTitle: li.title ?? "",
-          carrier: lineCarrier,
-          paymentStatus: "",
-          // Depot fields only — shippingAddress1/City/Zip are NOT touched here.
-          // Those remain reserved for customer address overrides via order-amendments.server.ts.
-          ...(selectedDepot && isFliwayDepotCollectionLine
-            ? {
-                depotAddress1: selectedDepot.address1 ?? "",
-                depotCity: selectedDepot.city ?? "",
-                depotZip: selectedDepot.zip ?? "",
-              }
-            : {}),
-        },
+      const existing = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        select: { id: true, depotAddress1: true },
       });
-      created++;
+
+      if (!existing) {
+        await prisma.orderLineItemOperationalData.create({
+          data: {
+            shop,
+            orderId,
+            variantId,
+            productTitle: li.title ?? "",
+            carrier: lineCarrier,
+            paymentStatus: "",
+            // Depot fields only — shippingAddress1/City/Zip are NOT touched here.
+            // Those remain reserved for customer address overrides via order-amendments.server.ts.
+            ...depotFields,
+          },
+        });
+        created++;
+      } else if ((depotFields as any).depotAddress1 && !existing.depotAddress1) {
+        // Row already existed (e.g. created by another webhook path first) but
+        // never got its depot address — backfill it now.
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: existing.id },
+          data: depotFields,
+        });
+        skipped++;
+      } else {
+        skipped++;
+      }
     } catch {
-      // Already exists (duplicate webhook or re-played) — safe to skip
+      // Race on create (duplicate webhook or re-played) — safe to skip
       skipped++;
     }
   }
