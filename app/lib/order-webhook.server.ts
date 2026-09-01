@@ -324,6 +324,10 @@ async function processQueuedOrderWebhookJob(job: any) {
     await saveOrderSnapshot(job.shop, order);
     await reindexOrderById(job.shop, String(order.id ?? job.orderId));
     await createOrderLineItemRecords(job.shop, order);
+    // Safely repopulate any depot line rows still missing their selected depot
+    // (e.g. orders captured before depot storage was reliable) without touching
+    // already-correct data.
+    await backfillOrderDepotData(job.shop, String(order.id ?? job.orderId));
     await writeFreightMetafield(admin, order);
     await createMondayEntriesForOrder(job.shop, order);
 
@@ -547,6 +551,23 @@ export async function writeFreightMetafield(
 // Saves/updates order data so the freight-orders pages can read from DB
 // instead of calling the Shopify API on every page load.
 
+// Build a depot-collection shipping title that reflects the ACTUAL selected
+// depot rather than the customer's destination city. The selected depot comes
+// from the single source of truth (`selected_depot_address` order attribute).
+// Falls back to the original title untouched when there's no depot selection
+// (e.g. normal delivery, or a depot order where the customer picked none).
+export function buildDepotCollectionTitle(
+  originalTitle: string,
+  selectedDepot?: { name?: string } | null,
+): string {
+  const depotName = (selectedDepot?.name ?? "").trim();
+  if (!depotName) return originalTitle;
+  // Keep the carrier/service prefix ("Mainfreight Depot Collection") and append
+  // the actual depot name, so the destination city is never shown as the depot.
+  const base = String(originalTitle || "").split("–")[0].trim();
+  return `${base || "Depot Collection"} – ${depotName}`;
+}
+
 export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   const shipping = getShippingAddress(order);
@@ -554,6 +575,12 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
   const freightCode = freightLine?.code ?? "";
   const freightParts = freightCode.split("::");
+  const isDepotCollection =
+    freightCode.toLowerCase().startsWith("depot_delivery::");
+  const selectedDepot = isDepotCollection ? extractSelectedDepotAddress(order) : null;
+  const shippingTitle = isDepotCollection
+    ? buildDepotCollectionTitle(freightLine?.title ?? "", selectedDepot)
+    : (freightLine?.title ?? "");
 
   const lineItemsForJson = (order.line_items ?? []).map((li) => ({
     id: li.id,
@@ -588,7 +615,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
         shippingCountry: shipping.country ?? shipping.country_code ?? "",
         carriers: freightParts[1] ?? "",
         packageCount: freightParts[2] ?? "",
-        shippingTitle: freightLine?.title ?? "",
+        shippingTitle,
         shippingCode: freightCode,
         totalFreight: Number(freightLine?.price ?? 0),
         lineItemsJson: JSON.stringify(lineItemsForJson),
@@ -613,7 +640,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
         shippingCountry: shipping.country ?? shipping.country_code ?? "",
         carriers: freightParts[1] ?? "",
         packageCount: freightParts[2] ?? "",
-        shippingTitle: freightLine?.title ?? "",
+        shippingTitle,
         shippingCode: freightCode,
         totalFreight: Number(freightLine?.price ?? 0),
         lineItemsJson: JSON.stringify(lineItemsForJson),
@@ -724,6 +751,124 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
   console.log(
     `[OrderLineItems][Webhook][${orderId}] DONE - created=${created}, skipped=${skipped}, total=${lineItems.length}`,
   );
+}
+
+// ─── Depot backfill (existing orders) ────────────────────────────────────────
+// One source of truth for the selected depot is the Shopify order note attribute
+// `selected_depot_address` (legacy alias `selected_depot_mainfreight`). Orders
+// created before depot capture was reliable (e.g. #CDL215379) have empty
+// OrderLineItemOperationalData.depotAddress1/City/Zip even though Shopify holds
+// the selection. This helper safely repopulates those rows from Shopify, ONLY
+// when the OMS depot fields are empty and the order is a real Depot Collection
+// order. It never overwrites an already-populated correct depot.
+
+export async function backfillOrderDepotData(
+  shop: string,
+  orderId: string | number,
+): Promise<boolean> {
+  const oid = String(orderId).replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  if (!oid) return false;
+
+  try {
+    // Only consider Depot Collection orders; skip everything else (normal delivery,
+    // customer pickup) so backfill can never touch non-depot orders.
+    const snap = await prisma.orderSnapshot.findUnique({
+      where: { shop_orderId: { shop, orderId: oid } },
+      select: { shippingCode: true },
+    });
+    const isDepotOrder = Boolean(
+      String(snap?.shippingCode ?? "").toLowerCase().startsWith("depot_delivery::"),
+    );
+    if (!isDepotOrder) return false;
+
+    // Depot line rows whose depot fields are missing/empty. The depot columns
+    // are non-nullable with default "" so missing == empty string.
+    const emptyRows = await prisma.orderLineItemOperationalData.findMany({
+      where: {
+        shop,
+        orderId: oid,
+        depotAddress1: "",
+      },
+      select: { id: true },
+    });
+    if (emptyRows.length === 0) return false;
+
+    // Fetch the selected depot from Shopify's order note attribute.
+    const raw = await fetchSelectedDepotAttributeRaw(shop, oid);
+    if (!raw) return false;
+    const selectedDepot = extractSelectedDepotAddress({ note_attributes: raw } as OrderPayload);
+    if (!selectedDepot || !String(selectedDepot.address1 ?? "").trim()) return false;
+
+    const depotFields = selectedDepot
+      ? {
+          depotAddress1: selectedDepot.address1 ?? "",
+          depotCity: selectedDepot.city ?? "",
+          depotZip: selectedDepot.zip ?? "",
+        }
+      : {};
+
+    let updated = 0;
+    // The order is already confirmed as a Depot Collection order above, and the
+    // depot is a per-order selection shared by all of that order's lines (the
+    // row-level `carrier` can be a display label like "MF Depot", which is not
+    // one of the canonical codes, so we must NOT filter by row carrier here.
+    // We only write the depot address fields — never the carrier — so the
+    // existing carrier association is always preserved.
+    for (const row of emptyRows) {
+      await prisma.orderLineItemOperationalData.update({
+        where: { id: row.id },
+        data: { ...depotFields },
+      });
+      updated++;
+    }
+
+    if (updated > 0) {
+      console.log(`[DepotBackfill][${oid}] populated depot on ${updated} line(s) for shop ${shop}`);
+    }
+    return updated > 0;
+  } catch (error) {
+    // Backfill is best-effort — never fail the calling route/loader.
+    console.warn(`[DepotBackfill][${oid}] failed for shop ${shop}:`, error);
+    return false;
+  }
+}
+
+// Fetch the raw note attributes (so extractSelectedDepotAddress can be reused)
+// for the order's selected-depot attribute. Same attribute keys the checkout
+// extension writes and the webhook reads. NOTE: Shopify's GraphQL Order type
+// exposes these as `customAttributes` (a list with no `first` arg) — the legacy
+// `noteAttributes` field no longer exists on `Order` in current API versions.
+export async function fetchSelectedDepotAttributeRaw(
+  shop: string,
+  orderId: string,
+): Promise<Array<{ name?: string; value?: string }> | null> {
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+    const response = await admin.graphql(
+      `#graphql
+      query OrderDepotSelection($id: ID!) {
+        node(id: $id) {
+          ... on Order {
+            customAttributes {
+              key
+              value
+            }
+          }
+        }
+      }`,
+      { variables: { id: `gid://shopify/Order/${orderId}` } },
+    );
+    const json = await response.json();
+    const attrs = (json.data?.node?.customAttributes ?? [])
+      .filter(
+        (n: { key?: string } | undefined): n is { key?: string; value?: string } =>
+          Boolean(n && (n.key === "selected_depot_address" || n.key === "selected_depot_mainfreight")),
+      )
+      .map((n: { key?: string; value?: string }) => ({ name: n.key, value: n.value }));
+    return attrs.length ? attrs : null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Cin7 order creation ─────────────────────────────────────────────────────
