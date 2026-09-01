@@ -6,6 +6,7 @@ import { NavUserAvatar } from "../components/freight/NavUserAvatar";
 import {
   buildRowFromSnapshot,
 } from "../lib/freight-orders.server";
+import { backfillOrderDepotData } from "../lib/order-webhook.server";
 
 /**
  * Detail route: `/app/order/:id`
@@ -59,6 +60,10 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   if (!snap) throw new Response("Order not found", { status: 404 });
 
   shopifyOrderId = String(snap.orderId);
+  // Best-effort: if this is an existing depot-collection order whose OMS depot
+  // fields are empty, repopulate them from the Shopify `selected_depot_address`
+  // attribute so the detail page shows the actual selected depot.
+  await backfillOrderDepotData(shop, shopifyOrderId);
   const { opsMap, orderCin7Map, orderPoMap, orderCin7IdMap } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
   const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map, orderPoMap, orderCin7IdMap);
   if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
