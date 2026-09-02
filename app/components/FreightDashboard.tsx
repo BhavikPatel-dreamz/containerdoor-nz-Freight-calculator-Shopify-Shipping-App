@@ -733,7 +733,20 @@ export default function FreightDashboard({
         case "FLIWAYMIDSIZE":
           return normalizedLineCompany === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsizedepot";
         case "FLIWAYDEPOT":
-          return Boolean(target.item.isDepot) || normalizedLineLabel === "depotfliway" || normalizedLineLabel === "fliwaydepot" || normalizedLineLabel === "fliwaylinehauldepot" || normalizedLineLabel === "fliwaymidsizedepot";
+          // Only Fliway depot lines go in the Fliway Depot CSV. A depot line
+          // from another carrier (e.g. MAINFREIGHT -> "MF Depot", TGE) must
+          // NOT match here — gate on the canonical Fliway company first, not
+          // just the generic isDepot delivery method.
+          return Boolean(target.item.isDepot) && (
+            normalizedLineCompany === "fliwaylinehaul" ||
+            normalizedLineCompany === "fliwaymidsize" ||
+            normalizedLineCompany === "fliwaydepot" ||
+            normalizedLineCompany === "fliway" ||
+            normalizedLineLabel === "depotfliway" ||
+            normalizedLineLabel === "fliwaydepot" ||
+            normalizedLineLabel === "fliwaylinehauldepot" ||
+            normalizedLineLabel === "fliwaymidsizedepot"
+          );
         case "M2H": {
           const isHomeDeliveryMainfreight = !Boolean(target.item.isDepot) && (normalizedLineCompany === "mainfreight" || normalizedLineLabel === "mainfreight");
           return (

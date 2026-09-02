@@ -1323,8 +1323,10 @@ export async function exportFreightCsv(shop: string, carrier: string, items: Fre
         const clone = [...nextRow];
         if (i > 0) {
           clone[0] = `${suffixedPurchaseId}#${i}`;
-          if (referenceIdx !== -1) clone[referenceIdx] = clone[0];
         }
+        // Reference stays the original line order number on every emitted row;
+        // only Purchase ID gets a #1/#2... suffix for each additional unit.
+        if (referenceIdx !== -1) clone[referenceIdx] = suffixedPurchaseId;
         // Ensure each emitted NZP row represents a single unit
         if (qtyIdx !== -1) clone[qtyIdx] = String(1);
         rows.push(clone);
