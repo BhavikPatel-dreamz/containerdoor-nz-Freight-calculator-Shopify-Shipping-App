@@ -477,7 +477,12 @@ for (const freightPackage of variantPackages) {
       : matchedRate.serviceType;
 
     const current = bestByService.get(key);
-    if (!current || amount < current.amount) {
+    // NZ Post charges the HIGHER of weight-based vs CBM-based rate (not cheapest).
+    const isNzp = freightPackage.company === "NZP" || freightPackage.company === "NZP_AGE_RESTRICTED";
+    const isBetter = isNzp
+      ? !current || amount > current.amount
+      : !current || amount < current.amount;
+    if (isBetter) {
       bestByService.set(key, {
         serviceType: matchedRate.serviceType,
         company: matchedRate.company,
@@ -660,6 +665,13 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
   const baseValue = rate.useWeightRange
     ? freightPackage.weightGrams / 1000        // kg
     : freightPackage.volumeCm3 / 1_000_000;    // CBM
+
+  // Fliway Midsize: minimum 0.3 CBM chargeable volume for zone rate
+  const effectiveBaseValue =
+    rate.company === "FLIWAYMIDSIZE" && !rate.useWeightRange
+      ? Math.max(baseValue, 0.3)
+      : baseValue;
+
   const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE" || rate.company === "FLIWAYMIDSIZE")
   ? Number((rate as any).baseFee ?? 0)
   : 0;
@@ -668,7 +680,7 @@ function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidat
     ? Number((settings as any).mainfreightDepotFee ?? 25)
     : 0;
 
-  const rawBaseFreight = (baseValue * Number(rate.rate)) + baseFee + depotFee;
+  const rawBaseFreight = (effectiveBaseValue * Number(rate.rate)) + baseFee + depotFee;
   const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
   const minimumCharge = Number(rate.minimumCharge ?? 0);
   const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
