@@ -2,7 +2,7 @@
   "name": "containerdoo-calculator",
   "private": true,
   "scripts": {
-    "build": "bash -c 'if [ \"${VERCEL:-}\" = \"1\" ] || [ \"${GITHUB_ACTIONS:-}\" = \"true\" ]; then bash .githooks/pre-commit --ci; fi' && prisma generate && prisma migrate deploy && react-router build",
+    "build": "bash -c 'if [ \"${VERCEL:-}\" = \"1\" ]; then bash .githooks/pre-commit --ci; fi' && prisma generate && prisma migrate deploy && react-router build",
     "security:scan": "bash .githooks/pre-commit --ci",
  "dev": " cloudflared tunnel run shopify & shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
     "tunnel": "cloudflared tunnel run shopify",
@@ -16,7 +16,6 @@
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "lint": "eslint --ignore-path .gitignore --cache --cache-location ./node_modules/.cache/eslint .",
-    "prepare": "git rev-parse --is-inside-work-tree >/dev/null 2>&1 && bash .githooks/pre-commit --install || true",
     "shopify": "shopify",
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
