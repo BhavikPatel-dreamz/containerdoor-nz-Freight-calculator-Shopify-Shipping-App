@@ -2,7 +2,8 @@
   "name": "containerdoo-calculator",
   "private": true,
   "scripts": {
-    "build": "prisma generate && prisma migrate deploy && react-router build",
+    "build": "bash -c 'if [ \"${VERCEL:-}\" = \"1\" ]; then bash .githooks/pre-commit --ci; fi' && prisma generate && prisma migrate deploy && react-router build",
+    "security:scan": "bash .githooks/pre-commit --ci",
  "dev": " cloudflared tunnel run shopify & shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
     "tunnel": "cloudflared tunnel run shopify",
   "shopify:dev": "shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
