@@ -880,7 +880,7 @@ async function buildExportRow(shop: string, item: FreightCsvExportItem, carrier:
       DEFAULT_FROM.address2,
       DEFAULT_FROM.suburb,
       DEFAULT_FROM.postcode,
-      eddDate,
+      "",
       email,
       email,
       email,
