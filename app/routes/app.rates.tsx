@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import {
   Form,
@@ -94,11 +94,92 @@ export default function RatesPage() {
   const [searchParams] = useSearchParams();
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [importingLarge, setImportingLarge] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<"" | "reading" | "uploading" | "processing">("");
+  const [uploadUploaded, setUploadUploaded] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const isExporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "export";
-const isImporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "import";
+const isImporting = importingLarge || (navigation.state === "submitting" && navigation.formData?.get("intent") === "import");
 const isDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "delete";
 const isBulkDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkDelete";
 const isBulkToggling = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkToggleActive";
+
+  useEffect(() => {
+    return () => { uploadAbortRef.current?.abort(); };
+  }, []);
+
+  const handleLargeImport = useCallback(async (file: File) => {
+    const abort = new AbortController();
+    uploadAbortRef.current = abort;
+    setImportingLarge(true);
+    setUploadPhase("reading");
+    setUploadUploaded(0);
+    setUploadTotal(0);
+    try {
+      const text = await file.text();
+      const lines = text.split(/\r?\n/);
+      const CHUNK_LINES = 800;
+      const chunks: string[] = [];
+      for (let i = 0; i < lines.length; i += CHUNK_LINES) {
+        chunks.push(lines.slice(i, i + CHUNK_LINES).join("\n"));
+      }
+      if (chunks.length === 0) {
+        setImportingLarge(false);
+        setUploadPhase("");
+        return;
+      }
+
+      setUploadPhase("uploading");
+      setUploadTotal(chunks.length);
+
+      const initRes = await fetch("/api/import-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "init" }),
+        signal: abort.signal,
+      });
+      const initData = await initRes.json();
+      if (!initData.ok) throw new Error(initData.error || "Failed to start import");
+      const { uploadId } = initData;
+
+      for (let i = 0; i < chunks.length; i++) {
+        const res = await fetch("/api/import-rates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ intent: "chunk", uploadId, csv: chunks[i] }),
+          signal: abort.signal,
+        });
+        const d = await res.json();
+        if (!d.ok) throw new Error(d.error || "Chunk upload failed");
+        setUploadUploaded(i + 1);
+      }
+
+      setUploadPhase("processing");
+      const commitRes = await fetch("/api/import-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "commit", uploadId }),
+        signal: abort.signal,
+      });
+      const result = await commitRes.json();
+      if (result.ok) {
+        window.location.reload();
+      } else {
+        throw new Error(result.message || "Import failed");
+      }
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        alert(err?.message || "Import failed");
+      }
+    } finally {
+      setImportingLarge(false);
+      setUploadPhase("");
+      setUploadUploaded(0);
+      setUploadTotal(0);
+      uploadAbortRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (actionData && "csv" in actionData && actionData.csv) {
@@ -309,10 +390,85 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
             display: grid;
           }
         }
+        .upload-progress {
+          margin-bottom: 12px;
+          border: 1px solid #d4dce4;
+          border-radius: 10px;
+          background: #f8fbff;
+          padding: 12px 16px;
+        }
+        .upload-progress-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: #0f2a43;
+          margin-bottom: 8px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .upload-progress-label span {
+          color: #486581;
+          font-weight: 400;
+        }
+        .upload-progress-track {
+          height: 8px;
+          background: #e8eef4;
+          border-radius: 4px;
+          overflow: hidden;
+        }
+        .upload-progress-fill {
+          height: 100%;
+          background: #00806a;
+          border-radius: 4px;
+          transition: width 0.3s ease;
+        }
+        .upload-progress-fill.processing {
+          background: #9c6ade;
+          animation: progress-indeterminate 1.2s linear infinite;
+          width: 40%;
+        }
+        @keyframes progress-indeterminate {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(350%); }
+        }
+        .upload-cancel {
+          border: 1px solid #d3dde8;
+          background: #fff;
+          color: #c0392b;
+          border-radius: 10px;
+          padding: 6px 12px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+          margin-left: 10px;
+        }
       `}</style>
 
       {actionData && "message" in actionData ? (
         <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
+      ) : null}
+
+      {importingLarge ? (
+        <div className="upload-progress">
+          <div className="upload-progress-label">
+            {uploadPhase === "reading" && "Reading file..."}
+            {uploadPhase === "uploading" && <>Uploading chunks <span>{uploadUploaded} / {uploadTotal}</span></>}
+            {uploadPhase === "processing" && "Importing rates into database..."}
+            <button
+              type="button"
+              className="upload-cancel"
+              onClick={() => uploadAbortRef.current?.abort()}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="upload-progress-track">
+            <div
+              className={`upload-progress-fill${uploadPhase === "processing" ? " processing" : ""}`}
+              style={{ width: uploadPhase === "reading" ? "15%" : uploadPhase === "processing" ? undefined : `${Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100)}%` }}
+            />
+          </div>
+        </div>
       ) : null}
 
       <div className="top-row">
@@ -361,7 +517,11 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
               name="csv"
               accept=".csv,text/csv"
               onChange={(event) => {
-                if (event.currentTarget.files?.length) {
+                const file = event.currentTarget.files?.[0];
+                if (!file) return;
+                if (file.size > 3 * 1024 * 1024) {
+                  handleLargeImport(file);
+                } else {
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
