@@ -643,7 +643,8 @@ async function migrateOneShopifyOrder(args: {
     log(
       "cin7",
       (cin7Stats.failed || 0) === 0,
-      `Cin7 linked=${cin7Stats.linked} created=${cin7Stats.created} skipped=${cin7Stats.skipped} failed=${cin7Stats.failed}`,
+      `Cin7 linked=${cin7Stats.linked} created=${cin7Stats.created} skipped=${cin7Stats.skipped} failed=${cin7Stats.failed}` +
+        (cin7Stats.errors?.length ? ` — ${cin7Stats.errors.join(" | ")}` : ""),
     );
 
     const afterOps = await prisma.orderLineItemOperationalData.findMany({

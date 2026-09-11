@@ -1007,7 +1007,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     const breakdownLines = getOperationalLines(order);
     if (!breakdownLines.length) {
       console.log(`[Cin7][Webhook][${orderId}] SKIP - no operational lines`);
-      return stats;
+      return emptyStats();
     }
 
     const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
@@ -1093,6 +1093,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let linked = 0;
     let skipped = 0;
     let failed = 0;
+    const errors: string[] = [];
 
     const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
       orderName: order.name,
@@ -1347,6 +1348,8 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             data: { cin7SalesOrderId: "" },
           });
         }
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`line ${letterSuffix}: ${msg}`);
         console.error(`[Cin7][Webhook][${orderId}] line ${letterSuffix} FAILED`, e);
       }
     }
@@ -1354,10 +1357,11 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     console.log(
       `[Cin7][Webhook][${orderId}] DONE per_line created=${created} linked=${linked} skipped=${skipped} failed=${failed}`,
     );
-    return { created, linked, skipped, failed };
+    return { created, linked, skipped, failed, errors };
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
-    return { created: 0, linked: 0, skipped: 0, failed: 1 };
+    return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [msg] };
   }
 }
 
