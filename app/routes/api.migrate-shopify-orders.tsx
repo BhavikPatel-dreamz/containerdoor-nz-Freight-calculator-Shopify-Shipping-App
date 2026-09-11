@@ -36,6 +36,7 @@ export async function action({ request }: ActionFunctionArgs) {
 
   const cronOk = verifyCronSecret(request);
   let shop = "";
+  let sentBy = "system";
   if (cronOk) {
     const bodyPeek = (await request.clone().json().catch(() => ({}))) as { shop?: string };
     shop = String(bodyPeek.shop || "").trim();
@@ -43,25 +44,49 @@ export async function action({ request }: ActionFunctionArgs) {
     try {
       const { session } = await authenticate.admin(request);
       shop = session.shop;
+      sentBy = session.email || session.firstName || "Shopify Admin";
     } catch {
-      return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      const auth = request.headers.get("Authorization") || "";
+      const m = auth.match(/^Bearer\s+(.+)$/i);
+      if (m?.[1]) {
+        try {
+          const part = m[1].split(".")[1];
+          const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+          const payload = JSON.parse(json) as { dest?: string };
+          const dest = String(payload.dest || "")
+            .replace(/^https?:\/\//i, "")
+            .replace(/\/+$/, "")
+            .trim();
+          if (dest.includes(".")) shop = dest;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!shop) {
+        return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+      sentBy = "Shopify Admin";
     }
   }
 
   const body = (await request.json().catch(() => ({}))) as {
     shop?: string;
     order?: string;
+    orderId?: string;
     orders?: string[];
     names?: string[];
+    performedBy?: string;
   };
   shop = String(body.shop || shop || "").trim();
   if (!shop) {
     return Response.json({ ok: false, error: "Missing shop" }, { status: 400 });
   }
+  if (body.performedBy) sentBy = String(body.performedBy);
 
   const orders = [
     ...(body.orders ?? body.names ?? []),
     ...(body.order ? [body.order] : []),
+    ...(body.orderId ? [body.orderId] : []),
   ]
     .map((x) => String(x).trim())
     .filter(Boolean);
@@ -69,6 +94,7 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ ok: false, error: "Missing orders[]" }, { status: 400 });
   }
 
-  const result = await migrateShopifyOrdersToOms({ shop, namesOrIds: orders });
-  return Response.json({ ok: true, ...result });
+  const result = await migrateShopifyOrdersToOms({ shop, namesOrIds: orders, sentBy });
+  const failed = result.results.filter((r) => !r.ok).length;
+  return Response.json({ ok: failed === 0, ...result });
 }
