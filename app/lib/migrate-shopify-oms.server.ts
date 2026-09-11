@@ -236,19 +236,32 @@ type AdminGraphql = {
 function buildShopifySearchQueries(raw: string): string[] {
   const q = String(raw || "").trim();
   if (!q) return [];
-  const numeric = q.replace(/^gid:\/\/shopify\/Order\//, "");
-  const noHash = q.replace(/^#/, "");
-  const withHash = q.startsWith("#") ? q : `#${q}`;
+  const noHash = q.replace(/^#/, "").replace(/^gid:\/\/shopify\/Order\//, "");
+  const withHash = q.startsWith("#") ? q : `#${noHash}`;
+  const isDigits = /^\d+$/.test(noHash);
+  const looksLikeShopifyId = isDigits && noHash.length >= 10;
   const out: string[] = [];
   const add = (value: string) => {
-    const withStatus = /\bstatus:/i.test(value) ? value : `${value} status:any`;
+    const withStatus = /\bstatus:/i.test(value) ? value : `(${value}) AND status:any`;
     if (!out.includes(withStatus)) out.push(withStatus);
   };
-  if (/^\d+$/.test(numeric) && !q.startsWith("#")) add(`id:${numeric}`);
-  add(q);
+
+  if (looksLikeShopifyId) {
+    add(`id:${noHash}`);
+    return out;
+  }
+
+  if (isDigits) {
+    add(`name:${noHash} OR name:${withHash} OR number:${noHash}`);
+    add(`name:${noHash}`);
+    add(`name:${withHash}`);
+    add(`number:${noHash}`);
+    return out;
+  }
+
+  add(`name:${withHash} OR name:${noHash}`);
   add(`name:${withHash}`);
   add(`name:${noHash}`);
-  add(`name:"${withHash}"`);
   if (q.includes("@")) add(`email:${q}`);
   return out;
 }
@@ -256,6 +269,7 @@ function buildShopifySearchQueries(raw: string): string[] {
 export async function searchShopifyOrders(
   admin: AdminGraphql,
   query: string,
+  shop?: string,
 ): Promise<{ hits: ShopifyOrderHit[]; error?: string; tried: string[] }> {
   const tried = buildShopifySearchQueries(query);
   if (!tried.length) return { hits: [], error: "Empty search", tried };
@@ -280,6 +294,36 @@ export async function searchShopifyOrders(
       hits.push(hit);
     }
     if (hits.length) break;
+  }
+
+  if (!hits.length && shop) {
+    const noHash = String(query || "").trim().replace(/^#/, "");
+    const local = await prisma.orderSnapshot.findMany({
+      where: {
+        shop,
+        OR: [
+          { orderName: { equals: noHash, mode: "insensitive" } },
+          { orderName: { equals: `#${noHash}`, mode: "insensitive" } },
+          { orderName: { contains: noHash, mode: "insensitive" } },
+        ],
+      },
+      take: 20,
+      orderBy: { createdAt: "desc" },
+    });
+    for (const row of local) {
+      if (!row.orderId || seen.has(row.orderId)) continue;
+      seen.add(row.orderId);
+      hits.push({
+        id: row.orderId,
+        name: row.orderName || row.orderId,
+        createdAt: row.createdAt.toISOString(),
+        email: row.email,
+        financialStatus: row.financialStatus,
+        customer: [row.shippingFirstName, row.shippingLastName].filter(Boolean).join(" ") || "—",
+        skuPreview: "",
+        lineCount: 0,
+      });
+    }
   }
 
   return {

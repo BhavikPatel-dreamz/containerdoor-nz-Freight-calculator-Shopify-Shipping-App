@@ -22,7 +22,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "search") {
     const q = String(form.get("q") || "").trim();
     if (!q) return { intent: "search" as const, ok: false, message: "Enter an order name, number, or email." };
-    const { hits, error, tried } = await searchShopifyOrders(admin, q);
+    const { hits, error, tried } = await searchShopifyOrders(admin, q, session.shop);
     return {
       intent: "search" as const,
       ok: hits.length > 0,
@@ -33,7 +33,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ? `Found ${hits.length} Shopify order(s). Choose one to migrate.`
         : error
           ? `Search failed: ${error}`
-          : "No Shopify orders matched. Try the full name (e.g. #CDL215347) or the Shopify order id.",
+          : "No Shopify orders matched. For old orders use the number only (e.g. 572660). For new orders use #CDL215343.",
     };
   }
 
@@ -97,8 +97,8 @@ export default function MigrateOrdersPage() {
           <input type="hidden" name="intent" value="search" />
           <div className="settings-card" style={{ marginTop: 12 }}>
             <label className="settings-field">
-              Search (order name, id, email)
-              <input name="q" type="search" placeholder="#CDL215347" defaultValue={data && "query" in data ? data.query : ""} />
+              Search (#CDL215343 or old number 572660)
+              <input name="q" type="search" placeholder="#CDL215343 or 572660" defaultValue={data && "query" in data ? data.query : ""} />
             </label>
             <div style={{ marginTop: 16 }}>
               <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}>
