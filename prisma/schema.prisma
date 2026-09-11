@@ -536,6 +536,70 @@ model OrderMigrateReport {
   @@index([shop, orderName])
 }
 
+/// One Control Center batch (dry_run | full) with a fixed order list.
+model MigrationRun {
+  id                String   @id @default(cuid())
+  shop              String
+  mode              String   @default("full") // dry_run | full
+  orderLimit        Int      @default(0)
+  status            String   @default("pending") // pending | running | completed | aborted | failed
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  totalOrders       Int      @default(0)
+  processedOrders   Int      @default(0)
+  successfulOrders  Int      @default(0)
+  failedOrders      Int      @default(0)
+  skippedOrders     Int      @default(0)
+  createdBy         String   @default("")
+  orders            MigrationOrder[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([shop, startedAt])
+  @@index([shop, status])
+}
+
+model MigrationOrder {
+  id                 String   @id @default(cuid())
+  runId              String
+  shopifyOrderId     String
+  shopifyOrderName   String   @default("")
+  status             String   @default("pending") // pending | running | completed | partial | failed | skipped
+  currentStep        String   @default("")
+  startedAt          DateTime?
+  completedAt        DateTime?
+  durationMs         Int      @default(0)
+  error              String   @default("")
+  retryCount         Int      @default(0)
+  lastRetryAt        DateTime?
+  run                MigrationRun @relation(fields: [runId], references: [id])
+  steps              MigrationStepLog[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([runId])
+  @@index([shopifyOrderId])
+}
+
+model MigrationStepLog {
+  id                 String   @id @default(cuid())
+  migrationOrderId   String
+  step               String
+  status             String
+  startedAt          DateTime
+  completedAt        DateTime
+  durationMs         Int      @default(0)
+  /// Redacted JSON — never tokens, passwords, emails, phones, addresses
+  requestSummary     String   @default("")
+  responseSummary    String   @default("")
+  error              String   @default("")
+  retryCount         Int      @default(0)
+  order              MigrationOrder @relation(fields: [migrationOrderId], references: [id])
+  createdAt          DateTime @default(now())
+
+  @@index([migrationOrderId, startedAt])
+}
+
 model BulkActionAudit {
   id            String                @id @default(cuid())
   shop          String

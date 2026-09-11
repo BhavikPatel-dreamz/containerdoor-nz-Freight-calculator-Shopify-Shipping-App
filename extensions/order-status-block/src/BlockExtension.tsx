@@ -122,8 +122,98 @@ const EMPTY_LINE: Omit<LineItemRecord, "variantId" | "productTitle"> = {
 
 export default reactExtension(TARGET, () => <FreightStatusBlock />);
 
-function stripGid(id: string, resource: "Order" | "ProductVariant"): string {
+function stripGid(id: string, resource: "Order" | "ProductVariant" | "LineItem"): string {
   return String(id || "").replace(`gid://shopify/${resource}/`, "").trim();
+}
+
+function pullLineNodes(order: any): any[] {
+  const li = order?.lineItems ?? order?.line_items;
+  if (!li) return [];
+  if (Array.isArray(li)) return li.filter(Boolean);
+  if (Array.isArray(li.nodes)) return li.nodes.filter(Boolean);
+  if (Array.isArray(li.edges)) return li.edges.map((e: any) => e?.node).filter(Boolean);
+  return [];
+}
+
+function unwrapGraphqlOrder(json: any): any {
+  return json?.data?.order || json?.data?.node || json?.order || json?.node || null;
+}
+
+function graphqlErrorText(json: any): string {
+  const errs = json?.errors || json?.data?.errors;
+  if (!Array.isArray(errs) || !errs.length) return "";
+  return errs.map((e: any) => e?.message || String(e)).join("; ");
+}
+
+async function adminGraphql(api: any, query: string, variables: Record<string, unknown>): Promise<any> {
+  try {
+    const res = await fetch("shopify:admin/api/graphql.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    const json = await res.json().catch(() => null);
+    if (json) return json;
+  } catch (e) {
+    console.error("[FreightStatusBlock] shopify:admin graphql failed", e);
+  }
+  try {
+    return await api.query(query, { variables });
+  } catch (e) {
+    console.error("[FreightStatusBlock] api.query failed", e);
+    return { errors: [{ message: String(e) }] };
+  }
+}
+
+const ORDER_QUERY = `#graphql
+  query FreightSyncOrder($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      email
+      createdAt
+      lineItems(first: 50) {
+        nodes {
+          id
+          title
+          sku
+          quantity
+          variant { id sku }
+        }
+      }
+    }
+  }
+`;
+
+const ORDER_QUERY_MIN = `#graphql
+  query FreightSyncOrderMin($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      lineItems(first: 50) {
+        nodes { id title quantity sku }
+      }
+    }
+  }
+`;
+
+async function fetchAdminOrder(api: any, gid: string): Promise<{ order: any; error: string }> {
+  let lastError = "";
+  for (const query of [ORDER_QUERY, ORDER_QUERY_MIN]) {
+    const json = await adminGraphql(api, query, { id: gid });
+    lastError = graphqlErrorText(json) || lastError;
+    const order = unwrapGraphqlOrder(json);
+    if (order?.id && pullLineNodes(order).length) return { order, error: lastError };
+    if (order?.id && !pullLineNodes(order).length) {
+      lastError = lastError || "Shopify returned the order but lineItems was empty";
+    }
+  }
+  return { order: null, error: lastError || "Admin GraphQL did not return this order" };
+}
+
+async function queryAdminOrderLines(api: any, gid: string): Promise<any[]> {
+  const { order } = await fetchAdminOrder(api, gid);
+  return pullLineNodes(order);
 }
 
 function FreightStatusBlock() {
@@ -142,6 +232,9 @@ function FreightStatusBlock() {
   const [records, setRecords] = useState<LineItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [adminLineNodes, setAdminLineNodes] = useState<any[]>([]);
 
   useEffect(() => {
     if (!numericOrderId) {
@@ -189,37 +282,21 @@ function FreightStatusBlock() {
         // If OMS has no rows yet, seed editable cards from live Shopify line items
         // so Save can create OrderLineItemOperationalData rows.
         let lineItems = data.lineItems ?? [];
-        if (lineItems.length === 0) {
-          try {
-            const orderRes = await (api as any).query(
-              `query OrderLines($id: ID!) {
-                order(id: $id) {
-                  lineItems(first: 50) {
-                    nodes {
-                      title
-                      variant { id }
-                    }
-                  }
-                }
-              }`,
-              { variables: { id: `gid://shopify/Order/${numericOrderId}` } },
-            );
-            const nodes: Array<{ title?: string; variant?: { id?: string } }> =
-              orderRes?.data?.order?.lineItems?.nodes ?? [];
-            lineItems = nodes
-              .map((n) => {
-                const variantId = stripGid(n.variant?.id ?? "", "ProductVariant");
-                if (!variantId) return null;
-                return {
-                  variantId,
-                  productTitle: n.title ?? "",
-                  ...EMPTY_LINE,
-                } as LineItemRecord;
-              })
-              .filter(Boolean) as LineItemRecord[];
-          } catch (e) {
-            console.error("[FreightStatusBlock] order lines query failed", e);
-          }
+        const nodes = await queryAdminOrderLines(api, `gid://shopify/Order/${numericOrderId}`);
+        if (!cancelled && nodes.length) setAdminLineNodes(nodes);
+        if (lineItems.length === 0 && nodes.length) {
+          lineItems = nodes
+            .map((n: any) => {
+              const variantId =
+                stripGid(n.variant?.id ?? "", "ProductVariant") || stripGid(n.id ?? "", "LineItem");
+              if (!variantId) return null;
+              return {
+                variantId,
+                productTitle: n.title ?? "",
+                ...EMPTY_LINE,
+              } as LineItemRecord;
+            })
+            .filter(Boolean) as LineItemRecord[];
         }
 
         setRecords(lineItems);
@@ -241,19 +318,113 @@ function FreightStatusBlock() {
     );
   };
 
+  const handleSyncToOms = async () => {
+    if (!shopDomain || !numericOrderId) {
+      setSyncOk(false);
+      setSyncMsg("Missing shop or order id");
+      return;
+    }
+    setSyncing(true);
+    setSyncMsg(null);
+    setSyncOk(null);
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      try {
+        const token = await (api as any).sessionToken?.get?.();
+        if (token) headers.Authorization = `Bearer ${token}`;
+      } catch {
+        /* relative fetch may still attach a session token */
+      }
+      const gid = `gid://shopify/Order/${numericOrderId}`;
+      const fetched = await fetchAdminOrder(api, gid);
+      let shopifyOrder = fetched.order;
+      let lineNodes = pullLineNodes(shopifyOrder);
+      if (!lineNodes.length && adminLineNodes.length) lineNodes = adminLineNodes;
+      if (!lineNodes.length && records.length) {
+        lineNodes = records.map((r) => ({
+          id: `gid://shopify/LineItem/${r.variantId}`,
+          title: r.productTitle,
+          quantity: 1,
+          sku: "",
+          variant: { id: `gid://shopify/ProductVariant/${r.variantId}` },
+        }));
+      }
+      if (!lineNodes.length) {
+        setSyncOk(false);
+        setSyncMsg(fetched.error || "Shopify Admin GraphQL returned no line items for this order");
+        return;
+      }
+      shopifyOrder = {
+        ...(shopifyOrder || {}),
+        id: shopifyOrder?.id || gid,
+        name: shopifyOrder?.name || "",
+        lineItems: { nodes: lineNodes },
+      };
+
+      const res = await fetch(apiUrl(appUrl, "/api/migrate-shopify-orders"), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          shop: shopDomain,
+          order: numericOrderId,
+          shopifyOrder,
+          lineItems: lineNodes,
+          performedBy: "Shopify Admin",
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      const row = json?.results?.[0];
+      if (!res.ok || json?.ok === false || row?.ok === false) {
+        const detail =
+          row?.error ||
+          json?.error ||
+          row?.steps?.filter((s: { ok?: boolean }) => s?.ok === false).map((s: { message?: string }) => s.message).join("; ") ||
+          `HTTP ${res.status}`;
+        setSyncOk(false);
+        setSyncMsg(detail);
+        return;
+      }
+      const monday = row?.monday
+        ? `Monday linked ${row.monday.linked}/created ${row.monday.created}/failed ${row.monday.failed}`
+        : "";
+      const cin7 = row?.cin7
+        ? `Cin7 linked ${row.cin7.linked}/created ${row.cin7.created}/skipped ${row.cin7.skipped}`
+        : "";
+      setSyncOk(true);
+      setSyncMsg(
+        `Synced ${row?.orderName || numericOrderId} to OMS. ${monday}${monday && cin7 ? ". " : ""}${cin7}`,
+      );
+    } catch (e) {
+      setSyncOk(false);
+      setSyncMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <AdminBlock title="Freight Status">
-      {loading ? (
-        <Box padding="base">
-          <ProgressIndicator size="small-200" />
-        </Box>
-      ) : error ? (
-        <Text tone="critical">{error}</Text>
-      ) : records.length === 0 ? (
-        <Text tone="subdued">No freight line items found for this order.</Text>
-      ) : (
-        <BlockStack gap="base">
-          {records.map((r, index) => (
+      <BlockStack gap="base">
+        <InlineStack gap="base" blockAlignment="center">
+          <Button onPress={handleSyncToOms} disabled={syncing || !numericOrderId || !shopDomain}>
+            {syncing ? "Syncing…" : "Sync to OMS"}
+          </Button>
+        </InlineStack>
+        {syncMsg ? (
+          <Text tone={syncOk ? "success" : "critical"}>{syncMsg}</Text>
+        ) : (
+          <Text tone="subdued">Push this Shopify order into OMS, then link or create Cin7 and Monday.</Text>
+        )}
+        {loading ? (
+          <Box padding="base">
+            <ProgressIndicator size="small-200" />
+          </Box>
+        ) : error ? (
+          <Text tone="critical">{error}</Text>
+        ) : records.length === 0 ? (
+          <Text tone="subdued">No OMS line items yet — use Sync to OMS.</Text>
+        ) : (
+          records.map((r, index) => (
             <ItemCard
               key={r.variantId}
               record={r}
@@ -263,9 +434,9 @@ function FreightStatusBlock() {
               appUrl={appUrl}
               onSaved={(updated) => handleSaved(r.variantId, updated)}
             />
-          ))}
-        </BlockStack>
-      )}
+          ))
+        )}
+      </BlockStack>
     </AdminBlock>
   );
 }

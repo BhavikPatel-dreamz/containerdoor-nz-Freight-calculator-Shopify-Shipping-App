@@ -1,0 +1,46 @@
+# ContainerDoor OMS — Docker (own server, not Vercel).
+#
+# 1. Put secrets in `.env` (DATABASE_URL, SHOPIFY_*, CRON_SECRET, APP_URL, …)
+# 2. docker compose up -d --build
+# 3. Point Shopify app URL / webhooks at this host (https://your-domain)
+#
+# Crons call oms-web over the compose network (Vercel Hobby cannot run these).
+
+services:
+  oms-web:
+    build: .
+    command: ["web"]
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    restart: unless-stopped
+
+  oms-email-queue-cron:
+    build: .
+    command: ["email-cron"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      EMAIL_CRON_APP_URL: http://oms-web:3000
+      EMAIL_CRON_INTERVAL_MS: "60000"
+    depends_on:
+      - oms-web
+    restart: unless-stopped
+
+  oms-order-webhook-cron:
+    build: .
+    command: ["webhook-cron"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      ORDER_WEBHOOK_CRON_APP_URL: http://oms-web:3000
+      ORDER_WEBHOOK_CRON_INTERVAL_MS: "30000"
+    depends_on:
+      - oms-web
+    restart: unless-stopped

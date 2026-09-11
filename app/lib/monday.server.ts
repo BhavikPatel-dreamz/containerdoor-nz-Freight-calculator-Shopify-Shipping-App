@@ -830,46 +830,31 @@ export function summarizeMondayRow(row: MondayRow): {
   return { filled, blank };
 }
 
-export async function findExistingMondayItemId(
-  orderId: string,
-  variantId: string,
-) {
-  if (!orderId || !variantId) return null;
-
-  const colIds = await getOrCreateColumnIds();
+async function findMondayItemsByColumnValue(columnId: string | undefined, columnValue: string) {
+  const id = String(columnId || "").trim();
+  const value = String(columnValue || "").trim();
+  if (!id || !value) return [];
   const data = await mondayRequest(
-    `query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
-      items_page_by_column_values(board_id: $boardId, columns: [{column_id: $columnId, column_values: [$columnValue]}]) {
-        items { id }
+    `query ($boardId: ID!, $columns: [ItemsPageByColumnValuesQuery!]) {
+      items_page_by_column_values(board_id: $boardId, columns: $columns) {
+        items { id name }
       }
     }`,
     {
       boardId: process.env.MONDAY_BOARD_ID,
-      columnId: colIds.orderId,
-      columnValue: orderId,
+      columns: [{ column_id: id, column_values: [value] }],
     },
   );
+  return data?.items_page_by_column_values?.items ?? [];
+}
 
-  const candidateIds = (data.items_page_by_column_values?.items ?? [])
-    .map((item: any) => item.id)
-    .filter(Boolean);
-  if (!candidateIds.length) return null;
-
-  const details = await mondayRequest(
-    `query ($itemIds: [ID!]) {
-      items(ids: $itemIds) { id column_values { id text } }
-    }`,
-    { itemIds: candidateIds },
-  );
-
-  const matched = details.items?.find((item: any) =>
-    item.column_values?.some(
-      (column: any) =>
-        column.id === colIds.variantId && column.text === String(variantId),
-    ),
-  );
-
-  return matched?.id ?? null;
+export async function findExistingMondayItemId(
+  _orderId: string,
+  _variantId: string,
+) {
+  // Shopify order id is not a Monday column. items_page_by_column_values without
+  // column_id fails the whole Monday step. Match by pulse name / SKU instead.
+  return null;
 }
 
 export async function findMondayItemByName(itemName: string): Promise<string | null> {
@@ -916,19 +901,7 @@ export async function findMondayItemBySkuAndOrderName(input: {
   try {
     const colIds = await getOrCreateColumnIds();
     if (!colIds.sku) return null;
-    const data = await mondayRequest(
-      `query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
-        items_page_by_column_values(board_id: $boardId, columns: [{column_id: $columnId, column_values: [$columnValue]}]) {
-          items { id name }
-        }
-      }`,
-      {
-        boardId: process.env.MONDAY_BOARD_ID,
-        columnId: colIds.sku,
-        columnValue: sku,
-      },
-    );
-    const items = data?.items_page_by_column_values?.items ?? [];
+    const items = await findMondayItemsByColumnValue(colIds.sku, sku);
     if (!items.length) return null;
     if (orderName) {
       const needle = orderName.startsWith("#") ? orderName : `#${orderName}`;

@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findExistingMondayItemId, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -339,11 +339,21 @@ async function processQueuedOrderWebhookJob(job: any) {
       // swallow logging errors
     }
 
-    // Persist snapshot + line-items + freight + Monday using the original
-    // webhook payload to avoid changing the webhook flow semantics.
-    await ingestShopifyOrderIntoOms(job.shop, order, admin);
-    await createMondayEntriesForOrder(job.shop, order);
-    await createCin7EntryForOrder(job.shop, order);
+    // Same single-order service as Sync Next / bulk (OMS → Cin7 → Monday).
+    const { processShopifyOrder } = await import("./process-shopify-order.server");
+    const processed = await processShopifyOrder({
+      shop: job.shop,
+      admin,
+      order,
+      shopifyOrderId: String(order.id || ""),
+      sentBy: "orders/create webhook",
+      mode: "full",
+      persistReport: false,
+    });
+    const omsFailed = processed.steps?.some((s) => s.step === "oms_sync" && !s.ok);
+    if (processed.critical || omsFailed) {
+      throw new Error(processed.error || "OMS ingest failed");
+    }
 
     const targets = [
       {
@@ -1259,9 +1269,9 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
     return lines;
   }
   return (order.line_items ?? [])
-    .filter((li) => li.variant_id != null)
+    .filter((li) => li.variant_id != null || li.id != null)
     .map((li) => ({
-      variantId: String(li.variant_id),
+      variantId: String(li.variant_id ?? li.id ?? ""),
       title: li.title ?? "",
       sku: String(li.sku || ""),
       company: "",
@@ -1278,6 +1288,7 @@ export type IntegrationSyncStats = {
   linked: number;
   skipped: number;
   failed: number;
+  errors?: string[];
 };
 
 function emptyStats(): IntegrationSyncStats {
@@ -1305,7 +1316,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     const breakdownLines = getOperationalLines(order);
     if (!breakdownLines.length) {
       console.log(`[Cin7][Webhook][${orderId}] SKIP - no operational lines`);
-      return stats;
+      return emptyStats();
     }
 
     const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
@@ -1391,6 +1402,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let linked = 0;
     let skipped = 0;
     let failed = 0;
+    const errors: string[] = [];
 
     const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
       orderName: order.name,
@@ -1470,7 +1482,26 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       const bundleLines = bundleParentLines.get(li.variantId);
       const isBundleParent = Boolean(bundleLines && bundleLines.length > 0);
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
-      if (!sku && !isBundleParent) {
+
+      const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
+      if (existingMatch?.id) {
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: existingMatch.id,
+          salesOrderCode: existingMatch.code || "",
+          salesOrderRef: existingMatch.reference || reference,
+          mirrorToOrder: true,
+        });
+        linked++;
+        console.log(
+          `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing id=${existingMatch.id} ref=${existingMatch.reference || reference} sku=${sku || "(none)"}`,
+        );
+        continue;
+      }
+
+      if (!sku) {
         console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
         await prisma.orderLineItemOperationalData.update({
           where: { id: ops.id },
@@ -1489,24 +1520,6 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           carrier: li.company || ops.carrier,
         },
       });
-
-      const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
-      if (existingMatch?.id) {
-        await saveCin7LineLink({
-          shop,
-          orderId,
-          variantId: li.variantId,
-          salesOrderId: existingMatch.id,
-          salesOrderCode: existingMatch.code || "",
-          salesOrderRef: existingMatch.reference || reference,
-          mirrorToOrder: true,
-        });
-        linked++;
-        console.log(
-          `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing id=${existingMatch.id} ref=${existingMatch.reference || reference} sku=${sku}`,
-        );
-        continue;
-      }
 
       try {
         // Bundle parent: `qty=1` so the Sales Order total equals the parent
@@ -1674,6 +1687,8 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             data: { cin7SalesOrderId: "" },
           });
         }
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`line ${letterSuffix}: ${msg}`);
         console.error(`[Cin7][Webhook][${orderId}] line ${letterSuffix} FAILED`, e);
       }
     }
@@ -1681,10 +1696,11 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     console.log(
       `[Cin7][Webhook][${orderId}] DONE per_line created=${created} linked=${linked} skipped=${skipped} failed=${failed}`,
     );
-    return { created, linked, skipped, failed };
+    return { created, linked, skipped, failed, errors };
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
-    return { created: 0, linked: 0, skipped: 0, failed: 1 };
+    return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [msg] };
   }
 }
 
@@ -1810,6 +1826,7 @@ export async function createMondayEntriesForOrder(
     let linkedCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
+    const errors: string[] = [];
 
     for (const [idx, li] of breakdownLines.entries()) {
       if (!li.variantId) {
@@ -1890,10 +1907,17 @@ export async function createMondayEntriesForOrder(
           },
         });
         mondayRowForColor = mondayRow;
-        const existingMondayId =
-          (await findMondayItemByName(itemName)) ||
-          (await findExistingMondayItemId(orderId, li.variantId)) ||
-          (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName: order.name }));
+        let existingMondayId: string | null = null;
+        try {
+          existingMondayId =
+            (await findMondayItemByName(itemName)) ||
+            (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName: order.name }));
+        } catch (lookupErr) {
+          console.error(
+            `[Monday][Webhook][${orderId}] lookup failed (will create) line ${letterSuffix}`,
+            lookupErr,
+          );
+        }
         if (existingMondayId) {
           mondayItemId = existingMondayId;
           linkedCount++;
@@ -1917,6 +1941,8 @@ export async function createMondayEntriesForOrder(
         }
       } catch (err) {
         failedCount++;
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`line ${letterSuffix}: ${msg}`);
         console.error(
           `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
           err,
@@ -1981,7 +2007,7 @@ export async function createMondayEntriesForOrder(
     console.log(
       `[Monday][Webhook][${orderId}] DONE - created=${createdCount}, linked=${linkedCount}, skipped=${skippedCount}, failed=${failedCount}`,
     );
-    return { created: createdCount, linked: linkedCount, skipped: skippedCount, failed: failedCount };
+    return { created: createdCount, linked: linkedCount, skipped: skippedCount, failed: failedCount, errors };
   } catch (error) {
     console.error(`[Monday][Webhook][${orderId}] FATAL`, error);
     return { created: 0, linked: 0, skipped: 0, failed: 1 };

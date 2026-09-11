@@ -34,7 +34,7 @@ export default function App() {
       `}</style>
       <s-app-nav>
         <s-link href="/app">Orders</s-link>
-        <s-link href="/app/migrate-orders">Migrate</s-link>
+        <s-link href="/app/migrate-orders">Order Sync</s-link>
         <s-link href="/app/settings">Settings</s-link>
         <s-link href="/app/rates">Rates</s-link>
         <s-link href="/app/operations">Operations Summary</s-link>
