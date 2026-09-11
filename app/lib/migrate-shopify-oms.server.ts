@@ -568,7 +568,7 @@ async function migrateOneShopifyOrder(args: {
     log("search", true, `Looking up Shopify order ${token}`);
     const rawNode = orderNode?.data?.order || orderNode?.data?.node || orderNode?.order || orderNode;
     let order = rawNode ? mapShopifyOrderNode(rawNode) : null;
-    const fallbackId = gidNum(token) ?? Number(String(token).replace(/\D/g, "")) || undefined;
+      const fallbackId = gidNum(token) ?? (Number(String(token).replace(/\D/g, "")) || undefined);
     if (order && !order.id && fallbackId) {
       order.id = fallbackId;
     }
