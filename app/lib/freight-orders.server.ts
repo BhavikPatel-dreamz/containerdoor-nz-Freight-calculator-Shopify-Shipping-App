@@ -80,10 +80,47 @@ export type LineItemSnapshot = {
 // Parse a DB OrderSnapshot's shippingCode + lineItemsJson into the immutable
 // per-freight-line-item fields. Returns [] when the order has no freight code.
 // Parts with an empty variantId are skipped (they can't be keyed/joined).
+function snapshotsFromLineItemsJson(snap: any): LineItemSnapshot[] {
+  let parsed: Array<{
+    variantId?: number | string;
+    productId?: number | string | null;
+    variantTitle?: string;
+    title?: string;
+    sku?: string;
+    vendor?: string;
+    quantity?: number;
+    price?: string | number;
+  }> = [];
+  try {
+    parsed = JSON.parse(snap?.lineItemsJson ?? "[]");
+  } catch {
+    return [];
+  }
+  const out: LineItemSnapshot[] = [];
+  parsed.forEach((li, idx) => {
+    const variantId = li.variantId != null && String(li.variantId).trim() ? String(li.variantId) : "";
+    if (!variantId) return;
+    out.push({
+      idx,
+      variantId,
+      letterSuffix: LETTERS[idx % 26],
+      productTitle: li.title ?? "",
+      productId: li.productId != null ? String(li.productId) : "",
+      variantTitle: li.variantTitle ?? "",
+      sku: li.sku ?? "",
+      vendor: li.vendor ?? "",
+      company: "",
+      boxes: Number(li.quantity ?? 1) || 1,
+      amount: Number(li.price ?? 0),
+    });
+  });
+  return out;
+}
+
 export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
-  if (!snap.carriers || !snap.shippingCode) return [];
+  if (!snap.carriers || !snap.shippingCode) return snapshotsFromLineItemsJson(snap);
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
-  if (!lineItemsRaw) return [];
+  if (!lineItemsRaw) return snapshotsFromLineItemsJson(snap);
 
   let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string }> = [];
   try {

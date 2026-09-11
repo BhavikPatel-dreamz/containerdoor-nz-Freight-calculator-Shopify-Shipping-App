@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findExistingMondayItemId, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -1568,10 +1568,17 @@ export async function createMondayEntriesForOrder(
           },
         });
         mondayRowForColor = mondayRow;
-        const existingMondayId =
-          (await findMondayItemByName(itemName)) ||
-          (await findExistingMondayItemId(orderId, li.variantId)) ||
-          (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName: order.name }));
+        let existingMondayId: string | null = null;
+        try {
+          existingMondayId =
+            (await findMondayItemByName(itemName)) ||
+            (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName: order.name }));
+        } catch (lookupErr) {
+          console.error(
+            `[Monday][Webhook][${orderId}] lookup failed (will create) line ${letterSuffix}`,
+            lookupErr,
+          );
+        }
         if (existingMondayId) {
           mondayItemId = existingMondayId;
           linkedCount++;

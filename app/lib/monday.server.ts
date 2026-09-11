@@ -849,40 +849,12 @@ async function findMondayItemsByColumnValue(columnId: string | undefined, column
 }
 
 export async function findExistingMondayItemId(
-  orderId: string,
-  variantId: string,
+  _orderId: string,
+  _variantId: string,
 ) {
-  if (!orderId || !variantId) return null;
-
-  try {
-    const colIds = await getOrCreateColumnIds();
-    // orderId / variantId are no longer Monday columns — skip this lookup.
-    if (!colIds.orderId) return null;
-
-    const candidates = await findMondayItemsByColumnValue(colIds.orderId, orderId);
-    const candidateIds = candidates.map((item: any) => item.id).filter(Boolean);
-    if (!candidateIds.length) return null;
-    if (!colIds.variantId) return candidateIds.length === 1 ? String(candidateIds[0]) : null;
-
-    const details = await mondayRequest(
-      `query ($itemIds: [ID!]) {
-        items(ids: $itemIds) { id column_values { id text } }
-      }`,
-      { itemIds: candidateIds },
-    );
-
-    const matched = details.items?.find((item: any) =>
-      item.column_values?.some(
-        (column: any) =>
-          column.id === colIds.variantId && column.text === String(variantId),
-      ),
-    );
-
-    return matched?.id ?? null;
-  } catch (err) {
-    console.error("[Monday] findExistingMondayItemId failed", orderId, variantId, err);
-    return null;
-  }
+  // Shopify order id is not a Monday column. items_page_by_column_values without
+  // column_id fails the whole Monday step. Match by pulse name / SKU instead.
+  return null;
 }
 
 export async function findMondayItemByName(itemName: string): Promise<string | null> {
