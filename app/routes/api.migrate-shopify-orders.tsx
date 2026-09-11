@@ -44,6 +44,7 @@ export async function action({ request }: ActionFunctionArgs) {
     shopifyOrder?: any;
     orderNode?: any;
     lineItems?: any[];
+    mode?: "dry_run" | "full";
   };
 
   const cronOk = verifyCronSecret(request);
@@ -110,6 +111,7 @@ export async function action({ request }: ActionFunctionArgs) {
     namesOrIds: orders,
     sentBy,
     orderNode,
+    mode: body.mode === "dry_run" ? "dry_run" : "full",
   });
   const failed = result.results.filter((r) => !r.ok).length;
   return Response.json({ ok: failed === 0, ...result });

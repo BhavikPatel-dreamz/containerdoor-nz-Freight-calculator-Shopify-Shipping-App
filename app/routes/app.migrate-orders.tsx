@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { authenticate } from "../shopify.server";
 import {
   listMigrateReports,
@@ -18,6 +19,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const form = await request.formData();
   const intent = String(form.get("intent") || "search");
   const sentBy = session.shop;
+  const mode = String(form.get("mode") || "full") === "dry_run" ? "dry_run" as const : "full" as const;
 
   if (intent === "search") {
     const q = String(form.get("q") || "").trim();
@@ -49,14 +51,27 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return { intent, ok: false, message: intent === "bulk" ? "Paste at least one order name." : "Choose an order from search first." };
   }
 
-  const result = await migrateShopifyOrdersToOms({ shop: session.shop, namesOrIds: names, sentBy });
+  if (mode === "full" && String(form.get("confirmFullRun") || "") !== "1") {
+    return {
+      intent,
+      ok: false,
+      mode,
+      needsConfirm: true,
+      message: "Full run requires confirmation. This would create/update OMS, Cin7, and Monday records.",
+    };
+  }
+
+  const result = await migrateShopifyOrdersToOms({ shop: session.shop, namesOrIds: names, sentBy, mode });
   const failed = result.results.filter((r) => !r.ok).length;
   return {
     intent,
     ok: failed === 0,
+    mode,
     message:
       failed === 0
-        ? `Done. ${result.results.length} order${result.results.length === 1 ? "" : "s"} processed. Report saved.`
+        ? mode === "dry_run"
+          ? `Dry run finished. ${result.results.length} order(s) previewed. No OMS/Cin7/Monday writes.`
+          : `Done. ${result.results.length} order${result.results.length === 1 ? "" : "s"} processed. Report saved.`
         : `Finished with ${failed} failure(s) of ${result.results.length}.`,
     ...result,
   };
@@ -69,6 +84,42 @@ export default function MigrateOrdersPage() {
   const busy = nav.state !== "idle";
   const hits = data && "hits" in data ? data.hits : [];
   const results = data && "results" in data ? data.results : [];
+  const [mode, setMode] = useState<"dry_run" | "full">("full");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmCount, setConfirmCount] = useState(1);
+  const pendingForm = useRef<HTMLFormElement | null>(null);
+
+  const onMigrateSubmit = (event: FormEvent<HTMLFormElement>) => {
+    if (mode !== "full") return;
+    const form = event.currentTarget;
+    const flag = form.querySelector<HTMLInputElement>('input[name="confirmFullRun"]');
+    if (flag?.value === "1") return;
+    event.preventDefault();
+    const fd = new FormData(form);
+    const bulk = String(fd.get("orders") || "")
+      .split(/[\n,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    setConfirmCount(bulk.length || 1);
+    pendingForm.current = form;
+    setConfirmOpen(true);
+  };
+
+  const continueFullRun = () => {
+    const form = pendingForm.current;
+    if (!form) return;
+    const flag = form.querySelector<HTMLInputElement>('input[name="confirmFullRun"]');
+    if (flag) flag.value = "1";
+    setConfirmOpen(false);
+    form.requestSubmit();
+  };
+
+  useEffect(() => {
+    if (nav.state !== "idle") return;
+    document.querySelectorAll<HTMLInputElement>('input[name="confirmFullRun"]').forEach((el) => {
+      el.value = "";
+    });
+  }, [nav.state]);
 
   return (
     <s-page heading="Migrate Shopify → OMS">
@@ -87,7 +138,18 @@ export default function MigrateOrdersPage() {
         .fail { color: #b42318; }
         .report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
         .report-table th, .report-table td { border-bottom: 1px solid #eee; padding: 8px 6px; text-align: left; vertical-align: top; }
+        .dry-banner { background: #fff8e1; border: 1px solid #f0c36d; color: #7a4f01; border-radius: 8px; padding: 10px 12px; font-weight: 600; margin: 8px 0 0; }
+        .mode-row { display: flex; gap: 16px; font-size: 14px; color: #1f2933; margin-top: 8px; }
+        .confirm-mask { position: fixed; inset: 0; background: rgba(15,23,32,.45); display: grid; place-items: center; z-index: 40; }
+        .confirm-box { background: #fff; border-radius: 12px; padding: 20px 22px; max-width: 420px; width: calc(100% - 32px); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+        .confirm-box h3 { margin: 0 0 8px; font-size: 16px; }
+        .confirm-box p { margin: 0 0 8px; color: #334e68; font-size: 14px; }
+        .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
       `}</style>
+
+      {mode === "dry_run" ? (
+        <div className="dry-banner">DRY RUN — No production changes will be made to OMS, Cin7, or Monday. Shopify load and Cin7/Monday lookups are read-only.</div>
+      ) : null}
 
       <s-section heading="1. Search and choose one order">
         <s-paragraph>
@@ -112,8 +174,14 @@ export default function MigrateOrdersPage() {
         ) : null}
 
         {hits?.length ? (
-          <Form method="post">
+          <Form method="post" onSubmit={onMigrateSubmit}>
             <input type="hidden" name="intent" value="migrate" />
+            <input type="hidden" name="mode" value={mode} />
+            <input type="hidden" name="confirmFullRun" value="" />
+            <div className="mode-row">
+              <label><input type="radio" name="modeUi" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
+              <label><input type="radio" name="modeUi" checked={mode === "full"} onChange={() => setMode("full")} /> Full run</label>
+            </div>
             <ul className="hit-list">
               {hits.map((h, i) => (
                 <li className="hit" key={h.id}>
@@ -138,9 +206,15 @@ export default function MigrateOrdersPage() {
       </s-section>
 
       <s-section heading="2. Bulk (after one order looks right)">
-        <Form method="post">
+        <Form method="post" onSubmit={onMigrateSubmit}>
           <input type="hidden" name="intent" value="bulk" />
+          <input type="hidden" name="mode" value={mode} />
+          <input type="hidden" name="confirmFullRun" value="" />
           <div className="settings-card" style={{ marginTop: 12 }}>
+            <div className="mode-row" style={{ marginBottom: 12 }}>
+              <label><input type="radio" name="modeUiBulk" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
+              <label><input type="radio" name="modeUiBulk" checked={mode === "full"} onChange={() => setMode("full")} /> Full run</label>
+            </div>
             <label className="settings-field">
               Order names or IDs
               <textarea name="orders" rows={8} placeholder={"#CDL215347\n#CDL215348"} />
@@ -157,6 +231,9 @@ export default function MigrateOrdersPage() {
       {data?.message ? (
         <s-section heading="This run">
           <s-paragraph>{data.message}</s-paragraph>
+          {data && "mode" in data && data.mode === "dry_run" ? (
+            <div className="dry-banner">DRY RUN — No production changes were made to OMS, Cin7, or Monday.</div>
+          ) : null}
           {results?.map((r) => (
             <div key={r.input} className="settings-card" style={{ marginTop: 10 }}>
               <strong>{r.orderName || r.input}</strong>
@@ -203,8 +280,10 @@ export default function MigrateOrdersPage() {
                   <td>{r.cin7Action}</td>
                   <td>{r.runCount}</td>
                   <td>
-                    <Form method="post">
+                    <Form method="post" onSubmit={onMigrateSubmit}>
                       <input type="hidden" name="intent" value="migrate" />
+                      <input type="hidden" name="mode" value={mode} />
+                      <input type="hidden" name="confirmFullRun" value="" />
                       <input type="hidden" name="orderId" value={r.orderId} />
                       <s-button type="submit" {...(busy ? { loading: true } : {})}>
                         Sync again
@@ -219,6 +298,26 @@ export default function MigrateOrdersPage() {
           <s-paragraph>No migrate reports yet.</s-paragraph>
         )}
       </s-section>
+
+      {confirmOpen ? (
+        <div className="confirm-mask" role="dialog" aria-modal="true">
+          <div className="confirm-box">
+            <h3>You are about to process {confirmCount} order{confirmCount === 1 ? "" : "s"}.</h3>
+            <p><strong>Mode: FULL RUN</strong></p>
+            <p>This will create/update records in:</p>
+            <p>✓ OMS<br />✓ Cin7<br />✓ Monday.com</p>
+            <p>Continue?</p>
+            <div className="confirm-actions">
+              <button type="button" onClick={() => setConfirmOpen(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #bec5cc", background: "#fff" }}>
+                Cancel
+              </button>
+              <button type="button" onClick={continueFullRun} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#b42318", color: "#fff" }}>
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </s-page>
   );
 }

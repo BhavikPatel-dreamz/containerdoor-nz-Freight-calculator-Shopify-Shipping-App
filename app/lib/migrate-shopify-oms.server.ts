@@ -6,14 +6,15 @@
  */
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
+import { type OrderPayload } from "./order-webhook.server";
+import { runOrderPipeline } from "./migration-pipeline.server";
 import {
-  createCin7EntryForOrder,
-  createMondayEntriesForOrder,
-  getOperationalLines,
-  ingestShopifyOrderIntoOms,
-  type OrderPayload,
-} from "./order-webhook.server";
-import { isLinkedCin7Id } from "./cin7-adapter.server";
+  bumpMigrationRunCounters,
+  createMigrationRun,
+  finishMigrationOrder,
+  finishMigrationRun,
+  markMigrationOrderRunning,
+} from "./migration-run.server";
 
 export type MigrateLogStep = {
   at: string;
@@ -55,6 +56,7 @@ export type MigrateOrderResult = {
   steps?: MigrateLogStep[];
   lines?: MigrateLineReport[];
   error?: string;
+  mode?: "dry_run" | "full";
 };
 
 const ORDER_FIELDS = `
@@ -488,27 +490,53 @@ export async function migrateShopifyOrdersToOms(input: {
   sentBy?: string;
   /** Admin UI already loaded this order (bypasses app-token Shopify GET). */
   orderNode?: any;
-}): Promise<{ shop: string; results: MigrateOrderResult[] }> {
+  mode?: "dry_run" | "full";
+}): Promise<{ shop: string; runId?: string; results: MigrateOrderResult[] }> {
   const shop = input.shop;
   const sentBy = input.sentBy || "system";
   const { admin } = await unauthenticated.admin(shop);
+  const tokens = input.namesOrIds.map((x) => String(x || "").trim()).filter(Boolean);
+  const { run, orders } = await createMigrationRun({
+    shop,
+    mode: input.mode || "full",
+    orderLimit: tokens.length,
+    createdBy: sentBy,
+    tokens,
+  });
   const results: MigrateOrderResult[] = [];
 
-  for (const raw of input.namesOrIds) {
-    const token = String(raw || "").trim();
-    if (!token) continue;
-    results.push(
-      await migrateOneShopifyOrder({
-        shop,
-        admin,
-        token,
-        sentBy,
-        orderNode: input.orderNode,
-      }),
-    );
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const track = orders[i];
+    await markMigrationOrderRunning(track.id);
+    const one = await migrateOneShopifyOrder({
+      shop,
+      admin,
+      token,
+      sentBy,
+      orderNode: input.orderNode,
+      trackingOrderId: track.id,
+      mode: input.mode || "full",
+    });
+    results.push(one);
+    const failed = one.ok === false || (one.monday?.failed || 0) > 0 || (one.cin7?.failed || 0) > 0;
+    await finishMigrationOrder({
+      id: track.id,
+      shopifyOrderId: one.orderId || token,
+      shopifyOrderName: one.orderName || "",
+      status: !one.ok ? "failed" : failed ? "partial" : "completed",
+      currentStep: one.steps?.length ? String(one.steps[one.steps.length - 1]?.step || "") : "",
+      error: one.error,
+    });
+    await bumpMigrationRunCounters(run.id, !one.ok || failed ? "failed" : "success");
+    if (one.error === "Missing shop") {
+      await finishMigrationRun(run.id, "aborted");
+      return { shop, runId: run.id, results };
+    }
   }
 
-  return { shop, results };
+  await finishMigrationRun(run.id, "completed");
+  return { shop, runId: run.id, results };
 }
 
 async function migrateOneShopifyOrder(args: {
@@ -517,8 +545,10 @@ async function migrateOneShopifyOrder(args: {
   token: string;
   sentBy: string;
   orderNode?: any;
+  trackingOrderId?: string;
+  mode?: "dry_run" | "full";
 }): Promise<MigrateOrderResult> {
-  const { shop, admin, token, sentBy, orderNode } = args;
+  const { shop, admin, token, sentBy, orderNode, mode } = args;
   const steps: MigrateLogStep[] = [];
   const log = (step: string, ok: boolean, message: string) => {
     steps.push({ at: new Date().toISOString(), step, ok, message });
@@ -535,7 +565,7 @@ async function migrateOneShopifyOrder(args: {
     const mondayAction = summarizeAction(mondayStats);
     const cin7Action = summarizeAction(cin7Stats);
     const status = !ok ? "failed" : mondayStats?.failed || cin7Stats?.failed ? "partial" : "success";
-    if (orderId) {
+    if (orderId && mode !== "dry_run") {
       await persistReport({
         shop,
         orderId,
@@ -561,6 +591,7 @@ async function migrateOneShopifyOrder(args: {
       steps,
       lines,
       error,
+      mode: mode || "full",
     };
   };
 
@@ -587,87 +618,27 @@ async function migrateOneShopifyOrder(args: {
     } else {
       log("search", true, `Found ${order.name} (id ${order.id})`);
     }
-    orderId = String(order.id);
-    orderName = String(order.name || "");
 
-    const shopifyLines = order.line_items ?? [];
-    if (!shopifyLines.length) {
-      const keys = rawNode && typeof rawNode === "object" ? Object.keys(rawNode).join(",") : "none";
-      const li = rawNode?.lineItems ?? rawNode?.line_items;
-      const liHint = li == null ? "missing" : Array.isArray(li) ? `array:${li.length}` : `keys:${Object.keys(li).join(",")}`;
-      log("validate_items", false, `Order has no line items (payload keys: ${keys}; lineItems ${liHint})`);
-      return finish(false, "No line items");
+    const pipeline = await runOrderPipeline({
+      shop,
+      order,
+      admin,
+      mode: mode || "full",
+      trackingOrderId: args.trackingOrderId,
+    });
+    for (const s of pipeline.steps) {
+      log(s.step, s.ok, s.message);
     }
-    const missingSku = shopifyLines.filter((li) => !String(li.sku || "").trim());
-    log(
-      "validate_items",
-      missingSku.length === 0,
-      `${shopifyLines.length} line item(s)` +
-        (missingSku.length ? `; ${missingSku.length} missing SKU` : "; SKUs present"),
-    );
-
-    const snapshot = await prisma.orderSnapshot.findUnique({
-      where: { shop_orderId: { shop, orderId } },
-      select: { id: true },
-    });
-    const existingOps = await prisma.orderLineItemOperationalData.findMany({
-      where: { shop, orderId },
-      select: { variantId: true, mondayItemId: true, cin7SalesOrderId: true },
-    });
-    const opsByVariant = new Map(existingOps.map((r) => [r.variantId, r]));
-    const omsExisted = Boolean(snapshot) && existingOps.length > 0;
-    omsAction = omsExisted ? "existed" : "created";
-    log(
-      "oms_check",
-      true,
-      omsExisted
-        ? `OMS already has this order (${existingOps.length} line ops)`
-        : "OMS does not have this order yet — will add",
-    );
-
-    await ingestShopifyOrderIntoOms(shop, order, admin);
-    log("oms_ingest", true, omsExisted ? "OMS snapshot/index refreshed" : "OMS snapshot + line ops created");
-
-    const opLines = getOperationalLines(order);
-    log("oms_lines", opLines.length > 0, `${opLines.length} operational line(s) ready`);
-
-    mondayStats = await createMondayEntriesForOrder(shop, order);
-    log(
-      "monday",
-      (mondayStats.failed || 0) === 0,
-      `Monday linked=${mondayStats.linked} created=${mondayStats.created} skipped=${mondayStats.skipped} failed=${mondayStats.failed}` +
-        (mondayStats.errors?.length ? ` — ${mondayStats.errors.join(" | ")}` : ""),
-    );
-
-    cin7Stats = await createCin7EntryForOrder(shop, order);
-    log(
-      "cin7",
-      (cin7Stats.failed || 0) === 0,
-      `Cin7 linked=${cin7Stats.linked} created=${cin7Stats.created} skipped=${cin7Stats.skipped} failed=${cin7Stats.failed}` +
-        (cin7Stats.errors?.length ? ` — ${cin7Stats.errors.join(" | ")}` : ""),
-    );
-
-    const afterOps = await prisma.orderLineItemOperationalData.findMany({
-      where: { shop, orderId },
-    });
-    lines = opLines.map((li) => {
-      const before = opsByVariant.get(li.variantId);
-      const after = afterOps.find((r) => r.variantId === li.variantId);
-      const mondayId = String(after?.mondayItemId || "").trim();
-      const cin7Id = String(after?.cin7SalesOrderId || "").trim();
-      return {
-        variantId: li.variantId,
-        sku: li.sku,
-        title: li.title,
-        oms: before ? "existed" : after ? "created" : "missing",
-        monday: mondayId && mondayId !== "pending" ? (before?.mondayItemId && before.mondayItemId !== "pending" ? "existed" : "linked_or_created") : "missing",
-        mondayItemId: mondayId,
-        cin7: isLinkedCin7Id(cin7Id) ? (isLinkedCin7Id(before?.cin7SalesOrderId) ? "existed" : "linked_or_created") : cin7Id || "missing",
-        cin7SalesOrderId: isLinkedCin7Id(cin7Id) ? cin7Id : "",
-      };
-    });
-    log("report", true, `Saved migrate report for ${orderName}`);
-    return finish(true);
+    orderId = pipeline.orderId;
+    orderName = pipeline.orderName;
+    omsAction = pipeline.omsAction;
+    mondayStats = pipeline.monday;
+    cin7Stats = pipeline.cin7;
+    lines = pipeline.lines;
+    if (pipeline.status === "completed") {
+      log("report", true, `Saved migrate report for ${orderName}`);
+    }
+    return finish(pipeline.status !== "failed", pipeline.error);
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     log("error", false, error);
