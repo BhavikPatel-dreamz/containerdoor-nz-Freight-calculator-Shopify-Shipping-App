@@ -120,22 +120,33 @@ async function main() {
 
     const gqlHits = await searchGraphqlFiltered(row, q);
     const restHits = await searchRestByName(row, q);
+    const byIdHits = await searchShopifyById(row, q);
     let scanHits = [];
-    if (!gqlHits.length && !restHits.length && args.scan > 0) {
+    if (!gqlHits.length && !restHits.length && !byIdHits.length && args.scan > 0) {
       scanHits = await scanOrders(row, q, args.scan);
     }
 
-    const all = uniqueById([...gqlHits, ...restHits, ...scanHits]);
+    const cin7Hits = await searchCin7(q);
+    const mondayHits = await searchMonday(q);
+
+    const all = uniqueById([...gqlHits, ...restHits, ...byIdHits, ...scanHits]);
     console.log("\n── RESULT ──");
-    if (!all.length) {
-      console.log(`Not found on ${row.shop}: ${q}`);
-      console.log("This order is not in Shopify under that name (or the token cannot read it).");
-      console.log("If it was never imported, import it first, then search again.");
-      process.exitCode = 2;
-      return;
+    if (all.length) {
+      for (const n of all) {
+        console.log(`SHOPIFY FOUND  ${n.name}  ${n.id}  ${n.createdAt || ""}  ${n.email || ""}`);
+      }
+    } else {
+      console.log(`Shopify: not found (${q}) on ${row.shop}`);
     }
-    for (const n of all) {
-      console.log(`FOUND  ${n.name}  ${n.id}  ${n.createdAt || ""}  ${n.email || ""}`);
+    if (cin7Hits.length) {
+      console.log("Cin7: found — you can link this in OMS without Shopify having the old number.");
+    }
+    if (mondayHits.length) {
+      console.log("Monday: found — same, link by pulse name/SKU.");
+    }
+    if (!all.length && !cin7Hits.length && !mondayHits.length) {
+      console.log("Not in Shopify, Cin7, or Monday under that number.");
+      process.exitCode = 2;
     }
   } finally {
     await pool.end();
@@ -261,6 +272,40 @@ function uniqueById(rows) {
   return out;
 }
 
+async function searchShopifyById(shopRow, term) {
+  const id = String(term || "").replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  if (!/^\d{8,}$/.test(id)) return [];
+  console.log("── Shopify GET by id ──");
+  const hits = [];
+  const { status, json } = await shopifyRest(shopRow, `orders/${id}.json`);
+  const o = json?.order;
+  console.log(`  GET orders/${id}.json  http=${status}${json?.errors ? ` errors=${JSON.stringify(json.errors)}` : ""}`);
+  if (o?.id) {
+    hits.push({
+      id: `gid://shopify/Order/${o.id}`,
+      name: o.name,
+      createdAt: o.created_at,
+      email: o.email,
+    });
+    console.log(`    MATCH name=${o.name}  id=${o.id}  ${o.financial_status}/${o.fulfillment_status}  ${o.created_at}  ${o.email || ""}`);
+  }
+  const gql = await shopifyGraphql(
+    shopRow,
+    `query ($id: ID!) { order(id: $id) { id name createdAt email displayFinancialStatus } }`,
+    { id: `gid://shopify/Order/${id}` },
+  );
+  const node = gql.json?.data?.order;
+  console.log(`  GraphQL order(id:)  http=${gql.status} found=${Boolean(node)}`);
+  if (gql.json?.errors) console.log(`    errors: ${JSON.stringify(gql.json.errors)}`);
+  if (node?.id) {
+    hits.push(node);
+    console.log(`    MATCH ${node.name}  ${node.id}  ${node.createdAt}  ${node.email || ""}`);
+  }
+  if (!hits.length) console.log("  (none)\n");
+  else console.log("");
+  return uniqueById(hits);
+}
+
 async function searchGraphqlFiltered(shopRow, term) {
   console.log("── GraphQL (name must match) ──");
   const hits = [];
@@ -365,6 +410,102 @@ async function searchOms(pool, shop, term) {
     );
   }
   console.log("");
+}
+
+function cin7Esc(value) {
+  return String(value).replace(/'/g, "''");
+}
+
+async function searchCin7(term) {
+  console.log("── Cin7 Sales Orders ──");
+  const base = String(process.env.CIN7_SYNC_URL || "").replace(/\/\d+$/, "") ||
+    `${String(process.env.CIN7_BASE_URL || "").replace(/\/$/, "")}/SalesOrders`;
+  const user = process.env.CIN7_USERNAME;
+  const token = process.env.CIN7_SYNC_TOKEN;
+  if (!base || !user || !token) {
+    console.log("  skipped (CIN7_SYNC_URL / CIN7_USERNAME / CIN7_SYNC_TOKEN not set)\n");
+    return [];
+  }
+  const auth = "Basic " + Buffer.from(`${user}:${token}`).toString("base64");
+  const noHash = term.replace(/^#/, "");
+  const keys = [...new Set([noHash, `#${noHash}`, term])];
+  const hits = [];
+  for (const field of ["customerOrderNo", "reference"]) {
+    for (const key of keys) {
+      const where = `${field}='${cin7Esc(key)}'`;
+      const url = `${base}?where=${encodeURIComponent(where)}&fields=${encodeURIComponent("id,code,reference,customerOrderNo")}&rows=20`;
+      try {
+        const res = await fetch(url, { headers: { Authorization: auth } });
+        const json = await res.json().catch(() => null);
+        const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : [];
+        console.log(`  ${field}=${key}  http=${res.status} hits=${rows.length}`);
+        for (const row of rows) {
+          const id = String(row?.id ?? row?.Id ?? "");
+          if (!id) continue;
+          hits.push(row);
+          console.log(
+            `    MATCH id=${id} code=${row.code || row.Code || ""} ref=${row.reference || row.Reference || ""} customerOrderNo=${row.customerOrderNo || row.CustomerOrderNo || ""}`,
+          );
+        }
+      } catch (err) {
+        console.log(`  ${field}=${key}  error=${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+  }
+  if (!hits.length) console.log("  (none)\n");
+  else console.log("");
+  return hits;
+}
+
+async function searchMonday(term) {
+  console.log("── Monday board ──");
+  const token = process.env.MONDAY_API_TOKEN;
+  const boardId = process.env.MONDAY_BOARD_ID;
+  if (!token || !boardId) {
+    console.log("  skipped (MONDAY_API_TOKEN / MONDAY_BOARD_ID not set)\n");
+    return [];
+  }
+  const noHash = term.replace(/^#/, "");
+  const names = [...new Set([noHash, `#${noHash}`, term])];
+  const hits = [];
+  for (const name of names) {
+    try {
+      const res = await fetch("https://api.monday.com/v2", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: token,
+          "API-Version": "2024-01",
+        },
+        body: JSON.stringify({
+          query: `query ($boardId: [ID!], $term: CompareValue) {
+            boards(ids: $boardId) {
+              items_page(limit: 25, query_params: {
+                rules: [{ column_id: "name", compare_value: $term, operator: contains_text }]
+              }) { items { id name } }
+            }
+          }`,
+          variables: { boardId: [boardId], term: [name] },
+        }),
+      });
+      const json = await res.json();
+      if (json.errors) {
+        console.log(`  name~${name}  errors=${JSON.stringify(json.errors).slice(0, 300)}`);
+        continue;
+      }
+      const items = json?.data?.boards?.[0]?.items_page?.items ?? [];
+      console.log(`  name~${name}  hits=${items.length}`);
+      for (const item of items) {
+        hits.push(item);
+        console.log(`    MATCH ${item.name}  id=${item.id}`);
+      }
+    } catch (err) {
+      console.log(`  name~${name}  error=${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (!hits.length) console.log("  (none)\n");
+  else console.log("");
+  return hits;
 }
 
 main().catch((err) => {
