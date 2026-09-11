@@ -1,3 +1,17 @@
+.git
+.github
+.cursor
 .cache
+.history
 build
 node_modules
+extensions/*/dist
+*.md
+.env
+.env.*
+!.env.example
+agent-transcripts
+terminals
+.DS_Store
+**/*.woff2
+backups

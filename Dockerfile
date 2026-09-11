@@ -1,18 +1,38 @@
-FROM node:20-alpine
-RUN apk add --no-cache openssl
+# ContainerDoor OMS — production image (self-host / Docker, not Vercel).
+# Build:  docker compose build
+# Run:    docker compose up -d
 
-EXPOSE 3000
+FROM node:22-alpine AS builder
+RUN apk add --no-cache openssl libc6-compat
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY extensions ./extensions
+COPY prisma ./prisma
+COPY prisma.config.ts ./
 
-COPY package.json package-lock.json* ./
+# prisma.config.ts requires DATABASE_URL even for `prisma generate`
+ENV DATABASE_URL="postgresql://build:build@127.0.0.1:5432/build"
 
-RUN npm ci --omit=dev && npm cache clean --force
+RUN pnpm install --frozen-lockfile
 
 COPY . .
+RUN pnpm exec prisma generate && pnpm exec react-router build
 
-RUN npm run build
+FROM node:22-alpine AS runner
+RUN apk add --no-cache openssl libc6-compat
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-CMD ["npm", "run", "docker-start"]
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3000
+
+COPY --from=builder /app /app
+RUN chmod +x /app/docker-entrypoint.sh
+
+EXPOSE 3000
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+CMD ["web"]
