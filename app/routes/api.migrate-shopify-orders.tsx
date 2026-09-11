@@ -43,6 +43,7 @@ export async function action({ request }: ActionFunctionArgs) {
     performedBy?: string;
     shopifyOrder?: any;
     orderNode?: any;
+    lineItems?: any[];
   };
 
   const cronOk = verifyCronSecret(request);
@@ -96,6 +97,14 @@ export async function action({ request }: ActionFunctionArgs) {
   }
 
   const orderNode = unwrapOrderNode(body.shopifyOrder || body.orderNode);
+  if (orderNode && Array.isArray(body.lineItems) && body.lineItems.length) {
+    const existing = orderNode.lineItems || orderNode.line_items;
+    const empty =
+      !existing ||
+      (Array.isArray(existing) && existing.length === 0) ||
+      (Array.isArray(existing?.nodes) && existing.nodes.length === 0);
+    if (empty) orderNode.lineItems = { nodes: body.lineItems };
+  }
   const result = await migrateShopifyOrdersToOms({
     shop,
     namesOrIds: orders,

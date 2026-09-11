@@ -593,7 +593,9 @@ async function migrateOneShopifyOrder(args: {
     const shopifyLines = order.line_items ?? [];
     if (!shopifyLines.length) {
       const keys = rawNode && typeof rawNode === "object" ? Object.keys(rawNode).join(",") : "none";
-      log("validate_items", false, `Order has no line items (payload keys: ${keys})`);
+      const li = rawNode?.lineItems ?? rawNode?.line_items;
+      const liHint = li == null ? "missing" : Array.isArray(li) ? `array:${li.length}` : `keys:${Object.keys(li).join(",")}`;
+      log("validate_items", false, `Order has no line items (payload keys: ${keys}; lineItems ${liHint})`);
       return finish(false, "No line items");
     }
     const missingSku = shopifyLines.filter((li) => !String(li.sku || "").trim());

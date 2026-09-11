@@ -135,38 +135,85 @@ function pullLineNodes(order: any): any[] {
   return [];
 }
 
-async function queryAdminOrderLines(api: any, gid: string): Promise<any[]> {
-  const queries = [
-    `query OrderLinesEdges($id: ID!) {
-      order(id: $id) {
-        id
-        name
-        lineItems(first: 50) {
-          edges { node { id title quantity variant { id } } }
+function unwrapGraphqlOrder(json: any): any {
+  return json?.data?.order || json?.data?.node || json?.order || json?.node || null;
+}
+
+function graphqlErrorText(json: any): string {
+  const errs = json?.errors || json?.data?.errors;
+  if (!Array.isArray(errs) || !errs.length) return "";
+  return errs.map((e: any) => e?.message || String(e)).join("; ");
+}
+
+async function adminGraphql(api: any, query: string, variables: Record<string, unknown>): Promise<any> {
+  try {
+    const res = await fetch("shopify:admin/api/graphql.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query, variables }),
+    });
+    const json = await res.json().catch(() => null);
+    if (json) return json;
+  } catch (e) {
+    console.error("[FreightStatusBlock] shopify:admin graphql failed", e);
+  }
+  try {
+    return await api.query(query, { variables });
+  } catch (e) {
+    console.error("[FreightStatusBlock] api.query failed", e);
+    return { errors: [{ message: String(e) }] };
+  }
+}
+
+const ORDER_QUERY = `#graphql
+  query FreightSyncOrder($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      email
+      createdAt
+      lineItems(first: 50) {
+        nodes {
+          id
+          title
+          sku
+          quantity
+          variant { id sku }
         }
       }
-    }`,
-    `query OrderLinesNodes($id: ID!) {
-      order(id: $id) {
-        id
-        name
-        lineItems(first: 50) {
-          nodes { id title quantity variant { id } }
-        }
-      }
-    }`,
-  ];
-  for (const query of queries) {
-    try {
-      const res = await api.query(query, { variables: { id: gid } });
-      const order = res?.data?.order || res?.order;
-      const nodes = pullLineNodes(order);
-      if (nodes.length) return nodes;
-    } catch (e) {
-      console.error("[FreightStatusBlock] order lines query failed", e);
     }
   }
-  return [];
+`;
+
+const ORDER_QUERY_MIN = `#graphql
+  query FreightSyncOrderMin($id: ID!) {
+    order(id: $id) {
+      id
+      name
+      lineItems(first: 50) {
+        nodes { id title quantity sku }
+      }
+    }
+  }
+`;
+
+async function fetchAdminOrder(api: any, gid: string): Promise<{ order: any; error: string }> {
+  let lastError = "";
+  for (const query of [ORDER_QUERY, ORDER_QUERY_MIN]) {
+    const json = await adminGraphql(api, query, { id: gid });
+    lastError = graphqlErrorText(json) || lastError;
+    const order = unwrapGraphqlOrder(json);
+    if (order?.id && pullLineNodes(order).length) return { order, error: lastError };
+    if (order?.id && !pullLineNodes(order).length) {
+      lastError = lastError || "Shopify returned the order but lineItems was empty";
+    }
+  }
+  return { order: null, error: lastError || "Admin GraphQL did not return this order" };
+}
+
+async function queryAdminOrderLines(api: any, gid: string): Promise<any[]> {
+  const { order } = await fetchAdminOrder(api, gid);
+  return pullLineNodes(order);
 }
 
 function FreightStatusBlock() {
@@ -289,62 +336,28 @@ function FreightStatusBlock() {
         /* relative fetch may still attach a session token */
       }
       const gid = `gid://shopify/Order/${numericOrderId}`;
-      let shopifyOrder: any = null;
-      const queries = [
-        `query SyncOrder($id: ID!) {
-          order(id: $id) {
-            id
-            name
-            email
-            phone
-            createdAt
-            displayFinancialStatus
-            shippingAddress { firstName lastName company address1 city province zip country phone }
-            lineItems(first: 50) {
-              edges { node { id title quantity variant { id } } }
-            }
-          }
-        }`,
-        `query SyncOrderNode($id: ID!) {
-          node(id: $id) {
-            ... on Order {
-              id
-              name
-              email
-              createdAt
-              lineItems(first: 50) {
-                edges { node { id title quantity variant { id } } }
-              }
-            }
-          }
-        }`,
-      ];
-      for (const query of queries) {
-        try {
-          const orderRes = await (api as any).query(query, { variables: { id: gid } });
-          shopifyOrder = orderRes?.data?.node || orderRes?.data?.order || orderRes?.node || orderRes?.order;
-          if (shopifyOrder?.id) break;
-        } catch (e) {
-          console.error("[FreightStatusBlock] order query failed", e);
-        }
-      }
-      if (!shopifyOrder?.id) {
-        shopifyOrder = { id: gid, name: "", lineItems: { nodes: [] } };
-      }
+      const fetched = await fetchAdminOrder(api, gid);
+      let shopifyOrder = fetched.order;
       let lineNodes = pullLineNodes(shopifyOrder);
       if (!lineNodes.length && adminLineNodes.length) lineNodes = adminLineNodes;
-      if (!lineNodes.length) lineNodes = await queryAdminOrderLines(api, gid);
       if (!lineNodes.length && records.length) {
         lineNodes = records.map((r) => ({
           id: `gid://shopify/LineItem/${r.variantId}`,
           title: r.productTitle,
           quantity: 1,
+          sku: "",
           variant: { id: `gid://shopify/ProductVariant/${r.variantId}` },
         }));
       }
+      if (!lineNodes.length) {
+        setSyncOk(false);
+        setSyncMsg(fetched.error || "Shopify Admin GraphQL returned no line items for this order");
+        return;
+      }
       shopifyOrder = {
-        ...shopifyOrder,
-        id: shopifyOrder.id || gid,
+        ...(shopifyOrder || {}),
+        id: shopifyOrder?.id || gid,
+        name: shopifyOrder?.name || "",
         lineItems: { nodes: lineNodes },
       };
 
@@ -355,6 +368,7 @@ function FreightStatusBlock() {
           shop: shopDomain,
           order: numericOrderId,
           shopifyOrder,
+          lineItems: lineNodes,
           performedBy: "Shopify Admin",
         }),
       });
