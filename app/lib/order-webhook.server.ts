@@ -2,7 +2,7 @@
 import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
-import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula } from "./freight";
+import { isFreightShippingCode, parseFreightCode, buildFreightLineItemAmounts, freightFormula } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
@@ -515,6 +515,18 @@ export async function writeFreightMetafield(
     );
     if (!breakdown) return;
 
+    // Additive: attach per-line quantity, unit price, product amount and
+    // individual total (product + freight) to each freight line item in the
+    // metafield. Freight is used as-is from the code breakdown — never
+    // recalculated. Existing keys (variantId, company, boxes, amount, ...) stay.
+    const freightAmountsByVariant = new Map(
+      buildFreightLineItemAmounts(freightLine?.code, order.line_items).map((f) => [f.variantId, f]),
+    );
+    breakdown.lineItems = breakdown.lineItems.map((item) => {
+      const enriched = freightAmountsByVariant.get(String(item.variantId));
+      return { ...item, ...(enriched ?? {}) };
+    });
+
     const response = await admin.graphql(
       `#graphql
       mutation SetFreightMetafield($metafields: [MetafieldsSetInput!]!) {
@@ -594,6 +606,23 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
   }));
 
+  // Per-line freight amounts (from the shipping-code breakdown, mapped by
+  // variantId). Individual order line data, additive to lineItemsJson.
+  const freightLineAmounts = buildFreightLineItemAmounts(freightLine?.code, order.line_items);
+  const lineItemAmountByVariant = new Map(
+    freightLineAmounts.map((f) => [f.variantId, f]),
+  );
+  const lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
+    const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
+    return {
+      ...li,
+      unitPrice: freight?.unitPrice ?? 0,
+      productAmount: freight?.productAmount ?? 0,
+      freightAmount: freight?.freightAmount ?? 0,
+      individualTotal: freight?.individualTotal ?? 0,
+    };
+  });
+
   try {
     await prisma.orderSnapshot.upsert({
       where: { shop_orderId: { shop, orderId } },
@@ -618,7 +647,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
         shippingTitle,
         shippingCode: freightCode,
         totalFreight: Number(freightLine?.price ?? 0),
-        lineItemsJson: JSON.stringify(lineItemsForJson),
+        lineItemsJson: JSON.stringify(lineItemsForJsonEnriched),
       },
       create: {
         shop,
@@ -643,7 +672,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
         shippingTitle,
         shippingCode: freightCode,
         totalFreight: Number(freightLine?.price ?? 0),
-        lineItemsJson: JSON.stringify(lineItemsForJson),
+        lineItemsJson: JSON.stringify(lineItemsForJsonEnriched),
       },
     });
     console.log(`[OrderSnapshot][${orderId}] Saved for shop ${shop}`);
