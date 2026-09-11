@@ -4,9 +4,9 @@
   "scripts": {
     "build": "bash -c 'if [ \"${VERCEL:-}\" = \"1\" ]; then bash .githooks/pre-commit --ci; fi' && prisma generate && prisma migrate deploy && react-router build",
     "security:scan": "bash .githooks/pre-commit --ci",
- "dev": " cloudflared tunnel run shopify & shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
+    "dev": " cloudflared tunnel run shopify & shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
     "tunnel": "cloudflared tunnel run shopify",
-  "shopify:dev": "shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
+    "shopify:dev": "shopify app dev --tunnel-url=https://dd-75.dynamicdreamz.net:3000",
     "config:link": "shopify app config link",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
@@ -21,6 +21,7 @@
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
     "typecheck": "react-router typegen && tsc --noEmit",
+    "test": "vitest run",
     "cron:order-webhook": "node scripts/order-webhook-cron.mjs",
     "cron:email": "node scripts/email-queue-cron.mjs",
     "oms:search-orders": "node scripts/search-shopify-orders.mjs",
@@ -80,7 +81,8 @@
     "graphql-config": "^5.1.1",
     "prettier": "^3.6.2",
     "typescript": "^5.9.3",
-    "vite": "^6.3.6"
+    "vite": "^6.3.6",
+    "vitest": "^5.0.0"
   },
   "workspaces": [
     "extensions/*"

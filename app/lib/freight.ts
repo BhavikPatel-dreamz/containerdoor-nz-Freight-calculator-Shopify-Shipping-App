@@ -223,6 +223,8 @@ export type FreightLineItem = {
   company: string;
   companyLabel: string;
   boxes: number;
+  /** Per-line freight amount from the shipping-line code (0 when absent in legacy codes). */
+  amount?: number;
 };
 
 export type FreightBreakdown = {
@@ -261,7 +263,7 @@ export function parseFreightCode(
 
   const items = lineItemsRaw.split("|").map((part) => {
     const [variantId, rest] = part.split(":");
-    const [company, boxesStr] = (rest ?? "").split("x");
+    const [company, boxesStr, amountStr] = (rest ?? "").split("x");
     return {
       variantId,
       title: titleByVariant.get(variantId),
@@ -269,10 +271,71 @@ export function parseFreightCode(
       company: company ?? "",
       companyLabel: companyLabels[company ?? ""] ?? company ?? "",
       boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
     };
   });
 
   return { carriers, packageCount, lineItems: items };
+}
+
+export type FreightLineItemWithAmounts = FreightLineItem & {
+  quantity: number;
+  unitPrice: number;
+  productAmount: number;
+  freightAmount: number;
+  individualTotal: number;
+};
+
+const roundMoney = (n: number) => Math.round(n * 100) / 100;
+
+type FreightLineItemSource = {
+  variant_id?: number;
+  title?: string;
+  sku?: string;
+  quantity?: number;
+  price?: string | number;
+  price_set?: { presentment_money?: { amount?: string; currency_code?: string } };
+};
+
+/**
+ * Merge the Shopify order line items with the parsed freight breakdown so every
+ * line item carries its own product amount + freight amount (individual total).
+ * Freight is NOT recalculated — it comes from the shipping-code breakdown and is
+ * mapped to each line via `variant_id`. Non-freight lines get freightAmount 0.
+ */
+export function buildFreightLineItemAmounts(
+  code: string | undefined,
+  lineItems?: FreightLineItemSource[],
+): FreightLineItemWithAmounts[] {
+  const breakdown = parseFreightCode(code, lineItems);
+  const freightByVariant = new Map<string, number>();
+  for (const item of breakdown?.lineItems ?? []) {
+    freightByVariant.set(String(item.variantId), Number(item.amount ?? 0));
+  }
+
+  return (lineItems ?? []).map((li) => {
+    const variantId = String(li.variant_id ?? "");
+    const quantity = Math.max(Number(li.quantity || 0), 0);
+    const unitPrice = Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0);
+    const productAmount = roundMoney(unitPrice * quantity);
+    const freightAmount = roundMoney(freightByVariant.get(variantId) ?? 0);
+    const base = breakdown?.lineItems.find((b) => String(b.variantId) === variantId);
+
+    return {
+      variantId,
+      title: li.title ?? base?.title ?? "",
+      sku: li.sku ?? base?.sku ?? "",
+      company: base?.company ?? "",
+      companyLabel: base?.companyLabel ?? "",
+      boxes: base?.boxes ?? 0,
+      amount: freightAmount,
+      quantity,
+      unitPrice: roundMoney(unitPrice),
+      productAmount,
+      freightAmount,
+      individualTotal: roundMoney(productAmount + freightAmount),
+    };
+  });
 }
 
 export function extractFreightProperties(
