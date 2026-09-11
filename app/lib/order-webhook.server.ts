@@ -956,9 +956,9 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
       }));
   }
   return (order.line_items ?? [])
-    .filter((li) => li.variant_id != null)
+    .filter((li) => li.variant_id != null || li.id != null)
     .map((li) => ({
-      variantId: String(li.variant_id),
+      variantId: String(li.variant_id ?? li.id ?? ""),
       title: li.title ?? "",
       sku: String(li.sku || ""),
       company: "",

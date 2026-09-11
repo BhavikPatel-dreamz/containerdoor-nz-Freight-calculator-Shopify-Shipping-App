@@ -122,8 +122,51 @@ const EMPTY_LINE: Omit<LineItemRecord, "variantId" | "productTitle"> = {
 
 export default reactExtension(TARGET, () => <FreightStatusBlock />);
 
-function stripGid(id: string, resource: "Order" | "ProductVariant"): string {
+function stripGid(id: string, resource: "Order" | "ProductVariant" | "LineItem"): string {
   return String(id || "").replace(`gid://shopify/${resource}/`, "").trim();
+}
+
+function pullLineNodes(order: any): any[] {
+  const li = order?.lineItems ?? order?.line_items;
+  if (!li) return [];
+  if (Array.isArray(li)) return li.filter(Boolean);
+  if (Array.isArray(li.nodes)) return li.nodes.filter(Boolean);
+  if (Array.isArray(li.edges)) return li.edges.map((e: any) => e?.node).filter(Boolean);
+  return [];
+}
+
+async function queryAdminOrderLines(api: any, gid: string): Promise<any[]> {
+  const queries = [
+    `query OrderLinesEdges($id: ID!) {
+      order(id: $id) {
+        id
+        name
+        lineItems(first: 50) {
+          edges { node { id title quantity variant { id } } }
+        }
+      }
+    }`,
+    `query OrderLinesNodes($id: ID!) {
+      order(id: $id) {
+        id
+        name
+        lineItems(first: 50) {
+          nodes { id title quantity variant { id } }
+        }
+      }
+    }`,
+  ];
+  for (const query of queries) {
+    try {
+      const res = await api.query(query, { variables: { id: gid } });
+      const order = res?.data?.order || res?.order;
+      const nodes = pullLineNodes(order);
+      if (nodes.length) return nodes;
+    } catch (e) {
+      console.error("[FreightStatusBlock] order lines query failed", e);
+    }
+  }
+  return [];
 }
 
 function FreightStatusBlock() {
@@ -144,7 +187,7 @@ function FreightStatusBlock() {
   const [error, setError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [syncOk, setSyncOk] = useState<boolean | null>(null);
+  const [adminLineNodes, setAdminLineNodes] = useState<any[]>([]);
 
   useEffect(() => {
     if (!numericOrderId) {
@@ -192,37 +235,21 @@ function FreightStatusBlock() {
         // If OMS has no rows yet, seed editable cards from live Shopify line items
         // so Save can create OrderLineItemOperationalData rows.
         let lineItems = data.lineItems ?? [];
-        if (lineItems.length === 0) {
-          try {
-            const orderRes = await (api as any).query(
-              `query OrderLines($id: ID!) {
-                order(id: $id) {
-                  lineItems(first: 50) {
-                    nodes {
-                      title
-                      variant { id }
-                    }
-                  }
-                }
-              }`,
-              { variables: { id: `gid://shopify/Order/${numericOrderId}` } },
-            );
-            const nodes: Array<{ title?: string; variant?: { id?: string } }> =
-              orderRes?.data?.order?.lineItems?.nodes ?? [];
-            lineItems = nodes
-              .map((n) => {
-                const variantId = stripGid(n.variant?.id ?? "", "ProductVariant");
-                if (!variantId) return null;
-                return {
-                  variantId,
-                  productTitle: n.title ?? "",
-                  ...EMPTY_LINE,
-                } as LineItemRecord;
-              })
-              .filter(Boolean) as LineItemRecord[];
-          } catch (e) {
-            console.error("[FreightStatusBlock] order lines query failed", e);
-          }
+        const nodes = await queryAdminOrderLines(api, `gid://shopify/Order/${numericOrderId}`);
+        if (!cancelled && nodes.length) setAdminLineNodes(nodes);
+        if (lineItems.length === 0 && nodes.length) {
+          lineItems = nodes
+            .map((n: any) => {
+              const variantId =
+                stripGid(n.variant?.id ?? "", "ProductVariant") || stripGid(n.id ?? "", "LineItem");
+              if (!variantId) return null;
+              return {
+                variantId,
+                productTitle: n.title ?? "",
+                ...EMPTY_LINE,
+              } as LineItemRecord;
+            })
+            .filter(Boolean) as LineItemRecord[];
         }
 
         setRecords(lineItems);
@@ -264,37 +291,30 @@ function FreightStatusBlock() {
       const gid = `gid://shopify/Order/${numericOrderId}`;
       let shopifyOrder: any = null;
       const queries = [
+        `query SyncOrder($id: ID!) {
+          order(id: $id) {
+            id
+            name
+            email
+            phone
+            createdAt
+            displayFinancialStatus
+            shippingAddress { firstName lastName company address1 city province zip country phone }
+            lineItems(first: 50) {
+              edges { node { id title quantity variant { id } } }
+            }
+          }
+        }`,
         `query SyncOrderNode($id: ID!) {
           node(id: $id) {
             ... on Order {
               id
               name
               email
-              phone
               createdAt
-              displayFinancialStatus
               lineItems(first: 50) {
-                nodes {
-                  id
-                  sku
-                  title
-                  variantTitle
-                  quantity
-                  variant { id sku product { id } }
-                }
+                edges { node { id title quantity variant { id } } }
               }
-              shippingAddress { firstName lastName company address1 city province zip country phone }
-            }
-          }
-        }`,
-        `query SyncOrder($id: ID!) {
-          order(id: $id) {
-            id
-            name
-            email
-            createdAt
-            lineItems(first: 50) {
-              nodes { id sku title quantity variant { id sku } }
             }
           }
         }`,
@@ -311,29 +331,22 @@ function FreightStatusBlock() {
       if (!shopifyOrder?.id) {
         shopifyOrder = { id: gid, name: "", lineItems: { nodes: [] } };
       }
-      const hasLines = Boolean(shopifyOrder?.lineItems?.nodes?.length);
-      if (!hasLines) {
-        try {
-          const linesRes = await (api as any).query(
-            `query OrderLines($id: ID!) {
-              order(id: $id) {
-                id
-                name
-                lineItems(first: 50) {
-                  nodes { id title sku quantity variant { id sku } }
-                }
-              }
-            }`,
-            { variables: { id: gid } },
-          );
-          const extra = linesRes?.data?.order;
-          if (extra) {
-            shopifyOrder = { ...shopifyOrder, ...extra, id: extra.id || shopifyOrder.id };
-          }
-        } catch (e) {
-          console.error("[FreightStatusBlock] line items query failed", e);
-        }
+      let lineNodes = pullLineNodes(shopifyOrder);
+      if (!lineNodes.length && adminLineNodes.length) lineNodes = adminLineNodes;
+      if (!lineNodes.length) lineNodes = await queryAdminOrderLines(api, gid);
+      if (!lineNodes.length && records.length) {
+        lineNodes = records.map((r) => ({
+          id: `gid://shopify/LineItem/${r.variantId}`,
+          title: r.productTitle,
+          quantity: 1,
+          variant: { id: `gid://shopify/ProductVariant/${r.variantId}` },
+        }));
       }
+      shopifyOrder = {
+        ...shopifyOrder,
+        id: shopifyOrder.id || gid,
+        lineItems: { nodes: lineNodes },
+      };
 
       const res = await fetch(apiUrl(appUrl, "/api/migrate-shopify-orders"), {
         method: "POST",

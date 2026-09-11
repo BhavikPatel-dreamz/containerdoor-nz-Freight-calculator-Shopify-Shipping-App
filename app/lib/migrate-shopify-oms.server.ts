@@ -125,11 +125,23 @@ function gidNum(gid?: string | null): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+function extractConnectionNodes(value: any): any[] {
+  if (!value) return [];
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value.nodes)) return value.nodes;
+  if (Array.isArray(value.edges)) {
+    return value.edges.map((e: any) => e?.node).filter(Boolean);
+  }
+  return [];
+}
+
 export function mapShopifyOrderNode(node: any): OrderPayload {
   const presentment = node?.currentTotalPriceSet?.presentmentMoney ?? node?.totalPriceSet?.presentmentMoney;
   const ship = node?.shippingAddress ?? {};
   const bill = node?.billingAddress ?? {};
   const financial = String(node?.displayFinancialStatus || "").toLowerCase();
+  const lineNodes = extractConnectionNodes(node?.lineItems || node?.line_items);
+  const shippingNodes = extractConnectionNodes(node?.shippingLines || node?.shipping_lines);
   return {
     id: gidNum(node?.id),
     name: node?.name,
@@ -165,7 +177,7 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
       province: ship.province,
       zip: ship.zip,
       country: ship.country,
-      country_code: ship.countryCodeV2,
+      country_code: ship.countryCodeV2 || ship.countryCode,
       phone: ship.phone,
     },
     billing_address: {
@@ -178,7 +190,7 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
       province: bill.province,
       zip: bill.zip,
       country: bill.country,
-      country_code: bill.countryCodeV2,
+      country_code: bill.countryCodeV2 || bill.countryCode,
       phone: bill.phone,
     },
     customer: {
@@ -187,28 +199,32 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
       email: node?.email,
       phone: node?.phone || ship.phone,
     },
-    shipping_lines: (node?.shippingLines?.nodes ?? []).map((s: any) => ({
+    shipping_lines: shippingNodes.map((s: any) => ({
       title: s?.title,
       code: s?.code,
-      price: s?.originalPriceSet?.presentmentMoney?.amount,
+      price: s?.originalPriceSet?.presentmentMoney?.amount ?? s?.price,
     })),
-    line_items: (node?.lineItems?.nodes ?? []).map((li: any) => ({
-      id: gidNum(li?.id),
-      variant_id: gidNum(li?.variant?.id),
-      product_id: gidNum(li?.variant?.product?.id),
-      title: li?.title,
-      variant_title: li?.variantTitle,
-      sku: li?.sku || li?.variant?.sku,
-      vendor: li?.vendor,
-      quantity: li?.quantity,
-      price: li?.originalUnitPriceSet?.presentmentMoney?.amount,
-      price_set: {
-        presentment_money: {
-          amount: li?.originalUnitPriceSet?.presentmentMoney?.amount,
-          currency_code: li?.originalUnitPriceSet?.presentmentMoney?.currencyCode,
+    line_items: lineNodes.map((li: any) => {
+      const lineId = gidNum(li?.id);
+      const variantId = gidNum(li?.variant?.id) ?? gidNum(li?.variant_id) ?? lineId;
+      return {
+        id: lineId,
+        variant_id: variantId,
+        product_id: gidNum(li?.variant?.product?.id),
+        title: li?.title || li?.name,
+        variant_title: li?.variantTitle,
+        sku: li?.sku || li?.variant?.sku,
+        vendor: li?.vendor,
+        quantity: li?.quantity,
+        price: li?.originalUnitPriceSet?.presentmentMoney?.amount ?? li?.price,
+        price_set: {
+          presentment_money: {
+            amount: li?.originalUnitPriceSet?.presentmentMoney?.amount ?? li?.price,
+            currency_code: li?.originalUnitPriceSet?.presentmentMoney?.currencyCode,
+          },
         },
-      },
-    })),
+      };
+    }),
   } as OrderPayload;
 }
 
@@ -576,7 +592,8 @@ async function migrateOneShopifyOrder(args: {
 
     const shopifyLines = order.line_items ?? [];
     if (!shopifyLines.length) {
-      log("validate_items", false, "Order has no line items");
+      const keys = rawNode && typeof rawNode === "object" ? Object.keys(rawNode).join(",") : "none";
+      log("validate_items", false, `Order has no line items (payload keys: ${keys})`);
       return finish(false, "No line items");
     }
     const missingSku = shopifyLines.filter((li) => !String(li.sku || "").trim());
