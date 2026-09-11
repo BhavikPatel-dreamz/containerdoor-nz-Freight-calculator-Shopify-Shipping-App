@@ -34,17 +34,27 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
+  const body = (await request.clone().json().catch(() => ({}))) as {
+    shop?: string;
+    order?: string;
+    orderId?: string;
+    orders?: string[];
+    names?: string[];
+    performedBy?: string;
+    shopifyOrder?: any;
+    orderNode?: any;
+  };
+
   const cronOk = verifyCronSecret(request);
-  let shop = "";
-  let sentBy = "system";
+  let shop = String(body.shop || "").trim();
+  let sentBy = String(body.performedBy || "system");
   if (cronOk) {
-    const bodyPeek = (await request.clone().json().catch(() => ({}))) as { shop?: string };
-    shop = String(bodyPeek.shop || "").trim();
+    shop = String(body.shop || shop || "").trim();
   } else {
     try {
       const { session } = await authenticate.admin(request);
-      shop = session.shop;
-      sentBy = session.email || session.firstName || "Shopify Admin";
+      shop = shop || session.shop;
+      sentBy = body.performedBy || session.email || session.firstName || "Shopify Admin";
     } catch {
       const auth = request.headers.get("Authorization") || "";
       const m = auth.match(/^Bearer\s+(.+)$/i);
@@ -57,7 +67,7 @@ export async function action({ request }: ActionFunctionArgs) {
             .replace(/^https?:\/\//i, "")
             .replace(/\/+$/, "")
             .trim();
-          if (dest.includes(".")) shop = dest;
+          if (dest.includes(".")) shop = shop || dest;
         } catch {
           /* ignore */
         }
@@ -65,25 +75,14 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!shop) {
         return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
       }
-      sentBy = "Shopify Admin";
+      sentBy = body.performedBy || "Shopify Admin";
     }
   }
 
-  const body = (await request.json().catch(() => ({}))) as {
-    shop?: string;
-    order?: string;
-    orderId?: string;
-    orders?: string[];
-    names?: string[];
-    performedBy?: string;
-    shopifyOrder?: any;
-    orderNode?: any;
-  };
   shop = String(body.shop || shop || "").trim();
   if (!shop) {
     return Response.json({ ok: false, error: "Missing shop" }, { status: 400 });
   }
-  if (body.performedBy) sentBy = String(body.performedBy);
 
   const orders = [
     ...(body.orders ?? body.names ?? []),
@@ -96,12 +95,18 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ ok: false, error: "Missing orders[]" }, { status: 400 });
   }
 
+  const orderNode = unwrapOrderNode(body.shopifyOrder || body.orderNode);
   const result = await migrateShopifyOrdersToOms({
     shop,
     namesOrIds: orders,
     sentBy,
-    orderNode: body.shopifyOrder || body.orderNode,
+    orderNode,
   });
   const failed = result.results.filter((r) => !r.ok).length;
   return Response.json({ ok: failed === 0, ...result });
+}
+
+function unwrapOrderNode(raw: any): any {
+  if (!raw || typeof raw !== "object") return raw;
+  return raw.data?.order || raw.data?.node || raw.order || raw.node || raw;
 }

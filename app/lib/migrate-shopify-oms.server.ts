@@ -550,11 +550,20 @@ async function migrateOneShopifyOrder(args: {
 
   try {
     log("search", true, `Looking up Shopify order ${token}`);
-    const order = orderNode
-      ? mapShopifyOrderNode(orderNode)
-      : await fetchShopifyOrderById(admin, token);
+    const rawNode = orderNode?.data?.order || orderNode?.data?.node || orderNode?.order || orderNode;
+    let order = rawNode ? mapShopifyOrderNode(rawNode) : null;
+    const fallbackId = gidNum(token) ?? Number(String(token).replace(/\D/g, "")) || undefined;
+    if (order && !order.id && fallbackId) {
+      order.id = fallbackId;
+    }
     if (!order?.id) {
-      log("search", false, "Not found in Shopify");
+      order = await fetchShopifyOrderById(admin, token);
+    }
+    if (!order?.id && fallbackId && rawNode) {
+      order = { ...(order || {}), id: fallbackId, name: rawNode.name || `#${fallbackId}`, line_items: order?.line_items };
+    }
+    if (!order?.id) {
+      log("search", false, rawNode ? "Admin payload had no order id" : "Not found in Shopify (app token cannot read this order)");
       return finish(false, "Not found in Shopify");
     }
     if (orderNode) {

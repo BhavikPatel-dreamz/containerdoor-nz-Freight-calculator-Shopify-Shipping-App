@@ -262,53 +262,77 @@ function FreightStatusBlock() {
         /* relative fetch may still attach a session token */
       }
       const gid = `gid://shopify/Order/${numericOrderId}`;
-      const orderRes = await (api as any).query(
+      let shopifyOrder: any = null;
+      const queries = [
+        `query SyncOrderNode($id: ID!) {
+          node(id: $id) {
+            ... on Order {
+              id
+              name
+              email
+              phone
+              createdAt
+              displayFinancialStatus
+              lineItems(first: 50) {
+                nodes {
+                  id
+                  sku
+                  title
+                  variantTitle
+                  quantity
+                  variant { id sku product { id } }
+                }
+              }
+              shippingAddress { firstName lastName company address1 city province zip country phone }
+            }
+          }
+        }`,
         `query SyncOrder($id: ID!) {
           order(id: $id) {
             id
             name
             email
-            phone
             createdAt
-            displayFinancialStatus
-            taxesIncluded
-            customAttributes { key value }
-            shippingAddress {
-              firstName lastName company address1 address2 city province zip country phone
-            }
-            billingAddress {
-              firstName lastName company address1 address2 city province zip country phone
-            }
-            currentTotalPriceSet { presentmentMoney { amount currencyCode } }
-            totalPriceSet { presentmentMoney { amount currencyCode } }
-            totalDiscountsSet { presentmentMoney { amount } }
-            discountCodes
-            taxLines { rate }
-            shippingLines(first: 10) {
-              nodes { title code originalPriceSet { presentmentMoney { amount } } }
-            }
-            lineItems(first: 80) {
-              nodes {
-                id
-                sku
-                title
-                variantTitle
-                quantity
-                vendor
-                originalUnitPriceSet { presentmentMoney { amount currencyCode } }
-                variant { id sku product { id } }
-              }
+            lineItems(first: 50) {
+              nodes { id sku title quantity variant { id sku } }
             }
           }
         }`,
-        { variables: { id: gid } },
-      );
-      const shopifyOrder = orderRes?.data?.order;
+      ];
+      for (const query of queries) {
+        try {
+          const orderRes = await (api as any).query(query, { variables: { id: gid } });
+          shopifyOrder = orderRes?.data?.node || orderRes?.data?.order || orderRes?.node || orderRes?.order;
+          if (shopifyOrder?.id) break;
+        } catch (e) {
+          console.error("[FreightStatusBlock] order query failed", e);
+        }
+      }
       if (!shopifyOrder?.id) {
-        const gqlErr = orderRes?.errors?.[0]?.message || "Admin could not load this order";
-        setSyncOk(false);
-        setSyncMsg(gqlErr);
-        return;
+        shopifyOrder = { id: gid, name: "", lineItems: { nodes: [] } };
+      }
+      const hasLines = Boolean(shopifyOrder?.lineItems?.nodes?.length);
+      if (!hasLines) {
+        try {
+          const linesRes = await (api as any).query(
+            `query OrderLines($id: ID!) {
+              order(id: $id) {
+                id
+                name
+                lineItems(first: 50) {
+                  nodes { id title sku quantity variant { id sku } }
+                }
+              }
+            }`,
+            { variables: { id: gid } },
+          );
+          const extra = linesRes?.data?.order;
+          if (extra) {
+            shopifyOrder = { ...shopifyOrder, ...extra, id: extra.id || shopifyOrder.id };
+          }
+        } catch (e) {
+          console.error("[FreightStatusBlock] line items query failed", e);
+        }
       }
 
       const res = await fetch(apiUrl(appUrl, "/api/migrate-shopify-orders"), {
