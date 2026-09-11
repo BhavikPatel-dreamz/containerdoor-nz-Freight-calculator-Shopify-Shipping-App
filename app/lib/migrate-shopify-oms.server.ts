@@ -233,6 +233,17 @@ type AdminGraphql = {
   graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
 
+function nameMatchesSearch(orderName: string, term: string): boolean {
+  const n = String(term || "")
+    .trim()
+    .replace(/^#/, "")
+    .toLowerCase();
+  if (!n) return false;
+  const name = String(orderName || "").toLowerCase();
+  const stripped = name.replace(/^#/, "");
+  return stripped === n || name === `#${n}` || stripped.endsWith(n) || name.includes(n);
+}
+
 function buildShopifySearchQueries(raw: string): string[] {
   const q = String(raw || "").trim();
   if (!q) return [];
@@ -252,14 +263,13 @@ function buildShopifySearchQueries(raw: string): string[] {
   }
 
   if (isDigits) {
-    add(`name:${noHash} OR name:${withHash} OR number:${noHash}`);
-    add(`name:${noHash}`);
+    add(`name:"${withHash}"`);
+    add(`name:"${noHash}"`);
     add(`name:${withHash}`);
-    add(`number:${noHash}`);
+    add(`name:${noHash}`);
     return out;
   }
 
-  add(`name:${withHash} OR name:${noHash}`);
   add(`name:${withHash}`);
   add(`name:${noHash}`);
   if (q.includes("@")) add(`email:${q}`);
@@ -290,6 +300,7 @@ export async function searchShopifyOrders(
     for (const node of nodes) {
       const hit = toHit(node);
       if (!hit.id || seen.has(hit.id)) continue;
+      if (!nameMatchesSearch(hit.name, query)) continue;
       seen.add(hit.id);
       hits.push(hit);
     }
