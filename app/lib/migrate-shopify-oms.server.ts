@@ -93,7 +93,7 @@ const ORDER_FIELDS = `
       quantity
       vendor
       originalUnitPriceSet { presentmentMoney { amount currencyCode } }
-      variant { id product { id } }
+      variant { id sku product { id } }
     }
   }
 `;
@@ -198,7 +198,7 @@ function mapShopifyOrderNode(node: any): OrderPayload {
       product_id: gidNum(li?.variant?.product?.id),
       title: li?.title,
       variant_title: li?.variantTitle,
-      sku: li?.sku,
+      sku: li?.sku || li?.variant?.sku,
       vendor: li?.vendor,
       quantity: li?.quantity,
       price: li?.originalUnitPriceSet?.presentmentMoney?.amount,
@@ -590,7 +590,8 @@ async function migrateOneShopifyOrder(args: {
     log(
       "monday",
       (mondayStats.failed || 0) === 0,
-      `Monday linked=${mondayStats.linked} created=${mondayStats.created} skipped=${mondayStats.skipped} failed=${mondayStats.failed}`,
+      `Monday linked=${mondayStats.linked} created=${mondayStats.created} skipped=${mondayStats.skipped} failed=${mondayStats.failed}` +
+        (mondayStats.errors?.length ? ` — ${mondayStats.errors.join(" | ")}` : ""),
     );
 
     cin7Stats = await createCin7EntryForOrder(shop, order);

@@ -975,6 +975,7 @@ export type IntegrationSyncStats = {
   linked: number;
   skipped: number;
   failed: number;
+  errors?: string[];
 };
 
 function emptyStats(): IntegrationSyncStats {
@@ -1147,6 +1148,25 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         (x) => String(x.variant_id) === String(li.variantId),
       );
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
+
+      const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
+      if (existingMatch?.id) {
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: existingMatch.id,
+          salesOrderCode: existingMatch.code || "",
+          salesOrderRef: existingMatch.reference || reference,
+          mirrorToOrder: true,
+        });
+        linked++;
+        console.log(
+          `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing id=${existingMatch.id} ref=${existingMatch.reference || reference} sku=${sku || "(none)"}`,
+        );
+        continue;
+      }
+
       if (!sku) {
         console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
         await prisma.orderLineItemOperationalData.update({
@@ -1166,24 +1186,6 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           carrier: li.company || ops.carrier,
         },
       });
-
-      const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
-      if (existingMatch?.id) {
-        await saveCin7LineLink({
-          shop,
-          orderId,
-          variantId: li.variantId,
-          salesOrderId: existingMatch.id,
-          salesOrderCode: existingMatch.code || "",
-          salesOrderRef: existingMatch.reference || reference,
-          mirrorToOrder: true,
-        });
-        linked++;
-        console.log(
-          `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing id=${existingMatch.id} ref=${existingMatch.reference || reference} sku=${sku}`,
-        );
-        continue;
-      }
 
       try {
         const qty = Number(shopifyLine?.quantity ?? 1) || 1;
@@ -1474,6 +1476,7 @@ export async function createMondayEntriesForOrder(
     let linkedCount = 0;
     let skippedCount = 0;
     let failedCount = 0;
+    const errors: string[] = [];
 
     for (const [idx, li] of breakdownLines.entries()) {
       if (!li.variantId) {
@@ -1581,6 +1584,8 @@ export async function createMondayEntriesForOrder(
         }
       } catch (err) {
         failedCount++;
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`line ${letterSuffix}: ${msg}`);
         console.error(
           `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
           err,
@@ -1645,7 +1650,7 @@ export async function createMondayEntriesForOrder(
     console.log(
       `[Monday][Webhook][${orderId}] DONE - created=${createdCount}, linked=${linkedCount}, skipped=${skippedCount}, failed=${failedCount}`,
     );
-    return { created: createdCount, linked: linkedCount, skipped: skippedCount, failed: failedCount };
+    return { created: createdCount, linked: linkedCount, skipped: skippedCount, failed: failedCount, errors };
   } catch (error) {
     console.error(`[Monday][Webhook][${orderId}] FATAL`, error);
     return { created: 0, linked: 0, skipped: 0, failed: 1 };
