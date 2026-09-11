@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server";
-import { enqueueOrderWebhookJob, type OrderPayload } from "../lib/order-webhook.server";
+import { authenticate, unauthenticated } from "../shopify.server";
+import { enqueueOrderWebhookJob, writeFreightMetafield, type OrderPayload } from "../lib/order-webhook.server";
 import { isFreightShippingCode, parseFreightCode } from "../lib/freight";
 
 // TEMP DEBUG ONLY (remove after verification): forward the raw orders/create
@@ -75,6 +75,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const order = payload as OrderPayload;
 
   await postRawOrderToTestEndpoint(order);
+
+  // Persist the already-calculated per-line freight breakdown to the order
+  // metafield immediately (no wait for the queued worker). Same helper the
+  // worker calls; it skips the write when the metafield already exists, so the
+  // queued worker won't write it a second time. Never blocks/fails the webhook.
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+    await writeFreightMetafield(admin, order);
+  } catch (e) {
+    console.error(`[WebhookCreate] freight metafield write failed for order ${String(order.id ?? "")}:`, e);
+  }
 
   console.log(`Queued ${topic} webhook for ${shop} (webhookId=${webhookId})`);
 

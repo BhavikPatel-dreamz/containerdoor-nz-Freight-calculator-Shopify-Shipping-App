@@ -515,6 +515,26 @@ export async function writeFreightMetafield(
     );
     if (!breakdown) return;
 
+    // Dedup: the ORDERS_CREATE webhook now writes this synchronously and the
+    // queued worker also calls this helper — skip when the metafield already
+    // exists so we never write it twice.
+    if (order.id != null) {
+      const existingRes = await admin.graphql(
+        `#graphql
+        query FreightMetaExists($ownerId: ID!) {
+          order(id: $ownerId) {
+            metafield(namespace: "containerdoor_freight", key: "freight_data") { key }
+          }
+        }`,
+        { variables: { ownerId: `gid://shopify/Order/${order.id}` } },
+      );
+      const existingJson = await existingRes.json();
+      if (existingJson?.data?.order?.metafield) {
+        console.log(`[FreightMeta][${String(order.id)}] already present; skipping write`);
+        return;
+      }
+    }
+
     // Additive: attach per-line quantity, unit price, product amount and
     // individual total (product + freight) to each freight line item in the
     // metafield. Freight is used as-is from the code breakdown — never
