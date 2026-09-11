@@ -15,6 +15,14 @@ import {
   saveCin7LineLink,
   resolveCin7SalesOrderId,
 } from "./cin7-adapter.server";
+import {
+  attachLineItemGroups,
+  buildBundleCin7LineItems,
+  getBundleComponentVariantIds,
+  getBundleGroups,
+  isBundleOrder,
+  type LineItemGroupInfo,
+} from "./bundles.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -83,6 +91,13 @@ export type OrderPayload = {
     price?: string | number;
     price_set?: { presentment_money?: { amount?: string; currency_code?: string } };
     properties?: Array<{ name?: string; value?: string }>;
+    /**
+     * Shopify Bundle group link for this line item. Attached from GraphQL by
+     * bundles.server (attachLineItemGroups) — the REST webhook payload doesn't
+     * carry it. Non-null means this line is a bundle component; the group's
+     * productId/variantId is the bundle parent.
+     */
+    lineItemGroup?: LineItemGroupInfo | null;
   }>;
 };
 
@@ -621,25 +636,106 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     ? buildDepotCollectionTitle(freightLine?.title ?? "", selectedDepot)
     : (freightLine?.title ?? "");
 
-  const lineItemsForJson = (order.line_items ?? []).map((li) => ({
-    id: li.id,
-    variantId: (li as any).variant_id,
-    productId: li.product_id ?? null,
-    variantTitle: li.variant_title ?? "",
-    title: li.title,
-    quantity: li.quantity,
-    sku: li.sku,
-    vendor: li.vendor ?? "",
-    price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
-  }));
-
   // Per-line freight amounts (from the shipping-code breakdown, mapped by
   // variantId). Individual order line data, additive to lineItemsJson.
   const freightLineAmounts = buildFreightLineItemAmounts(freightLine?.code, order.line_items);
   const lineItemAmountByVariant = new Map(
     freightLineAmounts.map((f) => [f.variantId, f]),
   );
+
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+
+  // Shopify Bundle orders: components are collapsed into ONE customer-facing
+  // parent line (the bundle variant from the lineItemGroup). Components never
+  // become separate OMS lines; their freight is aggregated as-is from the
+  // shipping-line breakdown (no freight re-calculation).
+  const bundleGroups = getBundleGroups(order);
+  let lineItemsForJson: Array<Record<string, any>>;
+  if (bundleGroups.size) {
+    lineItemsForJson = [];
+    const usedGroupIds = new Set<string>();
+    for (const li of order.line_items ?? []) {
+      const g = li.lineItemGroup;
+      const gid = g?.id ? String(g.id).replace("gid://shopify/LineItemGroup/", "") : "";
+      if (gid && bundleGroups.has(gid)) {
+        if (usedGroupIds.has(gid)) continue;
+        usedGroupIds.add(gid);
+        const group = bundleGroups.get(gid)!;
+        let priceSum = 0;
+        let freightSum = 0;
+        let bundleCarrier = "";
+        const countedFreightVariants = new Set<string>();
+        for (const c of group.components) {
+          const found = (order.line_items ?? []).find(
+            (x) => String(x.id ?? "") === String(c.lineItemId),
+          );
+          // Price is per line item (each carries its own qty × unit price)…
+          const price = Number(found?.price_set?.presentment_money?.amount ?? found?.price ?? 0);
+          priceSum = round2(priceSum + price * c.quantity);
+          // …but the freight code has ONE part per variant, so sum each
+          // variant's freight once even when a variant spans multiple lines.
+          if (countedFreightVariants.has(c.variantId)) continue;
+          countedFreightVariants.add(c.variantId);
+          const f = lineItemAmountByVariant.get(c.variantId);
+          if (f) {
+            freightSum = round2(freightSum + Number(f.freightAmount ?? 0));
+            if (!bundleCarrier && f.company) bundleCarrier = f.company;
+          }
+        }
+        lineItemsForJson.push({
+          id: `bundle:${gid}`,
+          variantId: group.parentVariantId,
+          productId: group.parentProductId,
+          variantTitle: "",
+          title: group.parentTitle,
+          quantity: group.quantity,
+          sku: group.parentSku,
+          vendor: "",
+          price: String(priceSum),
+          unitPrice: round2(priceSum),
+          productAmount: round2(priceSum),
+          freightAmount: freightSum,
+          individualTotal: round2(priceSum + freightSum),
+          isBundleParent: true,
+          bundleGroupId: gid,
+          bundleCarrier,
+          componentCount: group.components.length,
+          componentVariantIds: group.components.map((c) => c.variantId),
+        });
+        continue;
+      }
+      // Normal (non-component) line — keep the existing shape.
+      lineItemsForJson.push({
+        id: li.id,
+        variantId: (li as any).variant_id,
+        productId: li.product_id ?? null,
+        variantTitle: li.variant_title ?? "",
+        title: li.title,
+        quantity: li.quantity,
+        sku: li.sku,
+        vendor: li.vendor ?? "",
+        price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
+      });
+    }
+  } else {
+    lineItemsForJson = (order.line_items ?? []).map((li) => ({
+      id: li.id,
+      variantId: (li as any).variant_id,
+      productId: li.product_id ?? null,
+      variantTitle: li.variant_title ?? "",
+      title: li.title,
+      quantity: li.quantity,
+      sku: li.sku,
+      vendor: li.vendor ?? "",
+      price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
+    }));
+  }
+
+  // Per-line freight amounts (from the shipping-code breakdown, mapped by
+  // variantId). Individual order line data, additive to lineItemsJson. Bundle
+  // parent lines were enriched inline above and keep their aggregated values.
   const lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
+    if (li.isBundleParent) return li;
     const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
     return {
       ...li,
@@ -740,6 +836,27 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
   let skipped = 0;
 
   const isDepotCollectionOrder = freightLine?.code?.startsWith("depot_delivery::") ?? false;
+  const componentVariantIds = getBundleComponentVariantIds(order);
+  const bundleGroups = getBundleGroups(order);
+
+  // Bundle support: delete stale, unlinked component ops rows from earlier
+  // pre-bundle runs so they don't show as orphaned OMS lines. Conservative —
+  // never delete a row that already has a real Monday or Cin7 link.
+  if (componentVariantIds.size) {
+    try {
+      await prisma.orderLineItemOperationalData.deleteMany({
+        where: {
+          shop,
+          orderId,
+          variantId: { in: [...componentVariantIds] },
+          mondayItemId: { in: ["", "pending"] },
+          cin7SalesOrderId: { in: ["", "pending"] },
+        },
+      });
+    } catch {
+      // best-effort cleanup
+    }
+  }
 
   for (const li of lineItems) {
     const variantId = li.variant_id != null ? String(li.variant_id) : null;
@@ -747,13 +864,13 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
       skipped++;
       continue;
     }
+    // Bundle component lines are inventory-only: never create an ops line for them.
+    if (componentVariantIds.has(variantId)) {
+      skipped++;
+      continue;
+    }
 
     const lineCarrier = carrierByVariant.get(variantId) ?? "";
-    // Previously hardcoded to Fliway only ("FLIWAYLINEHAUL"), which silently
-    // dropped the depot address for every other depot-eligible carrier
-    // (Mainfreight, TGE, Fliway Midsize). Use the same depot-carrier list the
-    // rest of the freight system already relies on so all carriers behave
-    // consistently.
     const isDepotCollectionLine =
       isDepotCollectionOrder && freightFormula.depotCollectionCompanies.includes(lineCarrier as any);
 
@@ -804,8 +921,117 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
     }
   }
 
+  // Bundle parents: exactly one ops row per bundle group (the bundle variant),
+  // plus the component rows in OrderBundleComponent (inventory-only, never ops).
+  for (const group of bundleGroups.values()) {
+    if (!group.parentVariantId) {
+      skipped++;
+      continue;
+    }
+    // Upsert OrderBundleComponent rows for this group's components.
+    const currentComponentLineItemIds: string[] = [];
+    for (const c of group.components) {
+      currentComponentLineItemIds.push(c.lineItemId);
+      try {
+        await prisma.orderBundleComponent.upsert({
+          where: { shop_orderId_lineItemId: { shop, orderId, lineItemId: c.lineItemId } },
+          create: {
+            shop,
+            orderId,
+            groupId: group.groupId,
+            parentVariantId: group.parentVariantId,
+            parentProductId: group.parentProductId,
+            parentTitle: group.parentTitle,
+            parentSku: group.parentSku,
+            variantId: c.variantId,
+            productId: c.productId,
+            productTitle: c.title,
+            variantTitle: c.variantTitle,
+            sku: c.sku,
+            quantity: c.quantity,
+            lineItemId: c.lineItemId,
+          },
+          update: {
+            sku: c.sku,
+            quantity: c.quantity,
+            productTitle: c.title,
+            variantTitle: c.variantTitle,
+            variantId: c.variantId,
+            productId: c.productId,
+          },
+        });
+      } catch {
+        skipped++;
+      }
+    }
+    // Remove any stale component rows for this group that are no longer in the payload.
+    try {
+      await prisma.orderBundleComponent.deleteMany({
+        where: {
+          shop,
+          orderId,
+          groupId: group.groupId,
+          lineItemId: { notIn: currentComponentLineItemIds.length ? currentComponentLineItemIds : ["__none__"] },
+        },
+      });
+    } catch {
+      // best-effort
+    }
+
+    // Ops row for the parent line.
+    let parentCarrier = "";
+    for (const c of group.components) {
+      const carrier = carrierByVariant.get(c.variantId) ?? "";
+      if (carrier) {
+        parentCarrier = carrier;
+        break;
+      }
+    }
+    const isDepotCollectionLine =
+      isDepotCollectionOrder && freightFormula.depotCollectionCompanies.includes(parentCarrier as any);
+    const depotFields =
+      selectedDepot && isDepotCollectionLine
+        ? {
+            depotAddress1: selectedDepot.address1 ?? "",
+            depotCity: selectedDepot.city ?? "",
+            depotZip: selectedDepot.zip ?? "",
+          }
+        : {};
+
+    try {
+      const existing = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: group.parentVariantId } },
+        select: { id: true, depotAddress1: true },
+      });
+      if (!existing) {
+        await prisma.orderLineItemOperationalData.create({
+          data: {
+            shop,
+            orderId,
+            variantId: group.parentVariantId,
+            productTitle: group.parentTitle,
+            carrier: parentCarrier,
+            paymentStatus: "",
+            ...depotFields,
+          },
+        });
+        created++;
+      } else if ((depotFields as any).depotAddress1 && !existing.depotAddress1) {
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: existing.id },
+          data: depotFields,
+        });
+        skipped++;
+      } else {
+        skipped++;
+      }
+    } catch {
+      skipped++;
+    }
+  }
+
   console.log(
-    `[OrderLineItems][Webhook][${orderId}] DONE - created=${created}, skipped=${skipped}, total=${lineItems.length}`,
+    `[OrderLineItems][Webhook][${orderId}] DONE - created=${created}, skipped=${skipped}, total=${lineItems.length}, bundleGroups=${bundleGroups.size}`,
   );
 }
 
@@ -932,6 +1158,10 @@ export async function ingestShopifyOrderIntoOms(
   order: OrderPayload,
   admin: { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
 ) {
+  // Attach Shopify Bundle lineItemGroups (from GraphQL) before anything reads
+  // the line items, so snapshot/index/ops/Monday/Cin7 all see the same bundle
+  // structure. No-op for non-bundle orders.
+  await attachLineItemGroups(admin, order);
   await saveOrderSnapshot(shop, order);
   await reindexOrderById(shop, String(order.id ?? ""));
   await createOrderLineItemRecords(shop, order);
@@ -958,8 +1188,59 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
       sku: li.sku,
     })),
   );
+  const bundleGroups = getBundleGroups(order);
+  const componentVariantIds = getBundleComponentVariantIds(order);
+
+  if (bundleGroups.size) {
+    // Bundle: collapse components into one parent line for Monday/Cin7.
+    // Components never become separate operational lines.
+    const lines: OperationalLine[] = [];
+    for (const group of bundleGroups.values()) {
+      let company = "";
+      let boxes = 0;
+      const countedVariants = new Set<string>();
+      for (const c of group.components) {
+        if (countedVariants.has(c.variantId)) continue;
+        countedVariants.add(c.variantId);
+        const part = breakdown?.lineItems.find(
+          (b) => String(b.variantId) === String(c.variantId),
+        );
+        if (part) {
+          if (part.company && !company) company = part.company;
+          boxes += Number(part.boxes) || 0;
+        }
+      }
+      lines.push({
+        variantId: group.parentVariantId,
+        title: group.parentTitle,
+        sku: group.parentSku,
+        company,
+        boxes,
+      });
+    }
+    // Append Shopify lines absent from the freight code (operational $0 BOGOS
+    // free gifts, etc.) so they still reach Cin7/Monday. Never append actual
+    // bundle components — those are inventory-only.
+    const freightVariantIds = new Set(lines.map((l) => l.variantId));
+    for (const li of order.line_items ?? []) {
+      if (li.variant_id == null) continue;
+      const vid = String(li.variant_id);
+      if (componentVariantIds.has(vid)) continue;
+      if (freightVariantIds.has(vid)) continue;
+      freightVariantIds.add(vid);
+      lines.push({
+        variantId: vid,
+        title: li.title ?? "",
+        sku: String(li.sku || ""),
+        company: "",
+        boxes: 0,
+      });
+    }
+    return lines;
+  }
+
   if (breakdown?.lineItems?.length) {
-    return breakdown.lineItems
+    const lines = breakdown.lineItems
       .filter((li) => li.variantId)
       .map((li) => ({
         variantId: String(li.variantId),
@@ -968,6 +1249,24 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         company: String(li.company || ""),
         boxes: Number(li.boxes) || 0,
       }));
+    // Append Shopify line items absent from the freight code (operational $0
+    // BOGOS free gifts, etc.) so Cin7/Monday still receive them. These lines
+    // carry no freight — no invented carrier or package data.
+    const freightVariantIds = new Set(lines.map((l) => l.variantId));
+    for (const li of order.line_items ?? []) {
+      if (li.variant_id == null) continue;
+      const vid = String(li.variant_id);
+      if (freightVariantIds.has(vid)) continue;
+      freightVariantIds.add(vid);
+      lines.push({
+        variantId: vid,
+        title: li.title ?? "",
+        sku: String(li.sku || ""),
+        company: "",
+        boxes: 0,
+      });
+    }
+    return lines;
   }
   return (order.line_items ?? [])
     .filter((li) => li.variant_id != null || li.id != null)
@@ -1113,6 +1412,24 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} for ${customerOrderNo}`,
     );
 
+    // Bundle parents: aggregate the group's component SKUs so the parent's
+    // single Sales Order contains every component line (the parent variant
+    // itself typically has no SKU). Keyed by the bundle variant id.
+    const bundleParentSymbols = new Set<string>();
+    const bundleParentLines = new Map<
+      string,
+      Array<{ code: string; name: string; qty: number; unitPrice: number }>
+    >();
+    if (isBundleOrder(order)) {
+      for (const group of getBundleGroups(order).values()) {
+        bundleParentSymbols.add(group.parentVariantId);
+        bundleParentLines.set(
+          group.parentVariantId,
+          buildBundleCin7LineItems(order, group.parentVariantId),
+        );
+      }
+    }
+
     for (const [idx, li] of breakdownLines.entries()) {
       if (!li.variantId) {
         skipped++;
@@ -1162,6 +1479,8 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       const shopifyLine = (order.line_items ?? []).find(
         (x) => String(x.variant_id) === String(li.variantId),
       );
+      const bundleLines = bundleParentLines.get(li.variantId);
+      const isBundleParent = Boolean(bundleLines && bundleLines.length > 0);
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
 
       const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
@@ -1203,10 +1522,13 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       });
 
       try {
-        const qty = Number(shopifyLine?.quantity ?? 1) || 1;
-        const unitPrice = Number(
-          shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
-        );
+        // Bundle parent: `qty=1` so the Sales Order total equals the parent
+        // line's aggregated component charges (lineItems each carry their own
+        // qty × unitPrice).
+        const qty = isBundleParent ? 1 : Number(shopifyLine?.quantity ?? 1) || 1;
+        const unitPrice = isBundleParent
+          ? Math.round(bundleLines!.reduce((s, x) => s + x.qty * x.unitPrice, 0) * 100) / 100
+          : Number(shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0);
         // Compute per-line freight: split checkout total (weighted by boxes)
         // and remove our GST margin so Cin7 applies tax consistently.
         // Derive this line's share of the order-level freight (pre-tax).
@@ -1253,14 +1575,21 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           // box counts are not available, split evenly across valid lines.
           freightTotal: freightFinal,
           freightDescription: freightLine?.title || li.company || "",
-          lineItems: [
-            {
-              code: sku,
-              name: li.title ?? shopifyLine?.title ?? "",
-              qty,
-              unitPrice,
-            },
-          ],
+          lineItems: isBundleParent
+            ? bundleLines!.map((x) => ({
+                code: x.code,
+                name: x.name,
+                qty: x.qty,
+                unitPrice: x.unitPrice,
+              }))
+            : [
+                {
+                  code: sku,
+                  name: li.title ?? shopifyLine?.title ?? "",
+                  qty,
+                  unitPrice,
+                },
+              ],
         });
 
         await saveCin7LineLink({

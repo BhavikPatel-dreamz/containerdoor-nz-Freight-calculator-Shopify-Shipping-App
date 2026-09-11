@@ -122,7 +122,18 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
   if (!lineItemsRaw) return snapshotsFromLineItemsJson(snap);
 
-  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string }> = [];
+  let parsedLineItems: Array<{
+    variantId?: number | string;
+    productId?: number | string | null;
+    variantTitle?: string;
+    title?: string;
+    sku?: string;
+    vendor?: string;
+    quantity?: number;
+    isBundleParent?: boolean;
+    bundleCarrier?: string;
+    componentVariantIds?: Array<number | string>;
+  }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
@@ -162,6 +173,79 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
       amount: Number(amountStr ?? 0),
     });
   });
+
+  // Shopify Bundle orders: the freight code parts are the bundle's COMPONENT
+  // variants, and lineItemsJson carries one isBundleParent entry per bundle.
+  // Collapse the component parts into a single snapshot row (the bundle) so
+  // the OMS shows ONE customer-facing line per bundle. Components never appear
+  // as separate OMS lines. box/amount are summed across the bundle (same as
+  // the checkout freight charge); company comes from the parent's bundleCarrier.
+  const parents = parsedLineItems.filter((li: any) => li.isBundleParent === true);
+  if (parents.length) {
+    const parentComponentVariantIds = new Map<string, string[]>();
+    for (const p of parents) {
+      parentComponentVariantIds.set(String(p.variantId ?? ""), (p.componentVariantIds ?? []).map(String));
+    }
+    const bundleComponentSet = new Set(
+      [...parentComponentVariantIds.values()].flatMap((v) => v),
+    );
+    const outCollapsed = out.filter((o) => !bundleComponentSet.has(o.variantId));
+    let nextIdx = 0;
+    for (const p of parents) {
+      const vid = String(p.variantId ?? "");
+      const compVids = parentComponentVariantIds.get(vid) ?? [];
+      if (!compVids.length) continue;
+      const compParts = out.filter((o) => compVids.includes(o.variantId));
+      const boxes = compParts.reduce((s, o) => s + (Number(o.boxes) || 0), 0);
+      const amount =
+        Math.round(compParts.reduce((s, o) => s + (Number(o.amount) || 0), 0) * 100) / 100;
+      outCollapsed.push({
+        idx: nextIdx,
+        letterSuffix: LETTERS[nextIdx % 26],
+        variantId: vid,
+        productTitle: p.title ?? "",
+        productId: p.productId != null ? String(p.productId) : "",
+        variantTitle: p.variantTitle ?? "",
+        sku: p.sku ?? "",
+        vendor: p.vendor ?? "",
+        company: String(p.bundleCarrier ?? ""),
+        boxes,
+        amount,
+      });
+      nextIdx++;
+    }
+    out.splice(0, out.length, ...outCollapsed);
+  }
+
+  // Include Shopify order line items that are NOT represented in the freight
+  // code (operational $0 BOGOS free gifts, etc.). These keep their Shopify
+  // identity but carry no freight — amount 0 and no invented carrier/company or
+  // package data. This does not change the freight code or charge, which stays
+  // exactly as calculated at checkout.
+  const freightVariantIds = new Set(out.map((o) => o.variantId));
+  let nextIdx = out.length;
+  for (const li of parsedLineItems) {
+    if (li.variantId == null) continue;
+    if ((li as any).isBundleParent === true) continue;
+    const vid = String(li.variantId);
+    if (freightVariantIds.has(vid)) continue;
+    freightVariantIds.add(vid);
+    out.push({
+      idx: nextIdx,
+      letterSuffix: LETTERS[nextIdx % 26],
+      variantId: vid,
+      productTitle: li.title ?? "",
+      productId: li.productId != null ? String(li.productId) : "",
+      variantTitle: li.variantTitle ?? "",
+      sku: li.sku ?? "",
+      vendor: li.vendor ?? "",
+      company: "",
+      boxes: 0,
+      amount: 0,
+    });
+    nextIdx++;
+  }
+
   return out;
 }
 
@@ -204,7 +288,11 @@ export function buildRowFromSnapshot(
   // — not the live ops.carrier override — so a later per-line edit/sync
   // (Monday, Cin7, manual) can never flip depot/standard status after the
   // fact. isDepot must stay exactly what it was at checkout.
-  const finalCarriersInOrder = new Set(itemSnaps.map((it) => it.company));
+  // Free-gift/operational lines have no carrier (company ""). They must not
+  // affect the depot-vs-standard determination made at checkout.
+  const finalCarriersInOrder = new Set(
+    itemSnaps.filter((it) => it.company).map((it) => it.company),
+  );
   const isDepotService =
     String(snap.shippingCode ?? "").startsWith("depot_delivery::") && finalCarriersInOrder.size <= 1;
 

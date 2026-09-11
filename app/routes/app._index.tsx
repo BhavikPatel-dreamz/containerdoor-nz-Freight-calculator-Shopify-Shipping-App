@@ -145,10 +145,11 @@ export async function loader({ request }: LoaderFunctionArgs) {
     WITH order_carrier_counts AS (
       -- Use the ORIGINAL carrier from the freight code (o."company") only —
       -- not the live/editable ops carrier — so isDepot never flips after
-      -- checkout due to a later per-line sync/edit.
+      -- checkout due to a later per-line sync/edit. Free-gift/operational
+      -- lines without a carrier (company '') are excluded.
       SELECT
         o."orderId",
-        COUNT(DISTINCT o."company") AS distinct_carrier_count
+        COUNT(DISTINCT NULLIF(o."company", '')) AS distinct_carrier_count
       FROM "OrderLineItemIndex" o
       WHERE o."shop" = ${shop}
       GROUP BY o."orderId"

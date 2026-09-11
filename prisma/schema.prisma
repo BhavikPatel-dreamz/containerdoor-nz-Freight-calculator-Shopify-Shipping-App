@@ -9,7 +9,11 @@ generator client {
 // enough when changing adapters.
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
+  // URL comes from prisma.config.ts: the CLI (migrate/deploy) uses DIRECT_URL
+  // (direct Neon host) because advisory locks don't work through the pooler.
+  // The app runtime uses DATABASE_URL (pooler) via the PrismaPg adapter in
+  // app/db.server.ts — schema-level URLs are CLI-only in Prisma 7.
   // Emulate relations in Prisma (no DB-level foreign keys). Chosen because the
   // order tables share legacy data that predates OrderSnapshot, so a hard FK
   // could reject existing orphan rows on deploy.
@@ -293,6 +297,34 @@ model OrderLineItemIndex {
   // Matches the list ORDER BY so paginated reads are an ordered index scan.
   @@index([shop, createdAt(sort: Desc), orderId(sort: Desc), letterSuffix])
   @@index([shop, createdAt])
+}
+
+// ─── Shopify Bundles ─────────────────────────────────────────────────────────
+// One row per component line of a Shopify bundle (identified via the order
+// line item's `lineItemGroup`). The parent bundle is stored as a normal
+// OrderLineItemIndex / OrderLineItemOperationalData row (parentVariantId);
+// components are inventory-only and must never become OMS/Monday/ops lines.
+model OrderBundleComponent {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  groupId         String   @default("")
+  parentVariantId String
+  parentProductId String   @default("")
+  parentTitle     String   @default("")
+  parentSku       String   @default("")
+  variantId       String
+  productId       String   @default("")
+  productTitle    String   @default("")
+  variantTitle    String   @default("")
+  sku             String   @default("")
+  quantity        Int      @default(0)
+  lineItemId      String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([shop, orderId, lineItemId])
+  @@index([shop, orderId])
 }
 
 enum ShopifyWebhookJobStatus {
