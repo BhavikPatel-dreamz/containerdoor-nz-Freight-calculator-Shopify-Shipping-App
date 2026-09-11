@@ -261,12 +261,63 @@ function FreightStatusBlock() {
       } catch {
         /* relative fetch may still attach a session token */
       }
+      const gid = `gid://shopify/Order/${numericOrderId}`;
+      const orderRes = await (api as any).query(
+        `query SyncOrder($id: ID!) {
+          order(id: $id) {
+            id
+            name
+            email
+            phone
+            createdAt
+            displayFinancialStatus
+            taxesIncluded
+            customAttributes { key value }
+            shippingAddress {
+              firstName lastName company address1 address2 city province zip country phone
+            }
+            billingAddress {
+              firstName lastName company address1 address2 city province zip country phone
+            }
+            currentTotalPriceSet { presentmentMoney { amount currencyCode } }
+            totalPriceSet { presentmentMoney { amount currencyCode } }
+            totalDiscountsSet { presentmentMoney { amount } }
+            discountCodes
+            taxLines { rate }
+            shippingLines(first: 10) {
+              nodes { title code originalPriceSet { presentmentMoney { amount } } }
+            }
+            lineItems(first: 80) {
+              nodes {
+                id
+                sku
+                title
+                variantTitle
+                quantity
+                vendor
+                originalUnitPriceSet { presentmentMoney { amount currencyCode } }
+                variant { id sku product { id } }
+              }
+            }
+          }
+        }`,
+        { variables: { id: gid } },
+      );
+      const shopifyOrder = orderRes?.data?.order;
+      if (!shopifyOrder?.id) {
+        const gqlErr = orderRes?.errors?.[0]?.message || "Admin could not load this order";
+        setSyncOk(false);
+        setSyncMsg(gqlErr);
+        return;
+      }
+
       const res = await fetch(apiUrl(appUrl, "/api/migrate-shopify-orders"), {
         method: "POST",
         headers,
         body: JSON.stringify({
           shop: shopDomain,
           order: numericOrderId,
+          shopifyOrder,
           performedBy: "Shopify Admin",
         }),
       });

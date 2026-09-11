@@ -76,6 +76,8 @@ export async function action({ request }: ActionFunctionArgs) {
     orders?: string[];
     names?: string[];
     performedBy?: string;
+    shopifyOrder?: any;
+    orderNode?: any;
   };
   shop = String(body.shop || shop || "").trim();
   if (!shop) {
@@ -94,7 +96,12 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ ok: false, error: "Missing orders[]" }, { status: 400 });
   }
 
-  const result = await migrateShopifyOrdersToOms({ shop, namesOrIds: orders, sentBy });
+  const result = await migrateShopifyOrdersToOms({
+    shop,
+    namesOrIds: orders,
+    sentBy,
+    orderNode: body.shopifyOrder || body.orderNode,
+  });
   const failed = result.results.filter((r) => !r.ok).length;
   return Response.json({ ok: failed === 0, ...result });
 }

@@ -125,7 +125,7 @@ function gidNum(gid?: string | null): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
-function mapShopifyOrderNode(node: any): OrderPayload {
+export function mapShopifyOrderNode(node: any): OrderPayload {
   const presentment = node?.currentTotalPriceSet?.presentmentMoney ?? node?.totalPriceSet?.presentmentMoney;
   const ship = node?.shippingAddress ?? {};
   const bill = node?.billingAddress ?? {};
@@ -470,6 +470,8 @@ export async function migrateShopifyOrdersToOms(input: {
   shop: string;
   namesOrIds: string[];
   sentBy?: string;
+  /** Admin UI already loaded this order (bypasses app-token Shopify GET). */
+  orderNode?: any;
 }): Promise<{ shop: string; results: MigrateOrderResult[] }> {
   const shop = input.shop;
   const sentBy = input.sentBy || "system";
@@ -479,7 +481,15 @@ export async function migrateShopifyOrdersToOms(input: {
   for (const raw of input.namesOrIds) {
     const token = String(raw || "").trim();
     if (!token) continue;
-    results.push(await migrateOneShopifyOrder({ shop, admin, token, sentBy }));
+    results.push(
+      await migrateOneShopifyOrder({
+        shop,
+        admin,
+        token,
+        sentBy,
+        orderNode: input.orderNode,
+      }),
+    );
   }
 
   return { shop, results };
@@ -490,8 +500,9 @@ async function migrateOneShopifyOrder(args: {
   admin: { graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
   token: string;
   sentBy: string;
+  orderNode?: any;
 }): Promise<MigrateOrderResult> {
-  const { shop, admin, token, sentBy } = args;
+  const { shop, admin, token, sentBy, orderNode } = args;
   const steps: MigrateLogStep[] = [];
   const log = (step: string, ok: boolean, message: string) => {
     steps.push({ at: new Date().toISOString(), step, ok, message });
@@ -539,14 +550,20 @@ async function migrateOneShopifyOrder(args: {
 
   try {
     log("search", true, `Looking up Shopify order ${token}`);
-    const order = await fetchShopifyOrderById(admin, token);
+    const order = orderNode
+      ? mapShopifyOrderNode(orderNode)
+      : await fetchShopifyOrderById(admin, token);
     if (!order?.id) {
       log("search", false, "Not found in Shopify");
       return finish(false, "Not found in Shopify");
     }
+    if (orderNode) {
+      log("search", true, `Loaded from Shopify Admin page (${order.name}, id ${order.id})`);
+    } else {
+      log("search", true, `Found ${order.name} (id ${order.id})`);
+    }
     orderId = String(order.id);
     orderName = String(order.name || "");
-    log("search", true, `Found ${orderName} (id ${orderId})`);
 
     const shopifyLines = order.line_items ?? [];
     if (!shopifyLines.length) {
