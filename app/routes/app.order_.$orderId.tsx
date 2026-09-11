@@ -66,7 +66,7 @@ export async function loader({ request, params }: LoaderFunctionArgs) {
   await backfillOrderDepotData(shop, shopifyOrderId);
   const { opsMap, orderCin7Map, orderPoMap, orderCin7IdMap } = await buildOpsMapsForOrder(prisma, shop, shopifyOrderId);
   const row = buildRowFromSnapshot(snap, opsMap, orderCin7Map, orderPoMap, orderCin7IdMap);
-  if (!row) throw new Response("Order has no freight shipping line", { status: 404 });
+  if (!row) throw new Response("Order has no line items", { status: 404 });
 
   // Attach OrderLineItemIndex.id on each line so client can fetch by single id.
   const indexRows = await prisma.orderLineItemIndex.findMany({

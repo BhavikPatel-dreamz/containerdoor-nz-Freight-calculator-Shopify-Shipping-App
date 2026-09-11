@@ -195,8 +195,6 @@ export function buildRowFromSnapshot(
    *  so the detail page renders the same clickable link as the list page. */
   orderCin7IdMap?: Map<string, string>,
 ) {
-  if (!snap.carriers || !snap.shippingCode) return null;
-
   const itemSnaps = buildLineItemSnapshots(snap);
   if (itemSnaps.length === 0) return null;
   const quantityByVariant = buildLineItemQuantityMap(snap);
@@ -295,7 +293,7 @@ export function buildRowFromSnapshot(
     totalFreight: Number(snap.totalFreight ?? 0),
     city: snap.shippingCity || null,
     postalCode: snap.shippingZip || null,
-    createdAt: snap.createdAt.toISOString(),
+    createdAt: snap.createdAt instanceof Date ? snap.createdAt.toISOString() : new Date(snap.createdAt).toISOString(),
     carriers: snap.carriers,
     packageCount: snap.packageCount,
     shippingTitle: snap.shippingTitle,
