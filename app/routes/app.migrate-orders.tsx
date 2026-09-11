@@ -7,6 +7,11 @@ import {
   migrateShopifyOrdersToOms,
   searchShopifyOrders,
 } from "../lib/migrate-shopify-oms.server";
+import {
+  findNextEligibleShopifyOrder,
+  processShopifyOrder,
+  summarizeSyncSystems,
+} from "../lib/process-shopify-order.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -20,6 +25,46 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = String(form.get("intent") || "search");
   const sentBy = session.shop;
   const mode = String(form.get("mode") || "full") === "dry_run" ? "dry_run" as const : "full" as const;
+
+  if (intent === "sync_one") {
+    const selected = String(form.get("orderId") || form.get("order") || "").trim();
+    let shopifyOrderId = selected;
+    let pickedName = "";
+    let skippedHint = "";
+    if (!shopifyOrderId) {
+      const next = await findNextEligibleShopifyOrder(admin, session.shop);
+      if ("error" in next) {
+        return {
+          intent: "sync_one" as const,
+          ok: false,
+          message: next.error,
+          skippedCompleted: next.skippedCompleted,
+          pagesScanned: next.pagesScanned,
+        };
+      }
+      shopifyOrderId = next.orderId;
+      pickedName = next.orderName;
+      skippedHint = `Skipped ${next.skippedCompleted} already complete (${next.pagesScanned} page(s)).`;
+    }
+    const one = await processShopifyOrder({
+      shop: session.shop,
+      admin,
+      shopifyOrderId,
+      sentBy,
+      mode,
+    });
+    const systems = summarizeSyncSystems(one);
+    return {
+      intent: "sync_one" as const,
+      ok: one.ok,
+      mode,
+      message: one.ok
+        ? `Synced ${one.orderName || pickedName || shopifyOrderId}${skippedHint ? ` ${skippedHint}` : ""}`
+        : `Failed ${one.orderName || pickedName || shopifyOrderId}${systems.failedStep ? ` at ${systems.failedStep}` : ""}`,
+      results: [one],
+      systems,
+    };
+  }
 
   if (intent === "search") {
     const q = String(form.get("q") || "").trim();
@@ -122,7 +167,32 @@ export default function MigrateOrdersPage() {
   }, [nav.state]);
 
   return (
-    <s-page heading="Migrate Shopify → OMS">
+    <s-page heading="Order Sync">
+      <style>{`
+        .settings-card { border: 1px solid #dfe4e8; border-radius: 10px; padding: 16px; background: #fff; }
+        .settings-field { display: grid; gap: 6px; font-size: 13px; color: #455a64; }
+        .settings-field input, .settings-field textarea {
+          border: 1px solid #bec5cc; border-radius: 8px; padding: 8px 10px; background: #fff; color: #1f2933;
+        }
+        .hit-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+        .hit { border: 1px solid #dfe4e8; border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
+        .hit strong { display: block; }
+        .hit small { color: #52606d; }
+        .log { font-family: ui-monospace, monospace; font-size: 12px; background: #f6f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; white-space: pre-wrap; }
+        .ok { color: #0f7b3a; }
+        .fail { color: #b42318; }
+        .pending { color: #9aa5b1; }
+        .report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+        .report-table th, .report-table td { border-bottom: 1px solid #eee; padding: 8px 6px; text-align: left; vertical-align: top; }
+        .dry-banner { background: #fff8e1; border: 1px solid #f0c36d; color: #7a4f01; border-radius: 8px; padding: 10px 12px; font-weight: 600; margin: 8px 0 0; }
+        .mode-row { display: flex; gap: 16px; font-size: 14px; color: #1f2933; margin-top: 8px; }
+        .confirm-mask { position: fixed; inset: 0; background: rgba(15,23,32,.45); display: grid; place-items: center; z-index: 40; }
+        .confirm-box { background: #fff; border-radius: 12px; padding: 20px 22px; max-width: 420px; width: calc(100% - 32px); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
+        .confirm-box h3 { margin: 0 0 8px; font-size: 16px; }
+        .confirm-box p { margin: 0 0 8px; color: #334e68; font-size: 14px; }
+        .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .sys-row { display: grid; gap: 4px; font-size: 15px; margin-top: 8px; }
+      `}</style>
       <style>{`
         .settings-card { border: 1px solid #dfe4e8; border-radius: 10px; padding: 16px; background: #fff; }
         .settings-field { display: grid; gap: 6px; font-size: 13px; color: #455a64; }
@@ -145,16 +215,31 @@ export default function MigrateOrdersPage() {
         .confirm-box h3 { margin: 0 0 8px; font-size: 16px; }
         .confirm-box p { margin: 0 0 8px; color: #334e68; font-size: 14px; }
         .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+        .sys-row { display: grid; gap: 4px; font-size: 15px; margin-top: 8px; }
       `}</style>
 
       {mode === "dry_run" ? (
         <div className="dry-banner">DRY RUN — No production changes will be made to OMS, Cin7, or Monday. Shopify load and Cin7/Monday lookups are read-only.</div>
       ) : null}
 
-      <s-section heading="1. Search and choose one order">
+      <s-section heading="Sync one order">
         <s-paragraph>
-          Search Shopify, pick the order, then migrate. If it is already in OMS we refresh it; if not we add it. Cin7 and Monday are linked when they already exist.
+          Processes exactly one order through Shopify → OMS → Cin7 → Monday. Sync Next scans oldest-first and skips orders that already completed.
         </s-paragraph>
+        <Form method="post">
+          <input type="hidden" name="intent" value="sync_one" />
+          <input type="hidden" name="mode" value={mode} />
+          <div className="settings-card" style={{ marginTop: 12 }}>
+            <div className="mode-row" style={{ marginBottom: 12 }}>
+              <label><input type="radio" name="modeUiNext" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
+              <label><input type="radio" name="modeUiNext" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
+            </div>
+            <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+              {busy ? "Syncing…" : "Sync Next Order"}
+            </button>
+          </div>
+        </Form>
+        <s-paragraph>Or search and sync a specific order:</s-paragraph>
         <Form method="post">
           <input type="hidden" name="intent" value="search" />
           <div className="settings-card" style={{ marginTop: 12 }}>
@@ -174,10 +259,9 @@ export default function MigrateOrdersPage() {
         ) : null}
 
         {hits?.length ? (
-          <Form method="post" onSubmit={onMigrateSubmit}>
-            <input type="hidden" name="intent" value="migrate" />
+          <Form method="post">
+            <input type="hidden" name="intent" value="sync_one" />
             <input type="hidden" name="mode" value={mode} />
-            <input type="hidden" name="confirmFullRun" value="" />
             <div className="mode-row">
               <label><input type="radio" name="modeUi" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
               <label><input type="radio" name="modeUi" checked={mode === "full"} onChange={() => setMode("full")} /> Full run</label>
@@ -198,7 +282,7 @@ export default function MigrateOrdersPage() {
             </ul>
             <div style={{ marginTop: 12 }}>
               <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
-                {busy ? "Migrating…" : "Migrate selected order"}
+                {busy ? "Syncing…" : "Sync Order"}
               </button>
             </div>
           </Form>
@@ -228,11 +312,39 @@ export default function MigrateOrdersPage() {
         </Form>
       </s-section>
 
-      {data?.message ? (
-        <s-section heading="This run">
+      {data?.message && data.intent !== "search" ? (
+        <s-section heading="Last order">
           <s-paragraph>{data.message}</s-paragraph>
           {data && "mode" in data && data.mode === "dry_run" ? (
             <div className="dry-banner">DRY RUN — No production changes were made to OMS, Cin7, or Monday.</div>
+          ) : null}
+          {data && "systems" in data && data.systems && results[0] ? (
+            <div className="settings-card" style={{ marginTop: 10 }}>
+              <strong>Order {results[0].orderName || results[0].input}</strong>
+              <div className="sys-row">
+                <div className={data.systems.shopify === "ok" ? "ok" : data.systems.shopify === "fail" ? "fail" : "pending"}>
+                  {data.systems.shopify === "ok" ? "✓" : data.systems.shopify === "fail" ? "✗" : "○"} Shopify
+                </div>
+                <div className={data.systems.oms === "ok" ? "ok" : data.systems.oms === "fail" ? "fail" : "pending"}>
+                  {data.systems.oms === "ok" ? "✓" : data.systems.oms === "fail" ? "✗" : "○"} OMS
+                </div>
+                <div className={data.systems.cin7 === "ok" ? "ok" : data.systems.cin7 === "fail" ? "fail" : "pending"}>
+                  {data.systems.cin7 === "ok" ? "✓" : data.systems.cin7 === "fail" ? "✗" : "○"} Cin7
+                </div>
+                <div className={data.systems.monday === "ok" ? "ok" : data.systems.monday === "fail" ? "fail" : "pending"}>
+                  {data.systems.monday === "ok" ? "✓" : data.systems.monday === "fail" ? "✗" : "○"} Monday
+                </div>
+              </div>
+              <div style={{ marginTop: 8 }}>
+                Status: <strong>{data.systems.statusLabel}</strong>
+              </div>
+              {data.systems.failedStep ? (
+                <div className="fail" style={{ marginTop: 6 }}>
+                  Failed step: {data.systems.failedStep}
+                  {data.systems.failedMessage ? ` — ${data.systems.failedMessage}` : ""}
+                </div>
+              ) : null}
+            </div>
           ) : null}
           {results?.map((r) => (
             <div key={r.input} className="settings-card" style={{ marginTop: 10 }}>

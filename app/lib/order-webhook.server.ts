@@ -324,11 +324,21 @@ async function processQueuedOrderWebhookJob(job: any) {
       // swallow logging errors
     }
 
-    // Persist snapshot + line-items + freight + Monday using the original
-    // webhook payload to avoid changing the webhook flow semantics.
-    await ingestShopifyOrderIntoOms(job.shop, order, admin);
-    await createMondayEntriesForOrder(job.shop, order);
-    await createCin7EntryForOrder(job.shop, order);
+    // Same single-order service as Sync Next / bulk (OMS → Cin7 → Monday).
+    const { processShopifyOrder } = await import("./process-shopify-order.server");
+    const processed = await processShopifyOrder({
+      shop: job.shop,
+      admin,
+      order,
+      shopifyOrderId: String(order.id || ""),
+      sentBy: "orders/create webhook",
+      mode: "full",
+      persistReport: false,
+    });
+    const omsFailed = processed.steps?.some((s) => s.step === "oms_sync" && !s.ok);
+    if (processed.critical || omsFailed) {
+      throw new Error(processed.error || "OMS ingest failed");
+    }
 
     const targets = [
       {

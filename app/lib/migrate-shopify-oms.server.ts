@@ -8,6 +8,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import { type OrderPayload } from "./order-webhook.server";
 import { runOrderPipeline } from "./migration-pipeline.server";
+import { isLinkedCin7Id } from "./cin7-adapter.server";
 import {
   bumpMigrationRunCounters,
   createMigrationRun,
@@ -57,6 +58,7 @@ export type MigrateOrderResult = {
   lines?: MigrateLineReport[];
   error?: string;
   mode?: "dry_run" | "full";
+  critical?: boolean;
 };
 
 const ORDER_FIELDS = `
@@ -96,6 +98,15 @@ const ORDER_FIELDS = `
       vendor
       originalUnitPriceSet { presentmentMoney { amount currencyCode } }
       variant { id sku product { id } }
+    }
+  }
+`;
+
+const ORDER_SCAN_QUERY = `#graphql
+  query ScanShopifyOrdersPage($first: Int!, $after: String, $query: String) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: false) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id name createdAt }
     }
   }
 `;
@@ -362,6 +373,165 @@ export async function searchShopifyOrders(
   };
 }
 
+async function whichOrdersAlreadySynced(shop: string, orderIds: string[]): Promise<Set<string>> {
+  const ids = orderIds.filter(Boolean);
+  const synced = new Set<string>();
+  if (!ids.length) return synced;
+  const reports = await prisma.orderMigrateReport.findMany({
+    where: { shop, orderId: { in: ids }, status: "success" },
+    select: { orderId: true },
+  }).catch(() => []);
+  for (const row of reports) synced.add(row.orderId);
+  const remaining = ids.filter((id) => !synced.has(id));
+  if (!remaining.length) return synced;
+  const ops = await prisma.orderLineItemOperationalData.findMany({
+    where: { shop, orderId: { in: remaining } },
+    select: { orderId: true, mondayItemId: true, cin7SalesOrderId: true },
+  });
+  const byOrder = new Map<string, typeof ops>();
+  for (const row of ops) {
+    const list = byOrder.get(row.orderId) || [];
+    list.push(row);
+    byOrder.set(row.orderId, list);
+  }
+  for (const [orderId, rows] of byOrder) {
+    if (!rows.length) continue;
+    const allLinked = rows.every((row) => {
+      const monday = String(row.mondayItemId || "").trim();
+      return isLinkedCin7Id(row.cin7SalesOrderId) && Boolean(monday && monday !== "pending");
+    });
+    if (allLinked) synced.add(orderId);
+  }
+  return synced;
+}
+
+export type FindNextEligibleResult =
+  | {
+      orderId: string;
+      orderName: string;
+      skippedCompleted: number;
+      pagesScanned: number;
+      scannedCount: number;
+    }
+  | {
+      error: string;
+      skippedCompleted: number;
+      pagesScanned: number;
+      scannedCount: number;
+    };
+
+const SCAN_PAGE_SIZE = 50;
+/** Cap one Sync Next request so we do not walk the whole store in one HTTP call. */
+const SCAN_MAX_PAGES = 20;
+
+/**
+ * Oldest-first Shopify scan with pagination. Skips orders already successfully
+ * synced (migrate report success, or every line has Cin7 + Monday ids).
+ * Does not re-select those completed orders. Persisted resume cursor is Task 5.
+ */
+export async function findNextEligibleShopifyOrder(
+  admin: AdminGraphql,
+  shop: string,
+): Promise<FindNextEligibleResult> {
+  let after: string | null = null;
+  let skippedCompleted = 0;
+  let scannedCount = 0;
+  let pagesScanned = 0;
+
+  for (let page = 0; page < SCAN_MAX_PAGES; page++) {
+    const res = await admin.graphql(ORDER_SCAN_QUERY, {
+      variables: { first: SCAN_PAGE_SIZE, after, query: "status:any" },
+    });
+    const json = await res.json();
+    if (json?.errors?.length) {
+      return {
+        error: json.errors.map((e: { message?: string }) => e?.message || String(e)).join("; "),
+        skippedCompleted,
+        pagesScanned,
+        scannedCount,
+      };
+    }
+    const conn = json?.data?.orders;
+    const nodes = conn?.nodes ?? [];
+    pagesScanned += 1;
+    if (!nodes.length) {
+      break;
+    }
+    const pageIds = nodes.map((node: { id?: string }) => String(gidNum(node?.id) || "")).filter(Boolean);
+    const synced = await whichOrdersAlreadySynced(shop, pageIds);
+    for (const node of nodes) {
+      const orderId = String(gidNum(node?.id) || "");
+      if (!orderId) continue;
+      scannedCount += 1;
+      if (synced.has(orderId)) {
+        skippedCompleted += 1;
+        continue;
+      }
+      return {
+        orderId,
+        orderName: String(node?.name || orderId),
+        skippedCompleted,
+        pagesScanned,
+        scannedCount,
+      };
+    }
+    const pageInfo = conn?.pageInfo;
+    if (!pageInfo?.hasNextPage || !pageInfo?.endCursor) {
+      return {
+        error: scannedCount
+          ? `No unsynced Shopify orders in ${scannedCount} scanned (skipped ${skippedCompleted} already complete).`
+          : "No Shopify orders found.",
+        skippedCompleted,
+        pagesScanned,
+        scannedCount,
+      };
+    }
+    after = String(pageInfo.endCursor);
+  }
+
+  return {
+    error: `Reached scan limit (${SCAN_MAX_PAGES} pages / ${SCAN_PAGE_SIZE} each) after skipping ${skippedCompleted} completed order(s). Task 5 will persist cursor to continue.`,
+    skippedCompleted,
+    pagesScanned,
+    scannedCount,
+  };
+}
+
+export type SyncSystemMark = "ok" | "fail" | "pending";
+
+export function summarizeSyncSystems(result: MigrateOrderResult): {
+  shopify: SyncSystemMark;
+  oms: SyncSystemMark;
+  cin7: SyncSystemMark;
+  monday: SyncSystemMark;
+  statusLabel: string;
+  failedStep?: string;
+  failedMessage?: string;
+} {
+  const steps = result.steps || [];
+  const mark = (names: string[]): SyncSystemMark => {
+    const rows = steps.filter((s) => names.includes(s.step));
+    if (!rows.length) return "pending";
+    if (rows.some((s) => !s.ok)) return "fail";
+    return "ok";
+  };
+  const shopify = mark(["search", "shopify"]);
+  const oms = mark(["oms_sync", "oms_verify"]);
+  const cin7 = mark(["cin7_sync", "cin7_verify"]);
+  const monday = mark(["monday_sync", "monday_verify"]);
+  const failed = steps.find((s) => !s.ok);
+  const allOk = shopify === "ok" && oms === "ok" && cin7 === "ok" && monday === "ok";
+  return {
+    shopify: shopify === "pending" && result.orderId ? "ok" : shopify,
+    oms,
+    cin7,
+    monday,
+    statusLabel: allOk ? "Completed" : result.ok ? "Partial" : "Failed",
+    failedStep: failed?.step,
+    failedMessage: failed?.message || result.error,
+  };
+}
+
 async function fetchShopifyOrderById(
   admin: { graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
   orderId: string,
@@ -509,14 +679,16 @@ export async function migrateShopifyOrdersToOms(input: {
     const token = tokens[i];
     const track = orders[i];
     await markMigrationOrderRunning(track.id);
-    const one = await migrateOneShopifyOrder({
+    const one = await processShopifyOrder({
       shop,
       admin,
       token,
+      shopifyOrderId: token,
       sentBy,
       orderNode: input.orderNode,
       trackingOrderId: track.id,
       mode: input.mode || "full",
+      persistReport: (input.mode || "full") !== "dry_run",
     });
     results.push(one);
     const failed = one.ok === false || (one.monday?.failed || 0) > 0 || (one.cin7?.failed || 0) > 0;
@@ -539,16 +711,30 @@ export async function migrateShopifyOrdersToOms(input: {
   return { shop, runId: run.id, results };
 }
 
-async function migrateOneShopifyOrder(args: {
+/**
+ * ONE source of truth for processing a single Shopify order:
+ * load (or use payload) → OMS → Cin7 → Monday → status/logs.
+ * Sync Next, bulk, retry, and admin Sync must call this — not the adapters directly.
+ */
+export async function processShopifyOrder(args: {
   shop: string;
-  admin: { graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
-  token: string;
-  sentBy: string;
+  admin?: { graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> };
+  /** Shopify numeric id, GID, or order name used to fetch when `order` is omitted. */
+  shopifyOrderId?: string;
+  token?: string;
+  order?: OrderPayload;
   orderNode?: any;
   trackingOrderId?: string;
   mode?: "dry_run" | "full";
+  sentBy?: string;
+  persistReport?: boolean;
 }): Promise<MigrateOrderResult> {
-  const { shop, admin, token, sentBy, orderNode, mode } = args;
+  const token = String(args.token || args.shopifyOrderId || args.order?.id || "").trim();
+  const sentBy = args.sentBy || "system";
+  const mode = args.mode || "full";
+  const orderNode = args.orderNode;
+  const shop = args.shop;
+  const admin = args.admin || (await unauthenticated.admin(shop)).admin;
   const steps: MigrateLogStep[] = [];
   const log = (step: string, ok: boolean, message: string) => {
     steps.push({ at: new Date().toISOString(), step, ok, message });
@@ -565,7 +751,7 @@ async function migrateOneShopifyOrder(args: {
     const mondayAction = summarizeAction(mondayStats);
     const cin7Action = summarizeAction(cin7Stats);
     const status = !ok ? "failed" : mondayStats?.failed || cin7Stats?.failed ? "partial" : "success";
-    if (orderId && mode !== "dry_run") {
+    if (orderId && mode !== "dry_run" && args.persistReport !== false) {
       await persistReport({
         shop,
         orderId,
@@ -592,28 +778,36 @@ async function migrateOneShopifyOrder(args: {
       lines,
       error,
       mode: mode || "full",
+      critical: false,
     };
   };
 
+  let pipelineCritical = false;
+
   try {
-    log("search", true, `Looking up Shopify order ${token}`);
+    log("search", true, `Looking up Shopify order ${token || "(payload)"}`);
+    let order: OrderPayload | null = args.order?.id ? args.order : null;
     const rawNode = orderNode?.data?.order || orderNode?.data?.node || orderNode?.order || orderNode;
-    let order = rawNode ? mapShopifyOrderNode(rawNode) : null;
-      const fallbackId = gidNum(token) ?? (Number(String(token).replace(/\D/g, "")) || undefined);
+    if (!order?.id && rawNode) {
+      order = mapShopifyOrderNode(rawNode);
+    }
+    const fallbackId = gidNum(token) ?? (Number(String(token).replace(/\D/g, "")) || undefined);
     if (order && !order.id && fallbackId) {
       order.id = fallbackId;
     }
-    if (!order?.id) {
+    if (!order?.id && token) {
       order = await fetchShopifyOrderById(admin, token);
     }
     if (!order?.id && fallbackId && rawNode) {
       order = { ...(order || {}), id: fallbackId, name: rawNode.name || `#${fallbackId}`, line_items: order?.line_items };
     }
     if (!order?.id) {
-      log("search", false, rawNode ? "Admin payload had no order id" : "Not found in Shopify (app token cannot read this order)");
+      log("search", false, rawNode || args.order ? "Payload had no order id" : "Not found in Shopify (app token cannot read this order)");
       return finish(false, "Not found in Shopify");
     }
-    if (orderNode) {
+    if (args.order?.id) {
+      log("search", true, `Using provided payload (${order.name}, id ${order.id})`);
+    } else if (orderNode) {
       log("search", true, `Loaded from Shopify Admin page (${order.name}, id ${order.id})`);
     } else {
       log("search", true, `Found ${order.name} (id ${order.id})`);
@@ -626,6 +820,7 @@ async function migrateOneShopifyOrder(args: {
       mode: mode || "full",
       trackingOrderId: args.trackingOrderId,
     });
+    pipelineCritical = Boolean(pipeline.critical);
     for (const s of pipeline.steps) {
       log(s.step, s.ok, s.message);
     }
@@ -635,13 +830,15 @@ async function migrateOneShopifyOrder(args: {
     mondayStats = pipeline.monday;
     cin7Stats = pipeline.cin7;
     lines = pipeline.lines;
-    if (pipeline.status === "completed") {
+    if (pipeline.status === "completed" && args.persistReport !== false && mode !== "dry_run") {
       log("report", true, `Saved migrate report for ${orderName}`);
     }
-    return finish(pipeline.status !== "failed", pipeline.error);
+    const out = await finish(pipeline.status !== "failed", pipeline.error);
+    return { ...out, critical: pipelineCritical };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     log("error", false, error);
-    return finish(false, error);
+    const out = await finish(false, error);
+    return { ...out, critical: pipelineCritical };
   }
 }
