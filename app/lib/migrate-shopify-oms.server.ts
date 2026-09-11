@@ -100,8 +100,16 @@ const ORDER_FIELDS = `
 
 const SEARCH_QUERY = `#graphql
   query SearchShopifyOrders($query: String!) {
-    orders(first: 20, query: $query, sortKey: CREATED_AT, reverse: true) {
-      nodes { ${ORDER_FIELDS} }
+    orders(first: 25, query: $query, sortKey: CREATED_AT, reverse: true) {
+      nodes {
+        id
+        name
+        createdAt
+        email
+        displayFinancialStatus
+        shippingAddress { firstName lastName }
+        lineItems(first: 8) { nodes { sku title quantity } }
+      }
     }
   }
 `;
@@ -221,26 +229,64 @@ function toHit(node: any): ShopifyOrderHit {
   };
 }
 
-function shopifySearchQuery(raw: string): string {
+type AdminGraphql = {
+  graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response>;
+};
+
+function buildShopifySearchQueries(raw: string): string[] {
   const q = String(raw || "").trim();
-  if (!q) return "";
+  if (!q) return [];
   const numeric = q.replace(/^gid:\/\/shopify\/Order\//, "");
-  if (/^\d+$/.test(numeric)) return `id:${numeric}`;
-  if (q.startsWith("#") || /^cdl/i.test(q.replace(/^#/, ""))) {
-    const name = q.startsWith("#") ? q : `#${q}`;
-    return `name:${name}`;
-  }
-  return q;
+  const noHash = q.replace(/^#/, "");
+  const withHash = q.startsWith("#") ? q : `#${q}`;
+  const out: string[] = [];
+  const add = (value: string) => {
+    const withStatus = /\bstatus:/i.test(value) ? value : `${value} status:any`;
+    if (!out.includes(withStatus)) out.push(withStatus);
+  };
+  if (/^\d+$/.test(numeric) && !q.startsWith("#")) add(`id:${numeric}`);
+  add(q);
+  add(`name:${withHash}`);
+  add(`name:${noHash}`);
+  add(`name:"${withHash}"`);
+  if (q.includes("@")) add(`email:${q}`);
+  return out;
 }
 
-export async function searchShopifyOrders(shop: string, query: string): Promise<ShopifyOrderHit[]> {
-  const q = shopifySearchQuery(query);
-  if (!q) return [];
-  const { admin } = await unauthenticated.admin(shop);
-  const res = await admin.graphql(SEARCH_QUERY, { variables: { query: q } });
-  const json = await res.json();
-  const nodes = json?.data?.orders?.nodes ?? [];
-  return nodes.map(toHit).filter((h: ShopifyOrderHit) => h.id);
+export async function searchShopifyOrders(
+  admin: AdminGraphql,
+  query: string,
+): Promise<{ hits: ShopifyOrderHit[]; error?: string; tried: string[] }> {
+  const tried = buildShopifySearchQueries(query);
+  if (!tried.length) return { hits: [], error: "Empty search", tried };
+
+  const seen = new Set<string>();
+  const hits: ShopifyOrderHit[] = [];
+  let lastError = "";
+
+  for (const q of tried) {
+    const res = await admin.graphql(SEARCH_QUERY, { variables: { query: q } });
+    const json = await res.json();
+    if (json?.errors?.length) {
+      lastError = json.errors.map((e: any) => e?.message || String(e)).join("; ");
+      console.error("[Migrate] search GraphQL error", q, json.errors);
+      continue;
+    }
+    const nodes = json?.data?.orders?.nodes ?? [];
+    for (const node of nodes) {
+      const hit = toHit(node);
+      if (!hit.id || seen.has(hit.id)) continue;
+      seen.add(hit.id);
+      hits.push(hit);
+    }
+    if (hits.length) break;
+  }
+
+  return {
+    hits,
+    error: hits.length ? undefined : lastError || undefined,
+    tried,
+  };
 }
 
 async function fetchShopifyOrderById(

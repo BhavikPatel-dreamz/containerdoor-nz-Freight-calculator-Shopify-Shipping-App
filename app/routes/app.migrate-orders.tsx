@@ -14,7 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const form = await request.formData();
   const intent = String(form.get("intent") || "search");
   const sentBy = session.shop;
@@ -22,13 +22,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "search") {
     const q = String(form.get("q") || "").trim();
     if (!q) return { intent: "search" as const, ok: false, message: "Enter an order name, number, or email." };
-    const hits = await searchShopifyOrders(session.shop, q);
+    const { hits, error, tried } = await searchShopifyOrders(admin, q);
     return {
       intent: "search" as const,
-      ok: true,
+      ok: hits.length > 0,
       query: q,
       hits,
-      message: hits.length ? `Found ${hits.length} Shopify order(s). Choose one to migrate.` : "No Shopify orders matched.",
+      tried,
+      message: hits.length
+        ? `Found ${hits.length} Shopify order(s). Choose one to migrate.`
+        : error
+          ? `Search failed: ${error}`
+          : "No Shopify orders matched. Try the full name (e.g. #CDL215347) or the Shopify order id.",
     };
   }
 
@@ -96,12 +101,15 @@ export default function MigrateOrdersPage() {
               <input name="q" type="search" placeholder="#CDL215347" defaultValue={data && "query" in data ? data.query : ""} />
             </label>
             <div style={{ marginTop: 16 }}>
-              <s-button type="submit" {...(busy ? { loading: true } : {})}>
-                Search Shopify
-              </s-button>
+              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}>
+                {busy ? "Searching…" : "Search Shopify"}
+              </button>
             </div>
           </div>
         </Form>
+        {data?.intent === "search" && data.message ? (
+          <s-paragraph>{data.message}</s-paragraph>
+        ) : null}
 
         {hits?.length ? (
           <Form method="post">
@@ -121,9 +129,9 @@ export default function MigrateOrdersPage() {
               ))}
             </ul>
             <div style={{ marginTop: 12 }}>
-              <s-button type="submit" variant="primary" {...(busy ? { loading: true } : {})}>
-                Migrate selected order
-              </s-button>
+              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+                {busy ? "Migrating…" : "Migrate selected order"}
+              </button>
             </div>
           </Form>
         ) : null}
