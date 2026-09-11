@@ -262,34 +262,147 @@ export type Cin7OrderSnapshot = {
   lineItems: { code: string; qty: number }[];
 };
 
-export async function findCin7SalesOrderByReference(reference: string): Promise<{ id: string; code?: string } | null> {
-  const ref = String(reference ?? "").trim();
-  if (!ref || ref === "pending" || ref === "duplicate" || !CIN7_API_URL) return null;
+export type Cin7SalesOrderMatch = {
+  id: string;
+  code?: string;
+  reference?: string;
+  customerOrderNo?: string;
+  lineSkus: string[];
+};
 
+function parseCin7SalesOrderRows(json: any): any[] {
+  return Array.isArray(json)
+    ? json
+    : Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json?.items)
+        ? json.items
+        : json && typeof json === "object" && (json.id || json.Id)
+          ? [json]
+          : [];
+}
+
+function mapCin7SalesOrderRow(row: any): Cin7SalesOrderMatch | null {
+  const id = String(row?.id ?? row?.Id ?? "").trim();
+  if (!id) return null;
+  const lines = Array.isArray(row?.lineItems)
+    ? row.lineItems
+    : Array.isArray(row?.LineItems)
+      ? row.LineItems
+      : [];
+  const lineSkus = lines
+    .map((li: any) => String(li?.code ?? li?.Code ?? li?.sku ?? li?.SKU ?? "").trim())
+    .filter(Boolean);
+  return {
+    id,
+    code: String(row?.code ?? row?.Code ?? "").trim() || undefined,
+    reference: String(row?.reference ?? row?.Reference ?? "").trim() || undefined,
+    customerOrderNo: String(row?.customerOrderNo ?? row?.CustomerOrderNo ?? "").trim() || undefined,
+    lineSkus,
+  };
+}
+
+function cin7WhereEscape(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+async function queryCin7SalesOrders(where: string): Promise<Cin7SalesOrderMatch[]> {
+  if (!CIN7_API_URL) return [];
+  const base = getCin7UpdateUrl();
+  const url = `${base}?where=${encodeURIComponent(where)}&fields=${encodeURIComponent(
+    "id,code,reference,customerOrderNo,lineItems",
+  )}&rows=50`;
   try {
-    const url = getCin7UpdateUrl();
     const res = await fetch(url, {
       method: "GET",
       headers: { Authorization: getCin7AuthHeader() },
     });
     if (!res.ok) {
-      debug("Cin7", `GET SalesOrders list failed (${res.status}) for reference=${ref}`);
-      return null;
+      debug("Cin7", `GET SalesOrders where failed (${res.status}) where=${where}`);
+      return [];
     }
-
     const json: any = await res.json();
-    const rows = Array.isArray(json) ? json : Array.isArray(json?.data) ? json.data : Array.isArray(json?.items) ? json.items : [];
-    const matched = rows.find((row: any) => String(row?.reference ?? row?.Reference ?? "").trim() === ref);
-    if (!matched) return null;
-
-    return {
-      id: String(matched.id ?? matched.Id ?? ""),
-      code: String(matched.code ?? matched.Code ?? ""),
-    };
+    return parseCin7SalesOrderRows(json)
+      .map(mapCin7SalesOrderRow)
+      .filter((row): row is Cin7SalesOrderMatch => Boolean(row));
   } catch (error) {
-    debug("Cin7", "GET SalesOrders list by reference failed:", error);
-    return null;
+    debug("Cin7", "GET SalesOrders where failed:", error);
+    return [];
   }
+}
+
+export async function findCin7SalesOrderByReference(reference: string): Promise<{ id: string; code?: string } | null> {
+  const ref = String(reference ?? "").trim();
+  if (!ref || ref === "pending" || ref === "duplicate" || !CIN7_API_URL) return null;
+
+  const rows = await queryCin7SalesOrders(`reference='${cin7WhereEscape(ref)}'`);
+  const matched = rows.find((row) => String(row.reference || "").trim() === ref) ?? rows[0];
+  if (!matched?.id) return null;
+  return { id: matched.id, code: matched.code };
+}
+
+/** Order-number keys used on the old (non-Shopify) Cin7 platform. */
+export function cin7CustomerOrderNoCandidates(orderName?: string | null, orderId?: string | null): string[] {
+  const raw = String(orderName || "").trim();
+  const id = String(orderId || "").trim();
+  const withHash = raw ? (raw.startsWith("#") ? raw : `#${raw}`) : "";
+  const withoutHash = withHash.replace(/^#/, "");
+  const out = [withHash, withoutHash, raw, id].map((v) => v.trim()).filter(Boolean);
+  return [...new Set(out)];
+}
+
+export async function findCin7SalesOrdersForShopifyOrder(input: {
+  orderName?: string | null;
+  orderId?: string | null;
+  reference?: string | null;
+}): Promise<Cin7SalesOrderMatch[]> {
+  const seen = new Set<string>();
+  const out: Cin7SalesOrderMatch[] = [];
+  const add = (rows: Cin7SalesOrderMatch[]) => {
+    for (const row of rows) {
+      if (!row.id || seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(row);
+    }
+  };
+
+  const ref = String(input.reference || "").trim();
+  if (ref) add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(ref)}'`));
+
+  for (const key of cin7CustomerOrderNoCandidates(input.orderName, input.orderId)) {
+    add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(key)}'`));
+  }
+
+  return out;
+}
+
+export function pickCin7MatchForLine(
+  candidates: Cin7SalesOrderMatch[],
+  input: { reference?: string | null; sku?: string | null },
+): Cin7SalesOrderMatch | null {
+  if (!candidates.length) return null;
+  const reference = String(input.reference || "").trim();
+  const sku = String(input.sku || "").trim().toLowerCase();
+
+  if (reference) {
+    const byRef = candidates.find((c) => String(c.reference || "").trim() === reference);
+    if (byRef) return byRef;
+  }
+
+  if (sku) {
+    const bySku = candidates.filter((c) =>
+      c.lineSkus.some((code) => code.toLowerCase() === sku),
+    );
+    if (bySku.length === 1) return bySku[0];
+    if (bySku.length > 1 && reference) {
+      const named = bySku.find((c) => String(c.reference || "").includes(reference.replace(/^#/, "")));
+      if (named) return named;
+    }
+    if (bySku.length > 1) return bySku[0];
+  }
+
+  if (candidates.length === 1) return candidates[0];
+  return null;
 }
 
 export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7OrderSnapshot | null> {

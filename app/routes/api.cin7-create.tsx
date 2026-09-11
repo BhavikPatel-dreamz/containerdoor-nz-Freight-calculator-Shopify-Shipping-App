@@ -8,10 +8,13 @@ import {
   fetchCin7SalesOrderTotal,
   createCin7Payment,
   findCin7SalesOrderByReference,
+  findCin7SalesOrdersForShopifyOrder,
+  pickCin7MatchForLine,
 } from "../lib/cin7.server";
 import {
   buildCin7SalesOrderReference,
   buildCin7SalesOrderUrl,
+  saveCin7LineLink,
 } from "../lib/cin7-adapter.server";
 
 type RequestPayload = {
@@ -303,6 +306,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       orderId: orderIdStr,
       variantId: normalizedVariantId || undefined,
     });
+
+    const skuForMatch = String(
+      (normalizedVariantId
+        ? allOrderLineItems.find((li: any) => {
+            const currentId = String(li?.variant?.id ?? "");
+            return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+          })?.sku
+        : allOrderLineItems[0]?.sku) || "",
+    ).trim();
+    const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+      orderName: orderData.name,
+      orderId: orderIdStr,
+      reference: cin7Reference,
+    });
+    const linked = pickCin7MatchForLine(existingCin7, { reference: cin7Reference, sku: skuForMatch });
+    if (linked?.id && normalizedVariantId) {
+      await saveCin7LineLink({
+        shop,
+        orderId: orderIdStr,
+        variantId: normalizedVariantId,
+        salesOrderId: linked.id,
+        salesOrderCode: linked.code || "",
+        salesOrderRef: linked.reference || cin7Reference,
+        mirrorToOrder: true,
+      });
+      console.log(`[Cin7][API][${orderIdStr}] LINKED existing Cin7 id=${linked.id}`);
+      return Response.json({
+        ok: true,
+        cin7SalesOrderId: linked.id,
+        cin7SalesOrderUrl: buildCin7SalesOrderUrl(linked.id) ?? "",
+        linked: true,
+      });
+    }
 
     let result;
     try {
