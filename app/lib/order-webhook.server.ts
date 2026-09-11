@@ -949,7 +949,7 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
     })),
   );
   if (breakdown?.lineItems?.length) {
-    return breakdown.lineItems
+    const lines = breakdown.lineItems
       .filter((li) => li.variantId)
       .map((li) => ({
         variantId: String(li.variantId),
@@ -958,6 +958,24 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         company: String(li.company || ""),
         boxes: Number(li.boxes) || 0,
       }));
+    // Append Shopify line items absent from the freight code (operational $0
+    // BOGOS free gifts, etc.) so Cin7/Monday still receive them. These lines
+    // carry no freight — no invented carrier or package data.
+    const freightVariantIds = new Set(lines.map((l) => l.variantId));
+    for (const li of order.line_items ?? []) {
+      if (li.variant_id == null) continue;
+      const vid = String(li.variant_id);
+      if (freightVariantIds.has(vid)) continue;
+      freightVariantIds.add(vid);
+      lines.push({
+        variantId: vid,
+        title: li.title ?? "",
+        sku: String(li.sku || ""),
+        company: "",
+        boxes: 0,
+      });
+    }
+    return lines;
   }
   return (order.line_items ?? [])
     .filter((li) => li.variant_id != null)

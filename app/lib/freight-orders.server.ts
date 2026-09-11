@@ -125,6 +125,35 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
       amount: Number(amountStr ?? 0),
     });
   });
+
+  // Include Shopify order line items that are NOT represented in the freight
+  // code (operational $0 BOGOS free gifts, etc.). These keep their Shopify
+  // identity but carry no freight — amount 0 and no invented carrier/company or
+  // package data. This does not change the freight code or charge, which stays
+  // exactly as calculated at checkout.
+  const freightVariantIds = new Set(out.map((o) => o.variantId));
+  let nextIdx = out.length;
+  for (const li of parsedLineItems) {
+    if (li.variantId == null) continue;
+    const vid = String(li.variantId);
+    if (freightVariantIds.has(vid)) continue;
+    freightVariantIds.add(vid);
+    out.push({
+      idx: nextIdx,
+      letterSuffix: LETTERS[nextIdx % 26],
+      variantId: vid,
+      productTitle: li.title ?? "",
+      productId: li.productId != null ? String(li.productId) : "",
+      variantTitle: li.variantTitle ?? "",
+      sku: li.sku ?? "",
+      vendor: li.vendor ?? "",
+      company: "",
+      boxes: 0,
+      amount: 0,
+    });
+    nextIdx++;
+  }
+
   return out;
 }
 
@@ -169,7 +198,11 @@ export function buildRowFromSnapshot(
   // — not the live ops.carrier override — so a later per-line edit/sync
   // (Monday, Cin7, manual) can never flip depot/standard status after the
   // fact. isDepot must stay exactly what it was at checkout.
-  const finalCarriersInOrder = new Set(itemSnaps.map((it) => it.company));
+  // Free-gift/operational lines have no carrier (company ""). They must not
+  // affect the depot-vs-standard determination made at checkout.
+  const finalCarriersInOrder = new Set(
+    itemSnaps.filter((it) => it.company).map((it) => it.company),
+  );
   const isDepotService =
     String(snap.shippingCode ?? "").startsWith("depot_delivery::") && finalCarriersInOrder.size <= 1;
 
