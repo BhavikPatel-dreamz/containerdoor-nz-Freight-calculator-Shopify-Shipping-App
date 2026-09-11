@@ -482,6 +482,28 @@ model CommunicationLog {
   @@index([shop, activityType, sentAt])
 }
 
+/// One report per Shopify order for OMS/Cin7/Monday migration. Re-runs upsert the same row.
+model OrderMigrateReport {
+  id          String   @id @default(cuid())
+  shop        String
+  orderId     String
+  orderName   String   @default("")
+  status      String   @default("pending") // pending | success | partial | failed
+  omsAction   String   @default("") // existed | created | failed
+  mondayAction String  @default("")
+  cin7Action  String   @default("")
+  lastError   String   @default("")
+  runCount    Int      @default(1)
+  stepsJson   String   @default("[]") // JSON array of log steps
+  linesJson   String   @default("[]") // JSON array of per-line outcomes
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, orderId])
+  @@index([shop, updatedAt])
+  @@index([shop, orderName])
+}
+
 model BulkActionAudit {
   id            String                @id @default(cuid())
   shop          String
