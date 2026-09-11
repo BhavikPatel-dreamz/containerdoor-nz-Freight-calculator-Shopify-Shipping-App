@@ -872,6 +872,76 @@ export async function findExistingMondayItemId(
   return matched?.id ?? null;
 }
 
+export async function findMondayItemByName(itemName: string): Promise<string | null> {
+  const name = String(itemName || "").trim();
+  if (!name) return null;
+  const boardId = process.env.MONDAY_BOARD_ID;
+  if (!boardId) return null;
+
+  try {
+    const data = await mondayRequest(
+      `query ($boardId: [ID!], $term: CompareValue) {
+        boards(ids: $boardId) {
+          items_page(
+            limit: 25
+            query_params: {
+              rules: [{ column_id: "name", compare_value: $term, operator: contains_text }]
+            }
+          ) {
+            items { id name }
+          }
+        }
+      }`,
+      { boardId: [boardId], term: [name] },
+    );
+    const items = data?.boards?.[0]?.items_page?.items ?? [];
+    const exact = items.find((item: any) => String(item?.name || "").trim() === name);
+    if (exact?.id) return String(exact.id);
+    const starts = items.find((item: any) => String(item?.name || "").trim().startsWith(name));
+    if (starts?.id) return String(starts.id);
+  } catch (err) {
+    console.error("[Monday] findMondayItemByName failed", name, err);
+  }
+  return null;
+}
+
+export async function findMondayItemBySkuAndOrderName(input: {
+  sku?: string | null;
+  orderName?: string | null;
+}): Promise<string | null> {
+  const sku = String(input.sku || "").trim();
+  const orderName = String(input.orderName || "").trim();
+  if (!sku) return null;
+
+  try {
+    const colIds = await getOrCreateColumnIds();
+    if (!colIds.sku) return null;
+    const data = await mondayRequest(
+      `query ($boardId: ID!, $columnId: String!, $columnValue: String!) {
+        items_page_by_column_values(board_id: $boardId, columns: [{column_id: $columnId, column_values: [$columnValue]}]) {
+          items { id name }
+        }
+      }`,
+      {
+        boardId: process.env.MONDAY_BOARD_ID,
+        columnId: colIds.sku,
+        columnValue: sku,
+      },
+    );
+    const items = data?.items_page_by_column_values?.items ?? [];
+    if (!items.length) return null;
+    if (orderName) {
+      const needle = orderName.startsWith("#") ? orderName : `#${orderName}`;
+      const named = items.find((item: any) => String(item?.name || "").includes(needle.replace(/^#/, "")));
+      if (named?.id) return String(named.id);
+    }
+    if (items.length === 1 && items[0]?.id) return String(items[0].id);
+  } catch (err) {
+    console.error("[Monday] findMondayItemBySkuAndOrderName failed", input, err);
+  }
+  return null;
+}
+
 export async function createMondayItem(itemName: string, row: MondayRow) {
   const safeName =
     String(row.lineOrderName || itemName || "").trim() ||
