@@ -240,13 +240,17 @@ export async function attemptCreatePaymentsForOrder(shop: string, order: OrderPa
 
       if (paymentResult.ok) {
         console.log(`[Cin7Payment] Payment created for order ${orderId} variant ${ops.variantId} SO ${soId}`);
-        try {
-          await prisma.orderLineItemOperationalData.update({
-            where: { id: ops.id },
-            data: { paymentStatus: "paid" },
-          });
-        } catch (e) {
-          console.error(`[Cin7Payment] Failed to mark ops paid for order ${orderId} variant ${ops.variantId}`, e);
+        // Only set "paid" when paymentStatus is still empty — preserve any
+        // manually selected status (e.g. "partial", "pending") on the line.
+        if (!String(ops.paymentStatus || "").trim()) {
+          try {
+            await prisma.orderLineItemOperationalData.update({
+              where: { id: ops.id },
+              data: { paymentStatus: "paid" },
+            });
+          } catch (e) {
+            console.error(`[Cin7Payment] Failed to mark ops paid for order ${orderId} variant ${ops.variantId}`, e);
+          }
         }
       } else {
         console.error(`[Cin7Payment] Payment creation failed for order ${orderId} SO ${soId}:`, paymentResult.error);
@@ -1289,14 +1293,17 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             console.log(
               `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment OK id=${paymentResult.id} amount=${linePaidAmount}`,
             );
-            // Mark operational line as paid to avoid duplicate payments later
-            try {
-              await prisma.orderLineItemOperationalData.update({
-                where: { id: ops.id },
-                data: { paymentStatus: "paid" },
-              });
-            } catch (e) {
-              console.error(`[Cin7][Webhook][${orderId}] Failed to mark ops paid for variant ${li.variantId}`, e);
+            // Only set "paid" when paymentStatus is still empty — preserve any
+            // manually selected status on the line.
+            if (!String(ops.paymentStatus || "").trim()) {
+              try {
+                await prisma.orderLineItemOperationalData.update({
+                  where: { id: ops.id },
+                  data: { paymentStatus: "paid" },
+                });
+              } catch (e) {
+                console.error(`[Cin7][Webhook][${orderId}] Failed to mark ops paid for variant ${li.variantId}`, e);
+              }
             }
           }
         } else {

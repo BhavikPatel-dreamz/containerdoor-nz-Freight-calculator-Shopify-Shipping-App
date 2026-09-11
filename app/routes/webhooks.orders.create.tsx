@@ -9,10 +9,11 @@ const DEBUG_TEST_ENDPOINT = "https://webhook.site/edc3eb4a-e987-43f5-85a8-3ac962
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-// TEMP DEBUG ONLY: build a per-line verification object (product amount, freight
-// amount, total) from the EXISTING Shopify line items + encoded freight code.
-// No re-calculation of freight, no changes to any existing behavior/data.
-function buildDebugVerification(order: OrderPayload) {
+// TEMP DEBUG ONLY: return a shallow copy of the order with productAmount,
+// freightAmount and individualTotal added directly to each line_item. Uses the
+// EXISTING Shopify line-item price/quantity and existing freight breakdown — no
+// re-calculation of freight, no changes to any existing behavior/data.
+function buildEnrichedOrder(order: OrderPayload) {
   const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
   const breakdown = parseFreightCode(freightLine?.code, order.line_items);
 
@@ -21,44 +22,36 @@ function buildDebugVerification(order: OrderPayload) {
     freightByVariant.set(String(item.variantId), Number(item.amount ?? 0));
   }
 
-  const lineItems = (order.line_items ?? []).map((li) => {
+  const enrichedLineItems = (order.line_items ?? []).map((li) => {
     const variantId = String(li.variant_id ?? "");
     const quantity = Number(li.quantity ?? 0);
     const unitPrice = Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0);
     const productAmount = round2(unitPrice * quantity);
     const freightAmount = round2(freightByVariant.get(variantId) ?? 0);
     return {
-      sku: li.sku ?? "",
-      variantId,
-      quantity,
-      unitPrice: round2(unitPrice),
+      ...li,
       productAmount,
       freightAmount,
       individualTotal: round2(productAmount + freightAmount),
     };
   });
 
-  return {
-    orderId: String(order.id ?? ""),
-    orderName: order.name ?? "",
-    currency: order.currency ?? order.presentment_currency ?? "",
-    freightShippingCode: freightLine?.code ?? "",
-    lineItems,
-  };
+  return { ...order, line_items: enrichedLineItems };
 }
 
-// TEMP DEBUG ONLY: fire-and-forget POST of the exact payload Shopify sent plus a
-// per-line verification object. Bounded by an AbortController timeout; any
-// error/timeout/non-2xx is swallowed so the normal orders/create flow below can
-// never be blocked or broken.
+// TEMP DEBUG ONLY: fire-and-forget POST of the order payload with per-line
+// productAmount/freightAmount/individualTotal directly on each line_item.
+// Bounded by an AbortController timeout; any error/timeout/non-2xx is swallowed
+// so the normal orders/create flow below can never be blocked or broken.
 async function postRawOrderToTestEndpoint(order: OrderPayload): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 4000);
   try {
+    const enrichedOrder = buildEnrichedOrder(order);
     const res = await fetch(DEBUG_TEST_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ order, debug: buildDebugVerification(order) }),
+      body: JSON.stringify({ order: enrichedOrder }),
       signal: controller.signal,
     });
     const text = (await res.text().catch(() => "")).slice(0, 2000);
