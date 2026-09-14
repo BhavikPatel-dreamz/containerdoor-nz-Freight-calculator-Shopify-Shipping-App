@@ -18,7 +18,7 @@ import {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const reports = await listMigrateReports(session.shop, 200);
-  return { reports };
+  return { reports, shop: session.shop };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -182,7 +182,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function MigrateOrdersPage() {
-  const { reports } = useLoaderData<typeof loader>();
+  const { reports, shop } = useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
   const nav = useNavigation();
   const busy = nav.state !== "idle";
@@ -214,6 +214,33 @@ export default function MigrateOrdersPage() {
 
   const mark = (v: string) => (v === "ok" ? "✓" : v === "fail" ? "✗" : "○");
 
+  const postSyncStep = async (payload: Record<string, unknown>) => {
+    const shopify = (window as unknown as { shopify?: { idToken?: () => Promise<string> } }).shopify;
+    let token = "";
+    try {
+      if (shopify?.idToken) token = await shopify.idToken();
+    } catch {
+      /* form session cookie still sent */
+    }
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch("/api/order-sync-step", {
+      method: "POST",
+      headers,
+      credentials: "same-origin",
+      body: JSON.stringify({ shop, ...payload }),
+    });
+    const text = await res.text();
+    let json: any = {};
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`Sync step HTTP ${res.status}: ${text.slice(0, 180) || "empty response"}`);
+    }
+    if (res.status === 401) throw new Error(json.error || "Unauthorized — refresh the page and try again");
+    return json;
+  };
+
   const runSyncAll = async () => {
     setAllConfirm(false);
     stopAll.current = false;
@@ -232,23 +259,15 @@ export default function MigrateOrdersPage() {
       if (logs.length > 500) logs.length = 500;
     };
     try {
-      const countRes = await fetch("/api/order-sync-step", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        body: JSON.stringify({ countOnly: true }),
-      });
-      const countJson = await countRes.json().catch(() => ({}));
-      total = Number(countJson.total) || 0;
-      setAllProgress((p) => ({ ...p, total, message: "Starting from today, newest first…" }));
+      void postSyncStep({ countOnly: true })
+        .then((countJson) => {
+          const nextTotal = Number(countJson.total) || 0;
+          if (nextTotal) setAllProgress((p) => ({ ...p, total: nextTotal }));
+        })
+        .catch(() => undefined);
+      setAllProgress((p) => ({ ...p, message: "Starting from today, newest first…" }));
       while (!stopAll.current) {
-        const res = await fetch("/api/order-sync-step", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "same-origin",
-          body: JSON.stringify({ mode, newestFirst: true, after, skipIds }),
-        });
-        const json = await res.json().catch(() => ({}));
+        const json = await postSyncStep({ mode, newestFirst: true, after, skipIds });
         skipped += Number(json.skippedCompleted) || 0;
         if (json.after) after = json.after;
         if (json.done) {
@@ -301,6 +320,13 @@ export default function MigrateOrdersPage() {
             logs: logs.slice(0, 500),
             systems: json.systems || null,
           });
+          if (stopAll.current) continue;
+          pushLog("Waiting 30s before next order…");
+          setAllProgress((p) => ({ ...p, message: "Waiting 30s before next order…", logs: logs.slice(0, 500) }));
+          const waitUntil = Date.now() + 30_000;
+          while (Date.now() < waitUntil && !stopAll.current) {
+            await new Promise((resolve) => setTimeout(resolve, 1000));
+          }
           continue;
         }
         emptyStreak += 1;

@@ -1,10 +1,46 @@
 import type { ActionFunctionArgs } from "react-router";
-import { authenticate } from "../shopify.server";
+import { authenticate, unauthenticated } from "../shopify.server";
 import {
   countShopifyOrders,
   findNextEligibleShopifyOrder,
 } from "../lib/migrate-shopify-oms.server";
 import { processShopifyOrder, summarizeSyncSystems } from "../lib/process-shopify-order.server";
+
+export const maxDuration = 60;
+
+function shopFromBearerJwt(request: Request): string {
+  const auth = request.headers.get("Authorization") || "";
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (!m?.[1]) return "";
+  try {
+    const part = m[1].split(".")[1];
+    if (!part) return "";
+    const json = Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json) as { dest?: string };
+    const dest = String(payload.dest || "")
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/+$/, "")
+      .trim();
+    return dest.includes(".") ? dest : "";
+  } catch {
+    return "";
+  }
+}
+
+async function resolveAdmin(request: Request, explicitShop: string) {
+  let shop = String(explicitShop || "").trim();
+  try {
+    const auth = await authenticate.admin(request);
+    shop = shop || String(auth.session?.shop || "").trim();
+    if (auth.admin) return { shop, admin: auth.admin, sentBy: auth.session?.shop || shop };
+  } catch (e) {
+    console.warn("[order-sync-step] authenticate.admin failed, using offline session", e);
+  }
+  shop = shop || shopFromBearerJwt(request);
+  if (!shop) throw new Error("Unauthorized");
+  const { admin } = await unauthenticated.admin(shop);
+  return { shop, admin, sentBy: shop };
+}
 
 /**
  * Process exactly one eligible Shopify order (newest first by default).
@@ -15,8 +51,8 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
 
-  const { session, admin } = await authenticate.admin(request);
   const body = (await request.json().catch(() => ({}))) as {
+    shop?: string;
     mode?: "dry_run" | "full";
     after?: string | null;
     newestFirst?: boolean;
@@ -24,16 +60,24 @@ export async function action({ request }: ActionFunctionArgs) {
     countOnly?: boolean;
   };
 
+  let ctx: Awaited<ReturnType<typeof resolveAdmin>>;
+  try {
+    ctx = await resolveAdmin(request, String(body.shop || ""));
+  } catch {
+    return Response.json({ ok: false, error: "Unauthorized", done: true }, { status: 401 });
+  }
+  const { shop, admin, sentBy } = ctx;
+
   if (body.countOnly) {
     const total = await countShopifyOrders(admin);
-    return Response.json({ ok: true, total });
+    return Response.json({ ok: true, total, shop });
   }
 
   const mode = body.mode === "dry_run" ? "dry_run" : "full";
   const newestFirst = body.newestFirst !== false;
   const after = body.after ? String(body.after) : null;
 
-  const next = await findNextEligibleShopifyOrder(admin, session.shop, {
+  const next = await findNextEligibleShopifyOrder(admin, shop, {
     newestFirst,
     after,
     maxPages: 20,
@@ -55,10 +99,10 @@ export async function action({ request }: ActionFunctionArgs) {
   let one;
   try {
     one = await processShopifyOrder({
-      shop: session.shop,
+      shop,
       admin,
       shopifyOrderId: next.orderId,
-      sentBy: session.shop,
+      sentBy,
       mode,
     });
   } catch (err) {
