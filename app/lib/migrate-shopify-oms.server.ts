@@ -497,6 +497,103 @@ export async function findNextEligibleShopifyOrder(
   };
 }
 
+const DATE_RANGE_PAGE = 50;
+export const MAX_BULK_DATE_SYNC = 50;
+
+function addUtcDays(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function shopifyCreatedAtRangeQuery(fromDate: string, toDate: string): string {
+  const from = String(fromDate || "").trim();
+  const to = String(toDate || "").trim();
+  const toExclusive = addUtcDays(to, 1);
+  return `(created_at:>='${from}' AND created_at:<'${toExclusive}') AND status:any`;
+}
+
+/** List Shopify orders in a created-at date range (inclusive). Oldest first. Does not sync. */
+export async function listShopifyOrdersInDateRange(
+  admin: AdminGraphql,
+  shop: string,
+  input: {
+    fromDate: string;
+    toDate: string;
+    limit?: number;
+    skipCompleted?: boolean;
+  },
+): Promise<{
+  orders: Array<{ orderId: string; orderName: string; createdAt: string }>;
+  skippedCompleted: number;
+  scannedCount: number;
+  truncated: boolean;
+  error?: string;
+}> {
+  const fromDate = String(input.fromDate || "").trim();
+  const toDate = String(input.toDate || "").trim();
+  const limit = Math.min(Math.max(Number(input.limit) || 25, 1), MAX_BULK_DATE_SYNC);
+  const skipCompleted = input.skipCompleted !== false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fromDate) || !/^\d{4}-\d{2}-\d{2}$/.test(toDate)) {
+    return { orders: [], skippedCompleted: 0, scannedCount: 0, truncated: false, error: "Choose a valid from and to date." };
+  }
+  if (fromDate > toDate) {
+    return { orders: [], skippedCompleted: 0, scannedCount: 0, truncated: false, error: "From date must be on or before the to date." };
+  }
+
+  const query = shopifyCreatedAtRangeQuery(fromDate, toDate);
+  const selected: Array<{ orderId: string; orderName: string; createdAt: string }> = [];
+  let after: string | null = null;
+  let skippedCompleted = 0;
+  let scannedCount = 0;
+  let truncated = false;
+
+  for (let page = 0; page < 20 && selected.length < limit; page++) {
+    const res = await admin.graphql(ORDER_SCAN_QUERY, {
+      variables: { first: DATE_RANGE_PAGE, after, query },
+    });
+    const json = await res.json();
+    if (json?.errors?.length) {
+      return {
+        orders: selected,
+        skippedCompleted,
+        scannedCount,
+        truncated,
+        error: json.errors.map((e: { message?: string }) => e?.message || String(e)).join("; "),
+      };
+    }
+    const conn = json?.data?.orders;
+    const nodes = conn?.nodes ?? [];
+    if (!nodes.length) break;
+
+    const pageIds = nodes.map((node: { id?: string }) => String(gidNum(node?.id) || "")).filter(Boolean);
+    const synced = skipCompleted ? await whichOrdersAlreadySynced(shop, pageIds) : new Set<string>();
+    for (const node of nodes) {
+      const orderId = String(gidNum(node?.id) || "");
+      if (!orderId) continue;
+      scannedCount += 1;
+      if (synced.has(orderId)) {
+        skippedCompleted += 1;
+        continue;
+      }
+      selected.push({
+        orderId,
+        orderName: String(node?.name || orderId),
+        createdAt: String(node?.createdAt || ""),
+      });
+      if (selected.length >= limit) {
+        truncated = Boolean(conn?.pageInfo?.hasNextPage) || nodes.indexOf(node) < nodes.length - 1;
+        break;
+      }
+    }
+    if (selected.length >= limit) break;
+    if (!conn?.pageInfo?.hasNextPage || !conn?.pageInfo?.endCursor) break;
+    after = String(conn.pageInfo.endCursor);
+  }
+
+  return { orders: selected, skippedCompleted, scannedCount, truncated };
+}
+
 export type SyncSystemMark = "ok" | "fail" | "pending";
 
 export function summarizeSyncSystems(result: MigrateOrderResult): {

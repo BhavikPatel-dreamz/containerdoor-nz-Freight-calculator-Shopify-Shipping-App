@@ -4,6 +4,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { authenticate } from "../shopify.server";
 import {
   listMigrateReports,
+  listShopifyOrdersInDateRange,
+  MAX_BULK_DATE_SYNC,
   migrateShopifyOrdersToOms,
   searchShopifyOrders,
 } from "../lib/migrate-shopify-oms.server";
@@ -84,6 +86,63 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
   }
 
+  if (intent === "bulk_range") {
+    const fromDate = String(form.get("fromDate") || "").trim();
+    const toDate = String(form.get("toDate") || "").trim();
+    const limit = Math.min(Math.max(Number(form.get("limit")) || 25, 1), MAX_BULK_DATE_SYNC);
+    const skipCompleted = form.has("skipCompleted");
+    if (mode === "full" && String(form.get("confirmFullRun") || "") !== "1") {
+      return {
+        intent: "bulk_range" as const,
+        ok: false,
+        mode,
+        needsConfirm: true,
+        message: "Full run requires confirmation. This would create/update OMS, Cin7, and Monday records.",
+      };
+    }
+    const listed = await listShopifyOrdersInDateRange(admin, session.shop, {
+      fromDate,
+      toDate,
+      limit,
+      skipCompleted,
+    });
+    if (listed.error && !listed.orders.length) {
+      return { intent: "bulk_range" as const, ok: false, message: listed.error, fromDate, toDate };
+    }
+    if (!listed.orders.length) {
+      return {
+        intent: "bulk_range" as const,
+        ok: true,
+        fromDate,
+        toDate,
+        message: listed.skippedCompleted
+          ? `No unsynced orders between ${fromDate} and ${toDate} (skipped ${listed.skippedCompleted} already complete).`
+          : `No Shopify orders between ${fromDate} and ${toDate}.`,
+        results: [],
+      };
+    }
+    const result = await migrateShopifyOrdersToOms({
+      shop: session.shop,
+      namesOrIds: listed.orders.map((o) => o.orderId),
+      sentBy,
+      mode,
+    });
+    const failed = result.results.filter((r) => !r.ok).length;
+    return {
+      intent: "bulk_range" as const,
+      ok: failed === 0,
+      mode,
+      fromDate,
+      toDate,
+      message:
+        `Date range ${fromDate} → ${toDate}: ${result.results.length} order(s)` +
+        (listed.skippedCompleted ? `, skipped ${listed.skippedCompleted} already complete` : "") +
+        (listed.truncated ? `, stopped at limit ${limit}` : "") +
+        (failed ? `, ${failed} failed` : mode === "dry_run" ? ", dry run (no writes)" : ", done."),
+      ...result,
+    };
+  }
+
   const names =
     intent === "bulk"
       ? String(form.get("orders") || "")
@@ -145,7 +204,8 @@ export default function MigrateOrdersPage() {
       .split(/[\n,]+/)
       .map((x) => x.trim())
       .filter(Boolean);
-    setConfirmCount(bulk.length || 1);
+    const limit = Number(fd.get("limit") || 0);
+    setConfirmCount(bulk.length || limit || 1);
     pendingForm.current = form;
     setConfirmOpen(true);
   };
@@ -289,24 +349,45 @@ export default function MigrateOrdersPage() {
         ) : null}
       </s-section>
 
-      <s-section heading="2. Bulk (after one order looks right)">
+      <s-section heading="Bulk sync by date">
+        <s-paragraph>
+          Choose a created-at date range. Orders are synced one at a time with the same Shopify → OMS → Cin7 → Monday process. Already-complete orders are skipped.
+        </s-paragraph>
         <Form method="post" onSubmit={onMigrateSubmit}>
-          <input type="hidden" name="intent" value="bulk" />
+          <input type="hidden" name="intent" value="bulk_range" />
           <input type="hidden" name="mode" value={mode} />
           <input type="hidden" name="confirmFullRun" value="" />
           <div className="settings-card" style={{ marginTop: 12 }}>
             <div className="mode-row" style={{ marginBottom: 12 }}>
-              <label><input type="radio" name="modeUiBulk" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
-              <label><input type="radio" name="modeUiBulk" checked={mode === "full"} onChange={() => setMode("full")} /> Full run</label>
+              <label><input type="radio" name="modeUiRange" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
+              <label><input type="radio" name="modeUiRange" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
             </div>
-            <label className="settings-field">
-              Order names or IDs
-              <textarea name="orders" rows={8} placeholder={"#CDL215347\n#CDL215348"} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <label className="settings-field">
+                From
+                <input name="fromDate" type="date" required defaultValue={data && "fromDate" in data ? String(data.fromDate || "") : ""} />
+              </label>
+              <label className="settings-field">
+                To
+                <input name="toDate" type="date" required defaultValue={data && "toDate" in data ? String(data.toDate || "") : ""} />
+              </label>
+            </div>
+            <label className="settings-field" style={{ marginTop: 12 }}>
+              Max orders this run
+              <select name="limit" defaultValue="25" style={{ border: "1px solid #bec5cc", borderRadius: 8, padding: "8px 10px" }}>
+                <option value="10">10</option>
+                <option value="25">25</option>
+                <option value="50">50</option>
+              </select>
+            </label>
+            <label className="mode-row" style={{ marginTop: 12 }}>
+              <input type="checkbox" name="skipCompleted" value="1" defaultChecked />
+              Skip orders already synced
             </label>
             <div style={{ marginTop: 16 }}>
-              <s-button type="submit" {...(busy ? { loading: true } : {})}>
-                Process bulk
-              </s-button>
+              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+                {busy ? "Syncing…" : "Start bulk sync"}
+              </button>
             </div>
           </div>
         </Form>
