@@ -103,8 +103,8 @@ const ORDER_FIELDS = `
 `;
 
 const ORDER_SCAN_QUERY = `#graphql
-  query ScanShopifyOrdersPage($first: Int!, $after: String, $query: String) {
-    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: false) {
+  query ScanShopifyOrdersPage($first: Int!, $after: String, $query: String, $reverse: Boolean) {
+    orders(first: $first, after: $after, query: $query, sortKey: CREATED_AT, reverse: $reverse) {
       pageInfo { hasNextPage endCursor }
       nodes { id name createdAt }
     }
@@ -412,12 +412,16 @@ export type FindNextEligibleResult =
       skippedCompleted: number;
       pagesScanned: number;
       scannedCount: number;
+      resumeAfter: string | null;
+      hasMore: boolean;
     }
   | {
       error: string;
       skippedCompleted: number;
       pagesScanned: number;
       scannedCount: number;
+      resumeAfter: string | null;
+      done?: boolean;
     };
 
 const SCAN_PAGE_SIZE = 50;
@@ -432,15 +436,19 @@ const SCAN_MAX_PAGES = 20;
 export async function findNextEligibleShopifyOrder(
   admin: AdminGraphql,
   shop: string,
+  opts?: { newestFirst?: boolean; after?: string | null; maxPages?: number },
 ): Promise<FindNextEligibleResult> {
-  let after: string | null = null;
+  let after: string | null = opts?.after ? String(opts.after) : null;
+  const reverse = Boolean(opts?.newestFirst);
+  const maxPages = Math.min(Math.max(Number(opts?.maxPages) || SCAN_MAX_PAGES, 1), 40);
   let skippedCompleted = 0;
   let scannedCount = 0;
   let pagesScanned = 0;
 
-  for (let page = 0; page < SCAN_MAX_PAGES; page++) {
+  for (let page = 0; page < maxPages; page++) {
+    const pageAfter = after;
     const res = await admin.graphql(ORDER_SCAN_QUERY, {
-      variables: { first: SCAN_PAGE_SIZE, after, query: "status:any" },
+      variables: { first: SCAN_PAGE_SIZE, after, query: "status:any", reverse },
     });
     const json = await res.json();
     if (json?.errors?.length) {
@@ -449,6 +457,7 @@ export async function findNextEligibleShopifyOrder(
         skippedCompleted,
         pagesScanned,
         scannedCount,
+        resumeAfter: after,
       };
     }
     const conn = json?.data?.orders;
@@ -473,6 +482,8 @@ export async function findNextEligibleShopifyOrder(
         skippedCompleted,
         pagesScanned,
         scannedCount,
+        resumeAfter: pageAfter,
+        hasMore: true,
       };
     }
     const pageInfo = conn?.pageInfo;
@@ -484,17 +495,36 @@ export async function findNextEligibleShopifyOrder(
         skippedCompleted,
         pagesScanned,
         scannedCount,
+        resumeAfter: null,
+        done: true,
       };
     }
     after = String(pageInfo.endCursor);
   }
 
   return {
-    error: `Reached scan limit (${SCAN_MAX_PAGES} pages / ${SCAN_PAGE_SIZE} each) after skipping ${skippedCompleted} completed order(s). Task 5 will persist cursor to continue.`,
+    error: `Reached scan limit after skipping ${skippedCompleted} completed order(s). Continue to scan further.`,
     skippedCompleted,
     pagesScanned,
     scannedCount,
+    resumeAfter: after,
+    done: false,
   };
+}
+
+export async function countShopifyOrders(admin: AdminGraphql): Promise<number | null> {
+  try {
+    const res = await admin.graphql(`#graphql
+      query SyncAllOrdersCount {
+        ordersCount(query: "status:any") { count }
+      }
+    `);
+    const json = await res.json();
+    const count = json?.data?.ordersCount?.count;
+    return typeof count === "number" ? count : null;
+  } catch {
+    return null;
+  }
 }
 
 const DATE_RANGE_PAGE = 50;
@@ -550,7 +580,7 @@ export async function listShopifyOrdersInDateRange(
 
   for (let page = 0; page < 20 && selected.length < limit; page++) {
     const res = await admin.graphql(ORDER_SCAN_QUERY, {
-      variables: { first: DATE_RANGE_PAGE, after, query },
+      variables: { first: DATE_RANGE_PAGE, after, query, reverse: false },
     });
     const json = await res.json();
     if (json?.errors?.length) {

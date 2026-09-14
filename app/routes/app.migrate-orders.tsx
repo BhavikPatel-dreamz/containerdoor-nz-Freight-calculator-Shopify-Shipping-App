@@ -188,7 +188,118 @@ export default function MigrateOrdersPage() {
   const busy = nav.state !== "idle";
   const hits = data && "hits" in data ? data.hits : [];
   const results = data && "results" in data ? data.results : [];
-  const [mode, setMode] = useState<"dry_run" | "full">("full");
+  const [allRunning, setAllRunning] = useState(false);
+  const [allConfirm, setAllConfirm] = useState(false);
+  const [allProgress, setAllProgress] = useState({
+    processed: 0,
+    success: 0,
+    failed: 0,
+    skipped: 0,
+    total: 0,
+    current: "",
+    message: "",
+    logs: [] as string[],
+    systems: null as null | {
+      shopify: string;
+      oms: string;
+      cin7: string;
+      monday: string;
+      statusLabel: string;
+      failedStep?: string;
+      failedMessage?: string;
+    },
+  });
+  const stopAll = useRef(false);
+
+  const mark = (v: string) => (v === "ok" ? "✓" : v === "fail" ? "✗" : "○");
+
+  const runSyncAll = async () => {
+    setAllConfirm(false);
+    stopAll.current = false;
+    setAllRunning(true);
+    let after: string | null = null;
+    let processed = 0;
+    let success = 0;
+    let failed = 0;
+    let skipped = 0;
+    let total = 0;
+    const logs: string[] = [];
+    try {
+      const countRes = await fetch("/api/order-sync-step", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ countOnly: true }),
+      });
+      const countJson = await countRes.json().catch(() => ({}));
+      total = Number(countJson.total) || 0;
+      setAllProgress((p) => ({ ...p, total, message: "Starting from today, newest first…" }));
+      while (!stopAll.current) {
+        const res = await fetch("/api/order-sync-step", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "same-origin",
+          body: JSON.stringify({ mode, newestFirst: true, after }),
+        });
+        const json = await res.json().catch(() => ({}));
+        skipped += Number(json.skippedCompleted) || 0;
+        if (json.after) after = json.after;
+        if (json.done) {
+          logs.unshift(new Date().toLocaleTimeString() + " " + (json.message || "All eligible orders finished."));
+          setAllProgress({
+            processed,
+            success,
+            failed,
+            skipped,
+            total,
+            current: "",
+            message: json.message || "Done.",
+            logs: logs.slice(0, 40),
+            systems: null,
+          });
+          break;
+        }
+        if (json.continueScan) {
+          logs.unshift(new Date().toLocaleTimeString() + " Scanning further…");
+          setAllProgress((p) => ({ ...p, skipped, message: json.message || "Scanning…", logs: logs.slice(0, 40) }));
+          continue;
+        }
+        if (json.order) {
+          processed += 1;
+          if (json.order.ok) success += 1;
+          else failed += 1;
+          const line = `${new Date().toLocaleTimeString()} ${json.order.name || json.order.id} ${json.order.ok ? "OK" : "FAIL"} ${json.systems?.failedStep || ""}`;
+          logs.unshift(line);
+          setAllProgress({
+            processed,
+            success,
+            failed,
+            skipped,
+            total,
+            current: json.order.name || json.order.id,
+            message: json.order.ok ? "Synced" : json.order.error || "Failed",
+            logs: logs.slice(0, 40),
+            systems: json.systems || null,
+          });
+          continue;
+        }
+        logs.unshift(new Date().toLocaleTimeString() + " " + (json.message || json.error || "Stopped"));
+        setAllProgress((p) => ({ ...p, message: json.message || json.error || "Stopped", logs: logs.slice(0, 40) }));
+        break;
+      }
+      if (stopAll.current) {
+        logs.unshift(new Date().toLocaleTimeString() + " Stopped. Next run continues from remaining unsynced orders.");
+        setAllProgress((p) => ({ ...p, message: "Stopped.", logs: logs.slice(0, 40) }));
+      }
+    } catch (err) {
+      setAllProgress((p) => ({
+        ...p,
+        message: err instanceof Error ? err.message : String(err),
+      }));
+    } finally {
+      setAllRunning(false);
+    }
+  };
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmCount, setConfirmCount] = useState(1);
   const pendingForm = useRef<HTMLFormElement | null>(null);
@@ -252,30 +363,8 @@ export default function MigrateOrdersPage() {
         .confirm-box p { margin: 0 0 8px; color: #334e68; font-size: 14px; }
         .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
         .sys-row { display: grid; gap: 4px; font-size: 15px; margin-top: 8px; }
-      `}</style>
-      <style>{`
-        .settings-card { border: 1px solid #dfe4e8; border-radius: 10px; padding: 16px; background: #fff; }
-        .settings-field { display: grid; gap: 6px; font-size: 13px; color: #455a64; }
-        .settings-field input, .settings-field textarea {
-          border: 1px solid #bec5cc; border-radius: 8px; padding: 8px 10px; background: #fff; color: #1f2933;
-        }
-        .hit-list { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
-        .hit { border: 1px solid #dfe4e8; border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
-        .hit strong { display: block; }
-        .hit small { color: #52606d; }
-        .log { font-family: ui-monospace, monospace; font-size: 12px; background: #f6f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; white-space: pre-wrap; }
-        .ok { color: #0f7b3a; }
-        .fail { color: #b42318; }
-        .report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
-        .report-table th, .report-table td { border-bottom: 1px solid #eee; padding: 8px 6px; text-align: left; vertical-align: top; }
-        .dry-banner { background: #fff8e1; border: 1px solid #f0c36d; color: #7a4f01; border-radius: 8px; padding: 10px 12px; font-weight: 600; margin: 8px 0 0; }
-        .mode-row { display: flex; gap: 16px; font-size: 14px; color: #1f2933; margin-top: 8px; }
-        .confirm-mask { position: fixed; inset: 0; background: rgba(15,23,32,.45); display: grid; place-items: center; z-index: 40; }
-        .confirm-box { background: #fff; border-radius: 12px; padding: 20px 22px; max-width: 420px; width: calc(100% - 32px); box-shadow: 0 12px 40px rgba(0,0,0,.2); }
-        .confirm-box h3 { margin: 0 0 8px; font-size: 16px; }
-        .confirm-box p { margin: 0 0 8px; color: #334e68; font-size: 14px; }
-        .confirm-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-        .sys-row { display: grid; gap: 4px; font-size: 15px; margin-top: 8px; }
+        .bar-wrap { height: 12px; background: #e4e7eb; border-radius: 999px; overflow: hidden; margin: 10px 0; }
+        .bar-fill { height: 100%; background: #005bd3; transition: width .2s ease; }
       `}</style>
 
       {mode === "dry_run" ? (
@@ -294,11 +383,62 @@ export default function MigrateOrdersPage() {
               <label><input type="radio" name="modeUiNext" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
               <label><input type="radio" name="modeUiNext" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
             </div>
-            <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+            <button type="submit" disabled={busy || allRunning} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
               {busy ? "Syncing…" : "Sync Next Order"}
+            </button>
+            <button
+              type="button"
+              disabled={busy || allRunning}
+              onClick={() => (mode === "full" ? setAllConfirm(true) : runSyncAll())}
+              style={{ marginLeft: 8, padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}
+            >
+              Sync all orders
             </button>
           </div>
         </Form>
+        {allRunning || allProgress.processed || allProgress.message ? (
+          <div className="settings-card" style={{ marginTop: 16 }}>
+            <strong>All orders sync</strong>
+            <div style={{ color: "#52606d", fontSize: 13, marginTop: 4 }}>
+              Newest first (today → oldest). Same process as Sync Order. {allRunning ? "Running…" : allProgress.message}
+            </div>
+            <div className="bar-wrap">
+              <div
+                className="bar-fill"
+                style={{
+                  width: `${Math.min(100, allProgress.total > 0 ? Math.round(((allProgress.processed + allProgress.skipped) / allProgress.total) * 100) : allProgress.processed ? 8 : 0)}%`,
+                }}
+              />
+            </div>
+            <div>
+              {allProgress.processed} processed
+              {allProgress.total ? ` · ~${allProgress.total} Shopify orders` : ""}
+              {" "}· ✓ {allProgress.success} · ✗ {allProgress.failed} · skipped {allProgress.skipped}
+            </div>
+            {allProgress.current ? <div style={{ marginTop: 8 }}>Current: <strong>{allProgress.current}</strong></div> : null}
+            {allProgress.systems ? (
+              <div className="sys-row">
+                <div className={allProgress.systems.shopify === "ok" ? "ok" : allProgress.systems.shopify === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.shopify)} Shopify</div>
+                <div className={allProgress.systems.oms === "ok" ? "ok" : allProgress.systems.oms === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.oms)} OMS</div>
+                <div className={allProgress.systems.cin7 === "ok" ? "ok" : allProgress.systems.cin7 === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.cin7)} Cin7</div>
+                <div className={allProgress.systems.monday === "ok" ? "ok" : allProgress.systems.monday === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.monday)} Monday</div>
+                <div>Status: {allProgress.systems.statusLabel}</div>
+              </div>
+            ) : null}
+            {allRunning ? (
+              <button type="button" onClick={() => { stopAll.current = true; }} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#fff", color: "#b42318" }}>
+                Stop sync
+              </button>
+            ) : null}
+            {allProgress.logs.length ? (
+              <div className="log">
+                {allProgress.logs.map((line, i) => (
+                  <div key={i}>{line}</div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <s-paragraph>Or search and sync a specific order:</s-paragraph>
         <Form method="post">
           <input type="hidden" name="intent" value="search" />
@@ -492,6 +632,20 @@ export default function MigrateOrdersPage() {
         )}
       </s-section>
 
+      {allConfirm ? (
+        <div className="confirm-mask" role="dialog" aria-modal="true">
+          <div className="confirm-box">
+            <h3>Sync all unsynced orders?</h3>
+            <p><strong>Mode: FULL SYNC</strong></p>
+            <p>Starts from today and walks back to the oldest order, one at a time (Shopify → OMS → Cin7 → Monday).</p>
+            <p>Already-complete orders are skipped. You can stop after the current order.</p>
+            <div className="confirm-actions">
+              <button type="button" onClick={() => setAllConfirm(false)} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #bec5cc", background: "#fff" }}>Cancel</button>
+              <button type="button" onClick={() => void runSyncAll()} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#b42318", color: "#fff" }}>Start</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {confirmOpen ? (
         <div className="confirm-mask" role="dialog" aria-modal="true">
           <div className="confirm-box">
