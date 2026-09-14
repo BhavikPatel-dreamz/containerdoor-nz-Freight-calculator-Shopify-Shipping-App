@@ -100,16 +100,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         message: "Full run requires confirmation. This would create/update OMS, Cin7, and Monday records.",
       };
     }
-    const listed = await listShopifyOrdersInDateRange(admin, session.shop, {
-      fromDate,
-      toDate,
-      limit,
-      skipCompleted,
-    });
-    if (listed.error && !listed.orders.length) {
+    const extra = String(form.get("extraOrders") || "")
+      .split(/[\n,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
+    const listed =
+      fromDate && toDate
+        ? await listShopifyOrdersInDateRange(admin, session.shop, {
+            fromDate,
+            toDate,
+            limit,
+            skipCompleted,
+          })
+        : { orders: [] as Array<{ orderId: string }>, skippedCompleted: 0, truncated: false, error: extra.length ? "" : "Choose dates or add order numbers." };
+    if (listed.error && !listed.orders.length && !extra.length) {
       return { intent: "bulk_range" as const, ok: false, message: listed.error, fromDate, toDate };
     }
-    if (!listed.orders.length) {
+    const unique = [...new Set([...listed.orders.map((o) => o.orderId), ...extra])];
+    if (!unique.length) {
       return {
         intent: "bulk_range" as const,
         ok: true,
@@ -123,7 +131,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
     const result = await migrateShopifyOrdersToOms({
       shop: session.shop,
-      namesOrIds: listed.orders.map((o) => o.orderId),
+      namesOrIds: unique,
       sentBy,
       mode,
     });
@@ -246,6 +254,7 @@ export default function MigrateOrdersPage() {
     stopAll.current = false;
     setAllRunning(true);
     let after: string | null = null;
+    let skipIds: string[] = [];
     let emptyStreak = 0;
     let processed = 0;
     let success = 0;
@@ -368,8 +377,12 @@ export default function MigrateOrdersPage() {
       .split(/[\n,]+/)
       .map((x) => x.trim())
       .filter(Boolean);
+    const extra = String(fd.get("extraOrders") || "")
+      .split(/[\n,]+/)
+      .map((x) => x.trim())
+      .filter(Boolean);
     const limit = Number(fd.get("limit") || 0);
-    setConfirmCount(bulk.length || limit || 1);
+    setConfirmCount(bulk.length || extra.length || limit || 1);
     pendingForm.current = form;
     setConfirmOpen(true);
   };
@@ -382,6 +395,20 @@ export default function MigrateOrdersPage() {
     setConfirmOpen(false);
     form.requestSubmit();
   };
+
+  useEffect(() => {
+    if (!results?.length) return;
+    const extra: Array<{ t: string; ok?: boolean; text: string }> = [];
+    const t = new Date().toLocaleTimeString();
+    for (const r of results) {
+      extra.push({ t, ok: r.ok, text: `──── ${r.orderName || r.input} ${r.ok ? "OK" : "FAIL"} ────` });
+      for (const s of r.steps || []) {
+        extra.push({ t: s.at || t, ok: s.ok, text: `[${s.step}] ${s.ok ? "OK" : "FAIL"} ${s.message}` });
+      }
+    }
+    if (!extra.length) return;
+    setAllProgress((p) => ({ ...p, logs: [...extra, ...p.logs].slice(0, 500) }));
+  }, [results]);
 
   useEffect(() => {
     if (nav.state !== "idle") return;
@@ -421,229 +448,175 @@ export default function MigrateOrdersPage() {
         .sys-row { display: grid; gap: 4px; font-size: 15px; margin-top: 8px; }
         .bar-wrap { height: 12px; background: #e4e7eb; border-radius: 999px; overflow: hidden; margin: 10px 0; }
         .bar-fill { height: 100%; background: #005bd3; transition: width .2s ease; }
+        .sync-grid { display: grid; gap: 16px; }
+        @media (min-width: 960px) { .sync-grid { grid-template-columns: 1fr 1fr 1fr; } }
       `}</style>
 
       {mode === "dry_run" ? (
         <div className="dry-banner">DRY RUN — No production changes will be made to OMS, Cin7, or Monday. Shopify load and Cin7/Monday lookups are read-only.</div>
       ) : null}
 
-      <s-section heading="Sync one order">
-        <s-paragraph>
-          Processes exactly one order through Shopify → OMS → Cin7 → Monday. Sync Next scans oldest-first and skips orders that already completed.
-        </s-paragraph>
-        <Form method="post">
-          <input type="hidden" name="intent" value="sync_one" />
-          <input type="hidden" name="mode" value={mode} />
-          <div className="settings-card" style={{ marginTop: 12 }}>
-            <div className="mode-row" style={{ marginBottom: 12 }}>
-              <label><input type="radio" name="modeUiNext" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
-              <label><input type="radio" name="modeUiNext" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
-            </div>
-            <button type="submit" disabled={busy || allRunning} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
-              {busy ? "Syncing…" : "Sync Next Order"}
-            </button>
+      <s-section heading="1. Sync tools">
+        <s-paragraph>Three ways to start the same Shopify → OMS → Cin7 → Monday process. Dry run / Full sync applies to all tools.</s-paragraph>
+        <div className="mode-row" style={{ marginBottom: 12 }}>
+          <label><input type="radio" name="modeUiGlobal" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
+          <label><input type="radio" name="modeUiGlobal" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
+        </div>
+        <div className="sync-grid">
+          <div className="settings-card">
+            <strong>Search + sync one</strong>
+            <Form method="post" style={{ marginTop: 10 }}>
+              <input type="hidden" name="intent" value="search" />
+              <label className="settings-field">
+                Order (#CDL215343 or 572660)
+                <input name="q" type="search" placeholder="#CDL215343 or 572660" defaultValue={data && "query" in data ? data.query : ""} />
+              </label>
+              <button type="submit" disabled={busy || allRunning} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}>
+                {busy ? "Searching…" : "Search Shopify"}
+              </button>
+            </Form>
+            {data?.intent === "search" && data.message ? <div style={{ marginTop: 8, fontSize: 13 }}>{data.message}</div> : null}
+            {hits?.length ? (
+              <Form method="post" style={{ marginTop: 12 }}>
+                <input type="hidden" name="intent" value="sync_one" />
+                <input type="hidden" name="mode" value={mode} />
+                <ul className="hit-list">
+                  {hits.map((h, i) => (
+                    <li className="hit" key={h.id}>
+                      <input type="radio" name="orderId" value={h.id} defaultChecked={i === 0} />
+                      <div>
+                        <strong>{h.name}</strong>
+                        <small>
+                          {h.customer} · {h.email || "no email"} · {h.financialStatus} · {h.lineCount} line(s)
+                          {h.skuPreview ? ` · ${h.skuPreview}` : ""}
+                        </small>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <button type="submit" disabled={busy || allRunning} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+                  {busy ? "Syncing…" : "Sync Order"}
+                </button>
+              </Form>
+            ) : null}
+          </div>
+
+          <div className="settings-card">
+            <strong>Date range + extra orders</strong>
+            <Form method="post" onSubmit={onMigrateSubmit} style={{ marginTop: 10 }}>
+              <input type="hidden" name="intent" value="bulk_range" />
+              <input type="hidden" name="mode" value={mode} />
+              <input type="hidden" name="confirmFullRun" value="" />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <label className="settings-field">
+                  From
+                  <input name="fromDate" type="date" defaultValue={data && "fromDate" in data ? String(data.fromDate || "") : ""} />
+                </label>
+                <label className="settings-field">
+                  To
+                  <input name="toDate" type="date" defaultValue={data && "toDate" in data ? String(data.toDate || "") : ""} />
+                </label>
+              </div>
+              <label className="settings-field" style={{ marginTop: 12 }}>
+                Extra order numbers (one per line)
+                <textarea name="extraOrders" rows={3} placeholder={"#CDL215347\n572651"} />
+              </label>
+              <label className="settings-field" style={{ marginTop: 12 }}>
+                Max from date range
+                <select name="limit" defaultValue="25" style={{ border: "1px solid #bec5cc", borderRadius: 8, padding: "8px 10px" }}>
+                  <option value="10">10</option>
+                  <option value="25">25</option>
+                  <option value="50">50</option>
+                </select>
+              </label>
+              <label className="mode-row" style={{ marginTop: 12 }}>
+                <input type="checkbox" name="skipCompleted" value="1" defaultChecked />
+                Skip already synced
+              </label>
+              <button type="submit" disabled={busy || allRunning} style={{ marginTop: 16, padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
+                {busy ? "Syncing…" : "Sync selected"}
+              </button>
+            </Form>
+          </div>
+
+          <div className="settings-card">
+            <strong>Sync all unsynced</strong>
+            <p style={{ color: "#52606d", fontSize: 13, margin: "8px 0 12px" }}>
+              Newest first. After each order waits 30s, then starts the next automatically. Failed orders are logged and skipped so the queue continues.
+            </p>
             <button
               type="button"
               disabled={busy || allRunning}
-              onClick={() => (mode === "full" ? setAllConfirm(true) : runSyncAll())}
-              style={{ marginLeft: 8, padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}
+              onClick={() => (mode === "full" ? setAllConfirm(true) : void runSyncAll())}
+              style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}
             >
               Sync all orders
             </button>
-          </div>
-        </Form>
-        {allRunning || allProgress.processed || allProgress.message ? (
-          <div className="settings-card" style={{ marginTop: 16 }}>
-            <strong>All orders sync</strong>
-            <div style={{ color: "#52606d", fontSize: 13, marginTop: 4 }}>
-              Newest first (today → oldest). Same process as Sync Order. {allRunning ? "Running…" : allProgress.message}
-            </div>
-            <div className="bar-wrap">
-              <div
-                className="bar-fill"
-                style={{
-                  width: `${Math.min(100, allProgress.total > 0 ? Math.round(((allProgress.processed + allProgress.skipped) / allProgress.total) * 100) : allProgress.processed ? 8 : 0)}%`,
-                }}
-              />
-            </div>
-            <div>
-              {allProgress.processed} processed
-              {allProgress.total ? ` · ~${allProgress.total} Shopify orders` : ""}
-              {" "}· ✓ {allProgress.success} · ✗ {allProgress.failed} · skipped {allProgress.skipped}
-            </div>
-            {allProgress.current ? <div style={{ marginTop: 8 }}>Current: <strong>{allProgress.current}</strong></div> : null}
-            {allProgress.systems ? (
-              <div className="sys-row">
-                <div className={allProgress.systems.shopify === "ok" ? "ok" : allProgress.systems.shopify === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.shopify)} Shopify</div>
-                <div className={allProgress.systems.oms === "ok" ? "ok" : allProgress.systems.oms === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.oms)} OMS</div>
-                <div className={allProgress.systems.cin7 === "ok" ? "ok" : allProgress.systems.cin7 === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.cin7)} Cin7</div>
-                <div className={allProgress.systems.monday === "ok" ? "ok" : allProgress.systems.monday === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.monday)} Monday</div>
-                <div>Status: {allProgress.systems.statusLabel}</div>
-              </div>
-            ) : null}
             {allRunning ? (
-              <button type="button" onClick={() => { stopAll.current = true; }} style={{ marginTop: 12, padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#fff", color: "#b42318" }}>
-                Stop sync
+              <button type="button" onClick={() => { stopAll.current = true; }} style={{ marginLeft: 8, padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#fff", color: "#b42318" }}>
+                Stop
               </button>
             ) : null}
-            {allProgress.logs.length ? (
-              <div className="log">
-                {allProgress.logs.map((line, i) => (
-                  <div key={i} className={line.ok === true ? "ok" : line.ok === false ? "fail" : "info"}>
-                    {line.t} {line.text}
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
-        ) : null}
-        <s-paragraph>Or search and sync a specific order:</s-paragraph>
-        <Form method="post">
-          <input type="hidden" name="intent" value="search" />
-          <div className="settings-card" style={{ marginTop: 12 }}>
-            <label className="settings-field">
-              Search (#CDL215343 or old number 572660)
-              <input name="q" type="search" placeholder="#CDL215343 or 572660" defaultValue={data && "query" in data ? data.query : ""} />
-            </label>
-            <div style={{ marginTop: 16 }}>
-              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#1a1a1a", color: "#fff", cursor: "pointer" }}>
-                {busy ? "Searching…" : "Search Shopify"}
-              </button>
-            </div>
-          </div>
-        </Form>
-        {data?.intent === "search" && data.message ? (
-          <s-paragraph>{data.message}</s-paragraph>
-        ) : null}
+        </div>
+      </s-section>
 
-        {hits?.length ? (
-          <Form method="post">
-            <input type="hidden" name="intent" value="sync_one" />
-            <input type="hidden" name="mode" value={mode} />
-            <div className="mode-row">
-              <label><input type="radio" name="modeUi" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
-              <label><input type="radio" name="modeUi" checked={mode === "full"} onChange={() => setMode("full")} /> Full run</label>
+      <s-section heading="2. Live log">
+        <s-paragraph>Progress and step output for search/sync, date-range, and sync-all. Newest lines at the top.</s-paragraph>
+        <div className="settings-card" style={{ marginTop: 12 }}>
+          {allProgress.current || allProgress.message || (data?.message && data.intent !== "search") ? (
+            <>
+              <div style={{ color: "#52606d", fontSize: 13 }}>
+                {allRunning ? "Running…" : allProgress.message || data?.message}
+              </div>
+              <div className="bar-wrap">
+                <div
+                  className="bar-fill"
+                  style={{
+                    width: `${Math.min(100, allProgress.total > 0 ? Math.round(((allProgress.processed + allProgress.skipped) / allProgress.total) * 100) : allProgress.processed ? 8 : 0)}%`,
+                  }}
+                />
+              </div>
+              <div>
+                {allProgress.processed} processed
+                {allProgress.total ? ` · ~${allProgress.total} Shopify orders` : ""}
+                {" "}· ✓ {allProgress.success} · ✗ {allProgress.failed} · skipped {allProgress.skipped}
+              </div>
+              {allProgress.current ? <div style={{ marginTop: 8 }}>Current: <strong>{allProgress.current}</strong></div> : null}
+            </>
+          ) : (
+            <div style={{ color: "#52606d", fontSize: 13 }}>No run yet. Start a sync above — output appears here.</div>
+          )}
+          {allProgress.systems ? (
+            <div className="sys-row">
+              <div className={allProgress.systems.shopify === "ok" ? "ok" : allProgress.systems.shopify === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.shopify)} Shopify</div>
+              <div className={allProgress.systems.oms === "ok" ? "ok" : allProgress.systems.oms === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.oms)} OMS</div>
+              <div className={allProgress.systems.cin7 === "ok" ? "ok" : allProgress.systems.cin7 === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.cin7)} Cin7</div>
+              <div className={allProgress.systems.monday === "ok" ? "ok" : allProgress.systems.monday === "fail" ? "fail" : "pending"}>{mark(allProgress.systems.monday)} Monday</div>
+              <div>Status: {allProgress.systems.statusLabel}</div>
             </div>
-            <ul className="hit-list">
-              {hits.map((h, i) => (
-                <li className="hit" key={h.id}>
-                  <input type="radio" name="orderId" value={h.id} defaultChecked={i === 0} />
-                  <div>
-                    <strong>{h.name}</strong>
-                    <small>
-                      {h.customer} · {h.email || "no email"} · {h.financialStatus} · {h.lineCount} line(s)
-                      {h.skuPreview ? ` · ${h.skuPreview}` : ""}
-                    </small>
-                  </div>
-                </li>
+          ) : data && "systems" in data && data.systems ? (
+            <div className="sys-row">
+              <div className={data.systems.shopify === "ok" ? "ok" : data.systems.shopify === "fail" ? "fail" : "pending"}>{data.systems.shopify === "ok" ? "✓" : data.systems.shopify === "fail" ? "✗" : "○"} Shopify</div>
+              <div className={data.systems.oms === "ok" ? "ok" : data.systems.oms === "fail" ? "fail" : "pending"}>{data.systems.oms === "ok" ? "✓" : data.systems.oms === "fail" ? "✗" : "○"} OMS</div>
+              <div className={data.systems.cin7 === "ok" ? "ok" : data.systems.cin7 === "fail" ? "fail" : "pending"}>{data.systems.cin7 === "ok" ? "✓" : data.systems.cin7 === "fail" ? "✗" : "○"} Cin7</div>
+              <div className={data.systems.monday === "ok" ? "ok" : data.systems.monday === "fail" ? "fail" : "pending"}>{data.systems.monday === "ok" ? "✓" : data.systems.monday === "fail" ? "✗" : "○"} Monday</div>
+              <div>Status: <strong>{data.systems.statusLabel}</strong></div>
+            </div>
+          ) : null}
+          {allProgress.logs.length ? (
+            <div className="log">
+              {allProgress.logs.map((line, i) => (
+                <div key={i} className={line.ok === true ? "ok" : line.ok === false ? "fail" : "info"}>
+                  {line.t} {line.text}
+                </div>
               ))}
-            </ul>
-            <div style={{ marginTop: 12 }}>
-              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #1a1a1a", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
-                {busy ? "Syncing…" : "Sync Order"}
-              </button>
-            </div>
-          </Form>
-        ) : null}
-      </s-section>
-
-      <s-section heading="Bulk sync by date">
-        <s-paragraph>
-          Choose a created-at date range. Orders are synced one at a time with the same Shopify → OMS → Cin7 → Monday process. Already-complete orders are skipped.
-        </s-paragraph>
-        <Form method="post" onSubmit={onMigrateSubmit}>
-          <input type="hidden" name="intent" value="bulk_range" />
-          <input type="hidden" name="mode" value={mode} />
-          <input type="hidden" name="confirmFullRun" value="" />
-          <div className="settings-card" style={{ marginTop: 12 }}>
-            <div className="mode-row" style={{ marginBottom: 12 }}>
-              <label><input type="radio" name="modeUiRange" checked={mode === "dry_run"} onChange={() => setMode("dry_run")} /> Dry run</label>
-              <label><input type="radio" name="modeUiRange" checked={mode === "full"} onChange={() => setMode("full")} /> Full sync</label>
-            </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <label className="settings-field">
-                From
-                <input name="fromDate" type="date" required defaultValue={data && "fromDate" in data ? String(data.fromDate || "") : ""} />
-              </label>
-              <label className="settings-field">
-                To
-                <input name="toDate" type="date" required defaultValue={data && "toDate" in data ? String(data.toDate || "") : ""} />
-              </label>
-            </div>
-            <label className="settings-field" style={{ marginTop: 12 }}>
-              Max orders this run
-              <select name="limit" defaultValue="25" style={{ border: "1px solid #bec5cc", borderRadius: 8, padding: "8px 10px" }}>
-                <option value="10">10</option>
-                <option value="25">25</option>
-                <option value="50">50</option>
-              </select>
-            </label>
-            <label className="mode-row" style={{ marginTop: 12 }}>
-              <input type="checkbox" name="skipCompleted" value="1" defaultChecked />
-              Skip orders already synced
-            </label>
-            <div style={{ marginTop: 16 }}>
-              <button type="submit" disabled={busy} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #005bd3", background: "#005bd3", color: "#fff", cursor: "pointer" }}>
-                {busy ? "Syncing…" : "Start bulk sync"}
-              </button>
-            </div>
-          </div>
-        </Form>
-      </s-section>
-
-      {data?.message && data.intent !== "search" ? (
-        <s-section heading="Last order">
-          <s-paragraph>{data.message}</s-paragraph>
-          {data && "mode" in data && data.mode === "dry_run" ? (
-            <div className="dry-banner">DRY RUN — No production changes were made to OMS, Cin7, or Monday.</div>
-          ) : null}
-          {data && "systems" in data && data.systems && results[0] ? (
-            <div className="settings-card" style={{ marginTop: 10 }}>
-              <strong>Order {results[0].orderName || results[0].input}</strong>
-              <div className="sys-row">
-                <div className={data.systems.shopify === "ok" ? "ok" : data.systems.shopify === "fail" ? "fail" : "pending"}>
-                  {data.systems.shopify === "ok" ? "✓" : data.systems.shopify === "fail" ? "✗" : "○"} Shopify
-                </div>
-                <div className={data.systems.oms === "ok" ? "ok" : data.systems.oms === "fail" ? "fail" : "pending"}>
-                  {data.systems.oms === "ok" ? "✓" : data.systems.oms === "fail" ? "✗" : "○"} OMS
-                </div>
-                <div className={data.systems.cin7 === "ok" ? "ok" : data.systems.cin7 === "fail" ? "fail" : "pending"}>
-                  {data.systems.cin7 === "ok" ? "✓" : data.systems.cin7 === "fail" ? "✗" : "○"} Cin7
-                </div>
-                <div className={data.systems.monday === "ok" ? "ok" : data.systems.monday === "fail" ? "fail" : "pending"}>
-                  {data.systems.monday === "ok" ? "✓" : data.systems.monday === "fail" ? "✗" : "○"} Monday
-                </div>
-              </div>
-              <div style={{ marginTop: 8 }}>
-                Status: <strong>{data.systems.statusLabel}</strong>
-              </div>
-              {data.systems.failedStep ? (
-                <div className="fail" style={{ marginTop: 6 }}>
-                  Failed step: {data.systems.failedStep}
-                  {data.systems.failedMessage ? ` — ${data.systems.failedMessage}` : ""}
-                </div>
-              ) : null}
             </div>
           ) : null}
-          {results?.map((r) => (
-            <div key={r.input} className="settings-card" style={{ marginTop: 10 }}>
-              <strong>{r.orderName || r.input}</strong>
-              {r.error ? <div className="fail">{r.error}</div> : null}
-              {r.steps?.length ? (
-                <div className="log">
-                  {r.steps.map((s, idx) => (
-                    <div key={idx} className={s.ok ? "ok" : "fail"}>
-                      {s.at ? `${s.at} ` : ""}[{s.step}] {s.ok ? "OK" : "FAIL"} {s.message}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </s-section>
-      ) : null}
+        </div>
+      </s-section>
 
-      <s-section heading="Saved reports (re-sync)">
+      <s-section heading="3. Saved reports">
         <s-paragraph>Each order keeps one report. Filter by status, then sync failed or partial orders again.</s-paragraph>
         {reports.length ? (
           <>
