@@ -436,11 +436,12 @@ const SCAN_MAX_PAGES = 20;
 export async function findNextEligibleShopifyOrder(
   admin: AdminGraphql,
   shop: string,
-  opts?: { newestFirst?: boolean; after?: string | null; maxPages?: number },
+  opts?: { newestFirst?: boolean; after?: string | null; maxPages?: number; skipIds?: string[] },
 ): Promise<FindNextEligibleResult> {
   let after: string | null = opts?.after ? String(opts.after) : null;
   const reverse = Boolean(opts?.newestFirst);
   const maxPages = Math.min(Math.max(Number(opts?.maxPages) || SCAN_MAX_PAGES, 1), 40);
+  const skipIds = new Set((opts?.skipIds || []).map((id) => String(id || "").trim()).filter(Boolean));
   let skippedCompleted = 0;
   let scannedCount = 0;
   let pagesScanned = 0;
@@ -472,7 +473,7 @@ export async function findNextEligibleShopifyOrder(
       const orderId = String(gidNum(node?.id) || "");
       if (!orderId) continue;
       scannedCount += 1;
-      if (synced.has(orderId)) {
+      if (skipIds.has(orderId) || synced.has(orderId)) {
         skippedCompleted += 1;
         continue;
       }

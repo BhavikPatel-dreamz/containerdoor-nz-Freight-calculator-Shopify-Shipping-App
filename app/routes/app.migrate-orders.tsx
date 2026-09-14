@@ -1,6 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { Form, useActionData, useLoaderData, useNavigation } from "react-router";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, Fragment } from "react";
 import { authenticate } from "../shopify.server";
 import {
   listMigrateReports,
@@ -17,7 +17,7 @@ import {
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
-  const reports = await listMigrateReports(session.shop, 40);
+  const reports = await listMigrateReports(session.shop, 200);
   return { reports };
 };
 
@@ -199,7 +199,7 @@ export default function MigrateOrdersPage() {
     total: 0,
     current: "",
     message: "",
-    logs: [] as string[],
+    logs: [] as Array<{ t: string; ok?: boolean; text: string }>,
     systems: null as null | {
       shopify: string;
       oms: string;
@@ -219,12 +219,18 @@ export default function MigrateOrdersPage() {
     stopAll.current = false;
     setAllRunning(true);
     let after: string | null = null;
+    let emptyStreak = 0;
     let processed = 0;
     let success = 0;
     let failed = 0;
     let skipped = 0;
     let total = 0;
-    const logs: string[] = [];
+    const logs: Array<{ t: string; ok?: boolean; text: string }> = [];
+    const stamp = () => new Date().toLocaleTimeString();
+    const pushLog = (text: string, ok?: boolean) => {
+      logs.unshift({ t: stamp(), ok, text });
+      if (logs.length > 500) logs.length = 500;
+    };
     try {
       const countRes = await fetch("/api/order-sync-step", {
         method: "POST",
@@ -240,13 +246,13 @@ export default function MigrateOrdersPage() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: JSON.stringify({ mode, newestFirst: true, after }),
+          body: JSON.stringify({ mode, newestFirst: true, after, skipIds }),
         });
         const json = await res.json().catch(() => ({}));
         skipped += Number(json.skippedCompleted) || 0;
         if (json.after) after = json.after;
         if (json.done) {
-          logs.unshift(new Date().toLocaleTimeString() + " " + (json.message || "All eligible orders finished."));
+          pushLog(json.message || "All eligible orders finished.");
           setAllProgress({
             processed,
             success,
@@ -255,22 +261,35 @@ export default function MigrateOrdersPage() {
             total,
             current: "",
             message: json.message || "Done.",
-            logs: logs.slice(0, 40),
+            logs: logs.slice(0, 500),
             systems: null,
           });
           break;
         }
         if (json.continueScan) {
-          logs.unshift(new Date().toLocaleTimeString() + " Scanning further…");
-          setAllProgress((p) => ({ ...p, skipped, message: json.message || "Scanning…", logs: logs.slice(0, 40) }));
+          pushLog(json.message || "Scanning further…");
+          setAllProgress((p) => ({ ...p, skipped, message: json.message || "Scanning…", logs: logs.slice(0, 500) }));
           continue;
         }
         if (json.order) {
+          emptyStreak = 0;
           processed += 1;
           if (json.order.ok) success += 1;
           else failed += 1;
-          const line = `${new Date().toLocaleTimeString()} ${json.order.name || json.order.id} ${json.order.ok ? "OK" : "FAIL"} ${json.systems?.failedStep || ""}`;
-          logs.unshift(line);
+          const oid = String(json.order.id || "");
+          if (oid && !skipIds.includes(oid)) skipIds.push(oid);
+          pushLog(`──── ${json.order.name || json.order.id} ${json.order.ok ? "OK" : "FAIL — continuing next"} ────`, json.order.ok);
+          const steps = Array.isArray(json.order.steps) ? json.order.steps : [];
+          for (const s of steps) {
+            pushLog(`[${s.step || "step"}] ${s.ok ? "OK" : "FAIL"} ${s.message || ""}`, Boolean(s.ok));
+          }
+          if (json.order.error) pushLog(`ERROR ${json.order.error}`, false);
+          if (json.systems?.statusLabel) {
+            pushLog(
+              `STATUS ${json.systems.statusLabel} shopify=${json.systems.shopify} oms=${json.systems.oms} cin7=${json.systems.cin7} monday=${json.systems.monday}`,
+              json.order.ok,
+            );
+          }
           setAllProgress({
             processed,
             success,
@@ -279,18 +298,23 @@ export default function MigrateOrdersPage() {
             total,
             current: json.order.name || json.order.id,
             message: json.order.ok ? "Synced" : json.order.error || "Failed",
-            logs: logs.slice(0, 40),
+            logs: logs.slice(0, 500),
             systems: json.systems || null,
           });
           continue;
         }
-        logs.unshift(new Date().toLocaleTimeString() + " " + (json.message || json.error || "Stopped"));
-        setAllProgress((p) => ({ ...p, message: json.message || json.error || "Stopped", logs: logs.slice(0, 40) }));
-        break;
+        emptyStreak += 1;
+        pushLog(json.message || json.error || "No order this step — continuing", false);
+        setAllProgress((p) => ({ ...p, message: json.message || json.error || "Continuing…", logs: logs.slice(0, 500) }));
+        if (emptyStreak >= 5) {
+          pushLog("Stopped after repeated empty steps.", false);
+          break;
+        }
+        continue;
       }
       if (stopAll.current) {
-        logs.unshift(new Date().toLocaleTimeString() + " Stopped. Next run continues from remaining unsynced orders.");
-        setAllProgress((p) => ({ ...p, message: "Stopped.", logs: logs.slice(0, 40) }));
+        pushLog("Stopped. Next run continues from remaining unsynced orders.");
+        setAllProgress((p) => ({ ...p, message: "Stopped.", logs: logs.slice(0, 500) }));
       }
     } catch (err) {
       setAllProgress((p) => ({
@@ -303,6 +327,8 @@ export default function MigrateOrdersPage() {
   };
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmCount, setConfirmCount] = useState(1);
+  const [reportFilter, setReportFilter] = useState<"all" | "failed" | "partial" | "success">("all");
+  const [expandedReport, setExpandedReport] = useState("");
   const pendingForm = useRef<HTMLFormElement | null>(null);
 
   const onMigrateSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -350,7 +376,10 @@ export default function MigrateOrdersPage() {
         .hit { border: 1px solid #dfe4e8; border-radius: 8px; padding: 10px 12px; display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; }
         .hit strong { display: block; }
         .hit small { color: #52606d; }
-        .log { font-family: ui-monospace, monospace; font-size: 12px; background: #f6f8fa; border-radius: 8px; padding: 10px; margin-top: 8px; white-space: pre-wrap; }
+        .log { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; background: #050505; color: #e8e8e8; border-radius: 8px; padding: 12px; margin-top: 8px; white-space: pre-wrap; max-height: 360px; overflow: auto; line-height: 1.45; }
+        .log .ok { color: #7CFF6B; }
+        .log .fail { color: #ff6b6b; }
+        .log .info { color: #c8c8c8; }
         .ok { color: #0f7b3a; }
         .fail { color: #b42318; }
         .pending { color: #9aa5b1; }
@@ -434,7 +463,9 @@ export default function MigrateOrdersPage() {
             {allProgress.logs.length ? (
               <div className="log">
                 {allProgress.logs.map((line, i) => (
-                  <div key={i}>{line}</div>
+                  <div key={i} className={line.ok === true ? "ok" : line.ok === false ? "fail" : "info"}>
+                    {line.t} {line.text}
+                  </div>
                 ))}
               </div>
             ) : null}
@@ -576,7 +607,7 @@ export default function MigrateOrdersPage() {
                 <div className="log">
                   {r.steps.map((s, idx) => (
                     <div key={idx} className={s.ok ? "ok" : "fail"}>
-                      [{s.step}] {s.message}
+                      {s.at ? `${s.at} ` : ""}[{s.step}] {s.ok ? "OK" : "FAIL"} {s.message}
                     </div>
                   ))}
                 </div>
@@ -587,47 +618,110 @@ export default function MigrateOrdersPage() {
       ) : null}
 
       <s-section heading="Saved reports (re-sync)">
-        <s-paragraph>Each order keeps one report. Run migrate again on the same order to refresh Cin7/Monday links.</s-paragraph>
+        <s-paragraph>Each order keeps one report. Filter by status, then sync failed or partial orders again.</s-paragraph>
         {reports.length ? (
-          <table className="report-table">
-            <thead>
-              <tr>
-                <th>Order</th>
-                <th>Status</th>
-                <th>OMS</th>
-                <th>Monday</th>
-                <th>Cin7</th>
-                <th>Runs</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {reports.map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <strong>{r.orderName || r.orderId}</strong>
-                    {r.lastError ? <div className="fail">{r.lastError}</div> : null}
-                  </td>
-                  <td>{r.status}</td>
-                  <td>{r.omsAction}</td>
-                  <td>{r.mondayAction}</td>
-                  <td>{r.cin7Action}</td>
-                  <td>{r.runCount}</td>
-                  <td>
-                    <Form method="post" onSubmit={onMigrateSubmit}>
-                      <input type="hidden" name="intent" value="migrate" />
+          <>
+            <div className="mode-row" style={{ margin: "8px 0 12px", flexWrap: "wrap" }}>
+              {(["all", "failed", "partial", "success"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setReportFilter(f)}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 8,
+                    border: "1px solid #bec5cc",
+                    background: reportFilter === f ? "#1a1a1a" : "#fff",
+                    color: reportFilter === f ? "#fff" : "#1a1a1a",
+                    cursor: "pointer",
+                    textTransform: "capitalize",
+                  }}
+                >
+                  {f} ({f === "all" ? reports.length : reports.filter((r) => r.status === f).length})
+                </button>
+              ))}
+            </div>
+            {(() => {
+              const filtered = reportFilter === "all" ? reports : reports.filter((r) => r.status === reportFilter);
+              const retryIds = filtered.filter((r) => r.status === "failed" || r.status === "partial").map((r) => r.orderId);
+              return (
+                <>
+                  {retryIds.length ? (
+                    <Form method="post" onSubmit={onMigrateSubmit} style={{ marginBottom: 12 }}>
+                      <input type="hidden" name="intent" value="bulk" />
                       <input type="hidden" name="mode" value={mode} />
                       <input type="hidden" name="confirmFullRun" value="" />
-                      <input type="hidden" name="orderId" value={r.orderId} />
-                      <s-button type="submit" {...(busy ? { loading: true } : {})}>
-                        Sync again
-                      </s-button>
+                      <textarea name="orders" readOnly hidden value={retryIds.join("\n")} />
+                      <button type="submit" disabled={busy || allRunning} style={{ padding: "8px 14px", borderRadius: 8, border: "1px solid #b42318", background: "#b42318", color: "#fff", cursor: "pointer" }}>
+                        Sync {retryIds.length} failed/partial again
+                      </button>
                     </Form>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  ) : null}
+                  <table className="report-table">
+                    <thead>
+                      <tr>
+                        <th>Order</th>
+                        <th>Status</th>
+                        <th>OMS</th>
+                        <th>Monday</th>
+                        <th>Cin7</th>
+                        <th>Runs</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.map((r) => (
+                        <Fragment key={r.id}>
+                          <tr>
+                            <td>
+                              <strong>{r.orderName || r.orderId}</strong>
+                              {r.lastError ? <div className="fail">{r.lastError}</div> : null}
+                            </td>
+                            <td>{r.status}</td>
+                            <td>{r.omsAction}</td>
+                            <td>{r.mondayAction}</td>
+                            <td>{r.cin7Action}</td>
+                            <td>{r.runCount}</td>
+                            <td>
+                              <button type="button" onClick={() => setExpandedReport(expandedReport === r.id ? "" : r.id)} style={{ marginRight: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid #bec5cc", background: "#fff" }}>
+                                {expandedReport === r.id ? "Hide log" : "Log"}
+                              </button>
+                              <Form method="post" onSubmit={onMigrateSubmit} style={{ display: "inline" }}>
+                                <input type="hidden" name="intent" value="migrate" />
+                                <input type="hidden" name="mode" value={mode} />
+                                <input type="hidden" name="confirmFullRun" value="" />
+                                <input type="hidden" name="orderId" value={r.orderId} />
+                                <s-button type="submit" {...(busy ? { loading: true } : {})}>
+                                  Sync again
+                                </s-button>
+                              </Form>
+                            </td>
+                          </tr>
+                          {expandedReport === r.id ? (
+                            <tr>
+                              <td colSpan={7}>
+                                <div className="log">
+                                  {(r.steps || []).length ? (
+                                    r.steps.map((s, idx) => (
+                                      <div key={idx} className={s.ok ? "ok" : "fail"}>
+                                        {s.at ? `${s.at} ` : ""}[{s.step}] {s.ok ? "OK" : "FAIL"} {s.message}
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <div className="info">No step log saved for this report.</div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              );
+            })()}
+          </>
         ) : (
           <s-paragraph>No migrate reports yet.</s-paragraph>
         )}

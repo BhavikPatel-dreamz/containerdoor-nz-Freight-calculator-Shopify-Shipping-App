@@ -20,6 +20,7 @@ export async function action({ request }: ActionFunctionArgs) {
     mode?: "dry_run" | "full";
     after?: string | null;
     newestFirst?: boolean;
+    skipIds?: string[];
     countOnly?: boolean;
   };
 
@@ -36,6 +37,7 @@ export async function action({ request }: ActionFunctionArgs) {
     newestFirst,
     after,
     maxPages: 20,
+    skipIds: Array.isArray(body.skipIds) ? body.skipIds.map(String).slice(0, 2000) : [],
   });
 
   if ("error" in next) {
@@ -50,13 +52,31 @@ export async function action({ request }: ActionFunctionArgs) {
     });
   }
 
-  const one = await processShopifyOrder({
-    shop: session.shop,
-    admin,
-    shopifyOrderId: next.orderId,
-    sentBy: session.shop,
-    mode,
-  });
+  let one;
+  try {
+    one = await processShopifyOrder({
+      shop: session.shop,
+      admin,
+      shopifyOrderId: next.orderId,
+      sentBy: session.shop,
+      mode,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return Response.json({
+      ok: false,
+      done: false,
+      after: next.resumeAfter,
+      skippedCompleted: next.skippedCompleted,
+      order: {
+        id: next.orderId,
+        name: next.orderName,
+        ok: false,
+        error: message,
+        steps: [{ at: new Date().toISOString(), step: "error", ok: false, message }],
+      },
+    });
+  }
   const systems = summarizeSyncSystems(one);
 
   return Response.json({
