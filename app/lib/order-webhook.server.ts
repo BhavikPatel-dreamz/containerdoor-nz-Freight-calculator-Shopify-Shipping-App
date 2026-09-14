@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -1610,22 +1610,25 @@ export async function createMondayEntriesForOrder(
           },
         });
         mondayRowForColor = mondayRow;
-        let existingMondayId: string | null = null;
+        let existingMonday: { id: string; name: string } | null = null;
         try {
-          existingMondayId =
-            (await findMondayItemByName(itemName)) ||
-            (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName: order.name }));
+          existingMonday = await findMondayItemForLine({
+            orderName: order.name,
+            letterSuffix,
+            orderId,
+            sku: li.sku,
+          });
         } catch (lookupErr) {
           console.error(
             `[Monday][Webhook][${orderId}] lookup failed (will create) line ${letterSuffix}`,
             lookupErr,
           );
         }
-        if (existingMondayId) {
-          mondayItemId = existingMondayId;
+        if (existingMonday?.id) {
+          mondayItemId = existingMonday.id;
           linkedCount++;
           console.log(
-            `[Monday][Webhook][${orderId}] line ${letterSuffix} LINKED existing ${existingMondayId} name=${itemName}`,
+            `[Monday][Webhook][${orderId}] line ${letterSuffix} LINKED existing ${existingMonday.id} name=${existingMonday.name}`,
           );
         } else {
           mondayItemId = await createMondayItem(itemName, {
@@ -1643,21 +1646,34 @@ export async function createMondayEntriesForOrder(
           createdCount++;
         }
       } catch (err) {
-        failedCount++;
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push(`line ${letterSuffix}: ${msg}`);
-        console.error(
-          `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
-          err,
-        );
-        // Clear pending so a later sync can retry
-        await prisma.orderLineItemOperationalData
-          .update({
-            where: { id: ops.id },
-            data: { mondayItemId: "" },
-          })
-          .catch(() => {});
-        continue;
+        const retry = await findMondayItemForLine({
+          orderName: order.name,
+          letterSuffix,
+          orderId,
+          sku: li.sku,
+        }).catch(() => null);
+        if (retry?.id) {
+          mondayItemId = retry.id;
+          linkedCount++;
+          console.log(
+            `[Monday][Webhook][${orderId}] line ${letterSuffix} LINKED after create failed ${retry.id}`,
+          );
+        } else {
+          failedCount++;
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`line ${letterSuffix}: ${msg}`);
+          console.error(
+            `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
+            err,
+          );
+          await prisma.orderLineItemOperationalData
+            .update({
+              where: { id: ops.id },
+              data: { mondayItemId: "" },
+            })
+            .catch(() => {});
+          continue;
+        }
       }
 
       const carrierLabelUsed = mondayRowForColor

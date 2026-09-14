@@ -857,7 +857,40 @@ export async function findExistingMondayItemId(
   return null;
 }
 
+export function mondayPulseNameCandidates(
+  orderName?: string | null,
+  letterSuffix?: string | null,
+  fallbackOrderId?: string | null,
+): string[] {
+  const letter = String(letterSuffix || "").trim().toUpperCase();
+  let base = String(orderName || "").trim();
+  if (!base) base = String(fallbackOrderId || "").trim();
+  const stripped = base.replace(/^#/, "");
+  if (!stripped) return [];
+  const out = [
+    `#${stripped}${letter}`,
+    `${stripped}${letter}`,
+    `#${stripped}`,
+    stripped,
+  ];
+  return [...new Set(out.map((v) => v.trim()).filter(Boolean))];
+}
+
+function normalizeMondayPulseName(value?: string | null): string {
+  return String(value || "")
+    .trim()
+    .replace(/^#/, "")
+    .toLowerCase();
+}
+
 export async function findMondayItemByName(itemName: string): Promise<string | null> {
+  const found = await findMondayItemByNameDetailed(itemName);
+  return found?.id || null;
+}
+
+export async function findMondayItemByNameDetailed(
+  itemName: string,
+): Promise<{ id: string; name: string } | null> {
   const name = String(itemName || "").trim();
   if (!name) return null;
   const boardId = process.env.MONDAY_BOARD_ID;
@@ -877,16 +910,40 @@ export async function findMondayItemByName(itemName: string): Promise<string | n
           }
         }
       }`,
-      { boardId: [boardId], term: [name] },
+      { boardId: [boardId], term: [name.replace(/^#/, "")] },
     );
     const items = data?.boards?.[0]?.items_page?.items ?? [];
-    const exact = items.find((item: any) => String(item?.name || "").trim() === name);
-    if (exact?.id) return String(exact.id);
-    const starts = items.find((item: any) => String(item?.name || "").trim().startsWith(name));
-    if (starts?.id) return String(starts.id);
+    const want = normalizeMondayPulseName(name);
+    const exact = items.find((item: any) => normalizeMondayPulseName(item?.name) === want);
+    if (exact?.id) return { id: String(exact.id), name: String(exact.name || name) };
+    const withLetter = items.find((item: any) => {
+      const n = normalizeMondayPulseName(item?.name);
+      return n === want || n.startsWith(want);
+    });
+    if (withLetter?.id) return { id: String(withLetter.id), name: String(withLetter.name || name) };
   } catch (err) {
     console.error("[Monday] findMondayItemByName failed", name, err);
   }
+  return null;
+}
+
+/** Find an existing pulse for one operational line (name variants + SKU). */
+export async function findMondayItemForLine(input: {
+  orderName?: string | null;
+  letterSuffix?: string | null;
+  orderId?: string | null;
+  sku?: string | null;
+}): Promise<{ id: string; name: string } | null> {
+  const names = mondayPulseNameCandidates(input.orderName, input.letterSuffix, input.orderId);
+  for (const name of names) {
+    const hit = await findMondayItemByNameDetailed(name);
+    if (hit?.id) return hit;
+  }
+  const skuId = await findMondayItemBySkuAndOrderName({
+    sku: input.sku,
+    orderName: input.orderName,
+  });
+  if (skuId) return { id: skuId, name: names[0] || String(input.orderName || "") };
   return null;
 }
 
@@ -904,8 +961,10 @@ export async function findMondayItemBySkuAndOrderName(input: {
     const items = await findMondayItemsByColumnValue(colIds.sku, sku);
     if (!items.length) return null;
     if (orderName) {
-      const needle = orderName.startsWith("#") ? orderName : `#${orderName}`;
-      const named = items.find((item: any) => String(item?.name || "").includes(needle.replace(/^#/, "")));
+      const needle = orderName.replace(/^#/, "");
+      const named = items.find((item: any) =>
+        normalizeMondayPulseName(item?.name).includes(needle.toLowerCase()),
+      );
       if (named?.id) return String(named.id);
     }
     if (items.length === 1 && items[0]?.id) return String(items[0].id);

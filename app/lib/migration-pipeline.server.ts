@@ -32,7 +32,7 @@ import {
 } from "./order-webhook.server";
 import { isLinkedCin7Id, buildCin7SalesOrderReference } from "./cin7-adapter.server";
 import { findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
-import { buildMondayPulseName, findMondayItemByName, findMondayItemBySkuAndOrderName } from "./monday.server";
+import { buildMondayPulseName, findMondayItemForLine } from "./monday.server";
 import { appendMigrationStepLog } from "./migration-run.server";
 
 export const MIGRATION_STEPS = [
@@ -578,10 +578,13 @@ async function runDryOrderPipeline(input: RunOrderPipelineInput): Promise<OrderP
       for (const [idx, li] of opLines.entries()) {
         const letterSuffix = LETTERS[idx % 26];
         const itemName = buildMondayPulseName(orderName, letterSuffix, orderId);
-        const existingId =
-          (await findMondayItemByName(itemName)) ||
-          (await findMondayItemBySkuAndOrderName({ sku: li.sku, orderName }));
-        if (existingId) monday.linked++;
+        const existing = await findMondayItemForLine({
+          orderName,
+          letterSuffix,
+          orderId,
+          sku: li.sku,
+        });
+        if (existing?.id) monday.linked++;
         else monday.created++;
       }
       return {
