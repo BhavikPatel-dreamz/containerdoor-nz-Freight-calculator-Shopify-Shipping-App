@@ -1182,7 +1182,11 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       );
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
 
-      const existingMatch = pickCin7MatchForLine(existingCin7, { reference, sku });
+      const existingMatch = pickCin7MatchForLine(existingCin7, {
+        reference,
+        sku,
+        orderName: order.name,
+      });
       if (existingMatch?.id) {
         await saveCin7LineLink({
           shop,
@@ -1264,7 +1268,12 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           currencyCode,
           customerOrderNo,
           internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
-          taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
+          taxRate: (() => {
+            const fromShopify = Number(order.tax_lines?.[0]?.rate ?? 0) * 100;
+            if (fromShopify > 0) return fromShopify;
+            if (order.taxes_included) return Number((ourGstRate * 100).toFixed(2));
+            return fromShopify;
+          })(),
           taxStatus: order.taxes_included ? "Incl" : "Excl",
           // Freight for THIS line, split from the real checkout freight
           // amount (`freightLine.price`). Attempts to weight by boxes; if
@@ -1341,29 +1350,29 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           );
         }
       } catch (e: any) {
+        const retryMatch =
+          pickCin7MatchForLine(existingCin7, { reference, sku, orderName: order.name }) ||
+          pickCin7MatchForLine(
+            await findCin7SalesOrdersForShopifyOrder({ orderName: order.name, orderId, reference }),
+            { reference, sku, orderName: order.name },
+          );
+        if (retryMatch?.id) {
+          await saveCin7LineLink({
+            shop,
+            orderId,
+            variantId: li.variantId,
+            salesOrderId: retryMatch.id,
+            salesOrderCode: retryMatch.code || "",
+            salesOrderRef: retryMatch.reference || reference,
+            mirrorToOrder: true,
+          });
+          linked++;
+          console.log(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing after create failed id=${retryMatch.id} err=${e?.message || e}`,
+          );
+          continue;
+        }
         if (e?.isDuplicate) {
-          const retryMatch =
-            pickCin7MatchForLine(existingCin7, { reference, sku }) ||
-            pickCin7MatchForLine(
-              await findCin7SalesOrdersForShopifyOrder({ orderName: order.name, orderId, reference }),
-              { reference, sku },
-            );
-          if (retryMatch?.id) {
-            await saveCin7LineLink({
-              shop,
-              orderId,
-              variantId: li.variantId,
-              salesOrderId: retryMatch.id,
-              salesOrderCode: retryMatch.code || "",
-              salesOrderRef: retryMatch.reference || reference,
-              mirrorToOrder: true,
-            });
-            linked++;
-            console.log(
-              `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED after duplicate id=${retryMatch.id}`,
-            );
-            continue;
-          }
           failed++;
           await prisma.orderLineItemOperationalData.update({
             where: { id: ops.id },
@@ -1461,7 +1470,12 @@ async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): 
       freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
       discountTotal: Number(order.total_discounts ?? 0),
       discountDescription: order.discount_codes?.[0]?.code ?? "",
-      taxRate: Number(order.tax_lines?.[0]?.rate ?? 0) * 100,
+      taxRate: (() => {
+        const fromShopify = Number(order.tax_lines?.[0]?.rate ?? 0) * 100;
+        if (fromShopify > 0) return fromShopify;
+        if (order.taxes_included) return 15;
+        return fromShopify;
+      })(),
       taxStatus: order.taxes_included ? "Incl" : "Excl",
       lineItems,
     });

@@ -347,7 +347,9 @@ export function cin7CustomerOrderNoCandidates(orderName?: string | null, orderId
   const id = String(orderId || "").trim();
   const withHash = raw ? (raw.startsWith("#") ? raw : `#${raw}`) : "";
   const withoutHash = withHash.replace(/^#/, "");
-  const out = [withHash, withoutHash, raw, id].map((v) => v.trim()).filter(Boolean);
+  const out = [withHash, withoutHash, raw].map((v) => v.trim()).filter(Boolean);
+  // Shopify numeric ids are not historical Cin7 order numbers.
+  if (id && id.length < 12) out.push(id);
   return [...new Set(out)];
 }
 
@@ -366,27 +368,60 @@ export async function findCin7SalesOrdersForShopifyOrder(input: {
     }
   };
 
-  const ref = String(input.reference || "").trim();
-  if (ref) add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(ref)}'`));
+  const keys = cin7CustomerOrderNoCandidates(input.orderName, input.orderId);
+  const extraRef = String(input.reference || "").trim();
+  const refKeys = [...keys];
+  if (extraRef) {
+    refKeys.push(extraRef, extraRef.replace(/^#/, ""), extraRef.startsWith("#") ? extraRef : `#${extraRef}`);
+  }
+  // Historical Cin7 SOs often used the order number as `reference` (no line letter).
+  for (const key of [...new Set(refKeys.filter(Boolean))]) {
+    add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(key)}'`));
+  }
 
-  for (const key of cin7CustomerOrderNoCandidates(input.orderName, input.orderId)) {
+  for (const key of keys) {
     add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(key)}'`));
   }
 
   return out;
 }
 
+function normalizeCin7Ref(value?: string | null): string {
+  return String(value || "")
+    .trim()
+    .replace(/^#/, "")
+    .replace(/[A-Z]$/i, "")
+    .toLowerCase();
+}
+
 export function pickCin7MatchForLine(
   candidates: Cin7SalesOrderMatch[],
-  input: { reference?: string | null; sku?: string | null },
+  input: { reference?: string | null; sku?: string | null; orderName?: string | null },
 ): Cin7SalesOrderMatch | null {
   if (!candidates.length) return null;
   const reference = String(input.reference || "").trim();
   const sku = String(input.sku || "").trim().toLowerCase();
+  const orderKey = normalizeCin7Ref(input.orderName || reference);
 
   if (reference) {
     const byRef = candidates.find((c) => String(c.reference || "").trim() === reference);
     if (byRef) return byRef;
+    const byRefNorm = candidates.find((c) => normalizeCin7Ref(c.reference) === normalizeCin7Ref(reference));
+    if (byRefNorm) return byRefNorm;
+  }
+
+  if (orderKey) {
+    const byOrderRef = candidates.filter((c) => {
+      const ref = normalizeCin7Ref(c.reference);
+      const cust = normalizeCin7Ref(c.customerOrderNo);
+      return ref === orderKey || cust === orderKey;
+    });
+    if (byOrderRef.length === 1) return byOrderRef[0];
+    if (byOrderRef.length > 1 && sku) {
+      const skuHit = byOrderRef.find((c) => c.lineSkus.some((code) => code.toLowerCase() === sku));
+      if (skuHit) return skuHit;
+    }
+    if (byOrderRef.length === 1 || (byOrderRef.length > 1 && !sku)) return byOrderRef[0];
   }
 
   if (sku) {

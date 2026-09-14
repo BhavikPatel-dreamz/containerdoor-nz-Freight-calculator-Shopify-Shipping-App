@@ -551,7 +551,7 @@ async function runDryOrderPipeline(input: RunOrderPipelineInput): Promise<OrderP
           orderId,
           variantId: li.variantId,
         });
-        const match = pickCin7MatchForLine(existing, { reference, sku: li.sku });
+        const match = pickCin7MatchForLine(existing, { reference, sku: li.sku, orderName });
         if (match?.id) cin7.linked++;
         else if (!String(li.sku || "").trim()) cin7.skipped++;
         else cin7.created++;
