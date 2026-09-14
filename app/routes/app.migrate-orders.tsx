@@ -188,6 +188,7 @@ export default function MigrateOrdersPage() {
   const busy = nav.state !== "idle";
   const hits = data && "hits" in data ? data.hits : [];
   const results = data && "results" in data ? data.results : [];
+  const [mode, setMode] = useState<"dry_run" | "full">("full");
   const [allRunning, setAllRunning] = useState(false);
   const [allConfirm, setAllConfirm] = useState(false);
   const [allProgress, setAllProgress] = useState({
