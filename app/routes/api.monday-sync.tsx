@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
-import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, renameMondayItem, buildMondayRowFromOms, summarizeMondayRow } from "../lib/monday.server";
+import { createMondayItem, updateMondayItem, fetchMondayItem, createMondayUpdate, isStaleMondayItemError, fetchMondayUpdates, renameMondayItem, buildMondayRowFromOms, summarizeMondayRow, syncMondayBundleSubitems } from "../lib/monday.server";
 import { normalizePaymentStatus } from "../lib/freight-orders.server";
 
 function getCorsHeaders(request: Request) {
@@ -74,10 +74,12 @@ export async function action({ request }: ActionFunctionArgs) {
   console.log("[Monday][Sync] Resolved pulse name:", itemName);
 
   let mondayItemId = existing.mondayItemId;
+  let mondayParentCreated = false;
 
   if (!mondayItemId) {
     console.log("[Monday][Sync] No mondayItemId yet, creating new item");
     mondayItemId = await createMondayItem(itemName, fullRow);
+    mondayParentCreated = true;
     await prisma.orderLineItemOperationalData.update({
       where: { shop_orderId_variantId: { shop, orderId, variantId } },
       data: { mondayItemId, mondayItemName: itemName },
@@ -149,6 +151,7 @@ export async function action({ request }: ActionFunctionArgs) {
       if (isStaleMondayItemError(updateError)) {
         console.log(`[Monday][Sync] Stale/inactive mondayItemId ${mondayItemId}, creating a fresh item`);
         mondayItemId = await createMondayItem(itemName, fullRow);
+        mondayParentCreated = true;
         await prisma.orderLineItemOperationalData.update({
           where: { shop_orderId_variantId: { shop, orderId, variantId } },
           data: { mondayItemId, mondayItemName: itemName, notesPushedCount: 0 },
@@ -156,6 +159,38 @@ export async function action({ request }: ActionFunctionArgs) {
       } else {
         throw updateError;
       }
+    }
+  }
+
+  const bundleComponents = await prisma.bundleComponent.findMany({
+    where: { shop, orderId, parentVariantId: variantId },
+    select: { componentSku: true, componentTitle: true, componentQuantity: true },
+    orderBy: { componentLineItemId: "asc" },
+  });
+  console.log(
+    `[Monday][Sync] BundleComponent query shop=${shop} orderId=${orderId} parentVariantId=${variantId} count=${bundleComponents.length}`,
+  );
+  if (bundleComponents.length) {
+    let parentMatchesOrder = mondayParentCreated;
+    if (!mondayParentCreated && mondayItemId) {
+      const parent = await fetchMondayItem(mondayItemId);
+      parentMatchesOrder = parent?.name === itemName;
+    }
+    console.log(
+      `[Monday][Sync] Bundle parent resolved id=${mondayItemId} newlyCreated=${mondayParentCreated} matchesOrder=${parentMatchesOrder}`,
+    );
+    if (parentMatchesOrder && fullRow.lineOrderName === itemName) {
+      console.log(
+        `[Monday][Sync] Calling syncMondayBundleSubitems parent=${mondayItemId} components=${bundleComponents.length}`,
+      );
+      const subitemResult = await syncMondayBundleSubitems(mondayItemId, bundleComponents);
+      console.log(
+        `[Monday][Sync] Bundle subitems synced parent=${mondayItemId} created=${subitemResult.created} updated=${subitemResult.updated}`,
+      );
+    } else {
+      console.warn(
+        `[Monday][Sync] Skipping bundle subitems parent=${mondayItemId} matchesOrder=${parentMatchesOrder} lineOrderName=${fullRow.lineOrderName} itemName=${itemName}`,
+      );
     }
   }
 

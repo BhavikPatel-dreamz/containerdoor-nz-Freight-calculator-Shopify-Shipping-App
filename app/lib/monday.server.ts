@@ -1020,6 +1020,98 @@ export async function createMondayItem(itemName: string, row: MondayRow) {
   return data.create_item.id as string;
 }
 
+export type MondayBundleComponent = {
+  componentSku: string;
+  componentTitle: string;
+  componentQuantity: number;
+};
+
+export function buildMondayBundleSubitemName(component: MondayBundleComponent): string {
+  const sku = String(component.componentSku || "").trim();
+  const title = String(component.componentTitle || "").trim();
+  return [sku, title].filter(Boolean).join(" - ") || "Bundle component";
+}
+
+async function buildMondayBundleSubitemValues(component: MondayBundleComponent) {
+  const columnIds = await getOrCreateColumnIds();
+  const values: Record<string, string | number> = {};
+  if (columnIds.productTitle && component.componentTitle) {
+    values[columnIds.productTitle] = component.componentTitle;
+  }
+  if (columnIds.sku && component.componentSku) {
+    values[columnIds.sku] = component.componentSku;
+  }
+  if (columnIds.boxes) {
+    values[columnIds.boxes] = Number(component.componentQuantity) || 0;
+  }
+  return values;
+}
+
+/** Create or update display-only bundle component subitems beneath a parent pulse. */
+export async function syncMondayBundleSubitems(
+  parentItemId: string,
+  components: MondayBundleComponent[],
+): Promise<{ created: number; updated: number }> {
+  const parentId = String(parentItemId || "").trim();
+  if (!parentId || parentId === "pending" || !components.length) {
+    return { created: 0, updated: 0 };
+  }
+
+  const existingData = await mondayRequest(
+    `query ($itemIds: [ID!]) {
+      items(ids: $itemIds) {
+        subitems { id name }
+      }
+    }`,
+    { itemIds: [parentId] },
+  );
+  const existingByName = new Map<string, Array<{ id: string; name: string }>>();
+  for (const item of existingData?.items?.[0]?.subitems ?? []) {
+    const name = String(item?.name || "").trim();
+    if (!item?.id || !name) continue;
+    const matches = existingByName.get(name) ?? [];
+    matches.push({ id: String(item.id), name });
+    existingByName.set(name, matches);
+  }
+
+  let created = 0;
+  let updated = 0;
+  for (const component of components) {
+    const name = buildMondayBundleSubitemName(component);
+    const values = await buildMondayBundleSubitemValues(component);
+    const existing = existingByName.get(name)?.shift();
+    if (existing) {
+      await mondayRequest(
+        `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+          change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id }
+        }`,
+        {
+          boardId: process.env.MONDAY_BOARD_ID,
+          itemId: existing.id,
+          columnValues: JSON.stringify(values),
+        },
+      );
+      updated++;
+      continue;
+    }
+
+    await mondayRequest(
+      `mutation ($parentItemId: ID!, $itemName: String!, $columnValues: JSON!) {
+        create_subitem(parent_item_id: $parentItemId, item_name: $itemName, column_values: $columnValues) { id }
+      }`,
+      {
+        parentItemId: parentId,
+        itemName: name,
+        columnValues: JSON.stringify(values),
+      },
+    );
+    created++;
+  }
+
+  console.log(`[Monday] Bundle subitems synced parent=${parentId} created=${created} updated=${updated}`);
+  return { created, updated };
+}
+
 export async function updateMondayItem(itemId: string, row: MondayRow) {
   console.log("[Monday] updateMondayItem called:", itemId, row);
   const query = `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
@@ -1127,7 +1219,7 @@ async function fetchColumnChangedAt(
 export async function fetchMondayItem(itemId: string) {
   const colIds = await getOrCreateColumnIds();
   const query = `query ($itemId: [ID!]) {
-    items(ids: $itemId) { id state column_values { id text value } }
+    items(ids: $itemId) { id name state column_values { id text value } }
   }`;
   const data = await mondayRequest(query, { itemId: [itemId] });
   const item = data.items?.[0];
@@ -1161,6 +1253,7 @@ export async function fetchMondayItem(itemId: string) {
   );
 
   return {
+    name: String(item.name || ""),
     customerStatus: getText("customerStatus"),
     statusChangedAt: getChangedAt("customerStatus"),
     carriers: getText("carriers"),
