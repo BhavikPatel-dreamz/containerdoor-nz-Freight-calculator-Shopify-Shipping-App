@@ -1552,18 +1552,20 @@ async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): 
   console.log(`[Cin7][Webhook][${orderId}] START grouped (legacy) for order ${order.name}`);
 
   try {
-    let claimed = false;
-    try {
-      await prisma.orderOperationalData.create({
-        data: { shop, orderId, cin7SalesOrderId: "pending" },
-      });
-      claimed = true;
-      console.log(`[Cin7][Webhook][${orderId}] Claimed row`);
-    } catch {
-      console.log(`[Cin7][Webhook][${orderId}] SKIP - already claimed`);
-      return { created: 0, linked: 0, skipped: 1, failed: 0 };
+    const existingOps = await prisma.orderOperationalData.findUnique({
+      where: { shop_orderId: { shop, orderId } },
+      select: { cin7SalesOrderId: true },
+    });
+    if (isLinkedCin7Id(existingOps?.cin7SalesOrderId)) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - already linked id=${existingOps?.cin7SalesOrderId}`);
+      return { created: 0, linked: 1, skipped: 0, failed: 0 };
     }
-    if (!claimed) return { created: 0, linked: 0, skipped: 1, failed: 0 };
+    await prisma.orderOperationalData.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      create: { shop, orderId, cin7SalesOrderId: "pending" },
+      update: { cin7SalesOrderId: "pending" },
+    });
+    console.log(`[Cin7][Webhook][${orderId}] Claimed row for creation`);
 
     const lineItems = (order.line_items ?? [])
       .map((li) => ({
