@@ -64,7 +64,14 @@ function groupParentVariantId(group: any): string {
 }
 
 function groupParentLineId(group: any): string {
-  return asId(group?.parentLineItemId ?? group?.parent_line_item_id ?? group?.lineItemId ?? group?.line_item_id);
+  return asId(
+    group?.parentLineItemId ??
+      group?.parent_line_item_id ??
+      group?.parentLineItem?.id ??
+      group?.parent_line_item?.id ??
+      group?.lineItemId ??
+      group?.line_item_id,
+  );
 }
 
 function unitPrice(line: any): number {
@@ -252,6 +259,9 @@ export async function attachBundleRelationships(
   );
   const json = await response.json();
   const nodes = json?.data?.order?.lineItems?.nodes;
+  console.log(
+    `[Bundle][Hydration][${String(order.id)}] GraphQL groups=${Array.isArray(nodes) ? nodes.filter((node: any) => Boolean(node?.lineItemGroup ?? node?.groupedBy)).length : 0}`,
+  );
   if (!Array.isArray(nodes)) return;
   const byId = new Map(allLines(order).map((line) => [lineId(line), line]));
   for (const node of nodes) {
@@ -262,12 +272,22 @@ export async function attachBundleRelationships(
     if (!line) continue;
     line.lineItemGroup = {
       id: relationship.id,
-      parentLineItemId: relationship.parentLineItemId,
+      parentLineItemId:
+        relationship.parentLineItemId ??
+        relationship.parent_line_item_id ??
+        relationship.parentLineItem?.id ??
+        relationship.parent_line_item?.id,
       parentVariantId: relationship.parentVariantId ?? relationship.variantId ?? relationship.variant?.id,
       parentProductId: relationship.parentProductId ?? relationship.productId ?? relationship.variant?.product?.id,
       parentSku: relationship.parentSku ?? relationship.variantSku ?? relationship.sku ?? relationship.variant?.sku ?? "",
       parentTitle: relationship.parentTitle ?? relationship.title ?? "",
     };
+  }
+  const hydratedGroups = getBundleGroups(order);
+  for (const group of hydratedGroups.values()) {
+    console.log(
+      `[Bundle][Hydration][${String(order.id)}] parent=${group.parentVariantId} components=${group.components.length}`,
+    );
   }
 }
 

@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -634,8 +634,32 @@ export async function refreshOrderSnapshotForWebhook(shop: string, order: OrderP
   } catch (error) {
     console.error(`[BundleHydrate][${String(order.id ?? "")}] failed for shop ${shop}:`, error);
   }
+  if (getBundleGroups(order).size) {
+    await saveBundleComponents(shop, order);
+  }
   await saveOrderSnapshot(shop, order);
   await reindexOrderById(shop, String(order.id ?? ""));
+
+  // Updated/paid webhooks can arrive after a previous bundle write left stale
+  // component operational rows behind. Reconcile only bundle orders: the
+  // existing create path already uses the same customer-facing line filter,
+  // while normal orders must retain their historical refresh behavior.
+  const bundleGroups = getBundleGroups(order);
+  if (bundleGroups.size) {
+    await createOrderLineItemRecords(shop, order);
+    const componentVariantIds = [...bundleGroups.values()]
+      .flatMap((group) => group.components.map((component) => component.variantId))
+      .filter(Boolean);
+    if (componentVariantIds.length) {
+      await prisma.orderLineItemOperationalData.deleteMany({
+        where: {
+          shop,
+          orderId: String(order.id ?? ""),
+          variantId: { in: componentVariantIds },
+        },
+      });
+    }
+  }
 }
 
 export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
@@ -989,10 +1013,12 @@ export async function ingestShopifyOrderIntoOms(
   order: OrderPayload,
   admin: { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
 ) {
+  if (getBundleGroups(order).size) {
+    await saveBundleComponents(shop, order);
+  }
   await saveOrderSnapshot(shop, order);
   await reindexOrderById(shop, String(order.id ?? ""));
   await createOrderLineItemRecords(shop, order);
-  await saveBundleComponents(shop, order);
   await backfillOrderDepotData(shop, String(order.id ?? ""));
   await writeFreightMetafield(admin, order);
 }
@@ -1000,12 +1026,19 @@ export async function ingestShopifyOrderIntoOms(
 async function saveBundleComponents(shop: string, order: OrderPayload): Promise<void> {
   const orderId = String(order.id ?? "");
   const rows = bundleComponentRows(order);
-  await prisma.bundleComponent.deleteMany({ where: { shop, orderId } });
-  if (!rows.length) return;
-  await prisma.bundleComponent.createMany({
-    data: rows.map((row) => ({ shop, orderId, ...row })) as any,
-    skipDuplicates: true,
-  });
+  console.log(`[Bundle][Persist][${orderId}] attempting BundleComponent upsert count=${rows.length}`);
+  try {
+    await prisma.bundleComponent.deleteMany({ where: { shop, orderId } });
+    if (!rows.length) return;
+    await prisma.bundleComponent.createMany({
+      data: rows.map((row) => ({ shop, orderId, ...row })) as any,
+      skipDuplicates: true,
+    });
+    console.log(`[Bundle][Persist][${orderId}] success count=${rows.length}`);
+  } catch (error) {
+    console.error(`[Bundle][Persist][${orderId}] ERROR`, error);
+    throw error;
+  }
 }
 
 type OperationalLine = {
@@ -1620,6 +1653,7 @@ export async function createMondayEntriesForOrder(
     let skippedCount = 0;
     let failedCount = 0;
     const errors: string[] = [];
+    const isBundle = getBundleGroups(order).size > 0;
 
     for (const [idx, li] of breakdownLines.entries()) {
       if (!li.variantId) {
@@ -1673,6 +1707,16 @@ export async function createMondayEntriesForOrder(
           });
         } catch (e) {
           console.error(`[Monday][Webhook][${orderId}] rename existing failed`, e);
+        }
+        if (isBundle) {
+          const components = await prisma.bundleComponent.findMany({
+            where: { shop, orderId, parentVariantId: li.variantId },
+            select: { componentSku: true, componentTitle: true, componentQuantity: true },
+            orderBy: { componentLineItemId: "asc" },
+          });
+          await syncMondayBundleSubitems(ops.mondayItemId, components).catch((error) => {
+            console.error(`[Monday][Webhook][${orderId}] bundle subitems sync failed`, error);
+          });
         }
         skippedCount++;
         continue;
@@ -1810,6 +1854,17 @@ export async function createMondayEntriesForOrder(
           `[Monday][Webhook][${orderId}] Monday item created (${mondayItemId}) but DB update FAILED for variant ${li.variantId}`,
           dbErr,
         );
+      }
+
+      if (isBundle) {
+        const components = await prisma.bundleComponent.findMany({
+          where: { shop, orderId, parentVariantId: li.variantId },
+          select: { componentSku: true, componentTitle: true, componentQuantity: true },
+          orderBy: { componentLineItemId: "asc" },
+        });
+        await syncMondayBundleSubitems(mondayItemId, components).catch((error) => {
+          console.error(`[Monday][Webhook][${orderId}] bundle subitems sync failed`, error);
+        });
       }
     }
 
