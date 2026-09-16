@@ -617,6 +617,27 @@ export function buildDepotCollectionTitle(
   return `${base || "Depot Collection"} – ${depotName}`;
 }
 
+/**
+ * Bundle-safe snapshot refresh for the orders/updated and orders/paid webhooks.
+ *
+ * Those REST webhooks deliver a payload WITHOUT GraphQL bundle relationships, so
+ * a naive saveOrderSnapshot + reindex would collapse nothing and overwrite the
+ * correct single parent line with the raw physical component lines. Hydrate the
+ * payload first (same attachBundleRelationships the orders/create route uses).
+ * Fails closed: on hydration error, saveOrderSnapshot's own preserve guard keeps
+ * an already-collapsed bundle snapshot intact instead of reverting to components.
+ */
+export async function refreshOrderSnapshotForWebhook(shop: string, order: OrderPayload): Promise<void> {
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+    await attachBundleRelationships(admin, order);
+  } catch (error) {
+    console.error(`[BundleHydrate][${String(order.id ?? "")}] failed for shop ${shop}:`, error);
+  }
+  await saveOrderSnapshot(shop, order);
+  await reindexOrderById(shop, String(order.id ?? ""));
+}
+
 export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   const shipping = getShippingAddress(order);
@@ -645,22 +666,46 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     bundleGroupId: (li as any).bundleGroupId ?? "",
   }));
 
+  // Bundle safety net: if the incoming payload is NOT bundle-aware (a raw
+  // orders/updated|orders/paid REST payload whose hydration failed or found
+  // nothing) but the existing snapshot ALREADY collapsed this bundle to a
+  // single customer-facing parent line, keep that collapsed line wholesale.
+  // Never let an unhydrated payload rewrite the snapshot back to component
+  // lines. Non-bundle orders are unaffected (their existing snapshot has no
+  // isBundleParent line, so the normal path below still runs).
+  let lineItemsForJsonEnriched: unknown[] = [];
+  if (getBundleGroups(order).size === 0) {
+    try {
+      const existing = await prisma.orderSnapshot.findUnique({
+        where: { shop_orderId: { shop, orderId } },
+        select: { lineItemsJson: true },
+      });
+      const parsed = JSON.parse(existing?.lineItemsJson ?? "[]");
+      const collapsed = Array.isArray(parsed) && parsed.some((li: any) => li?.isBundleParent);
+      if (collapsed) lineItemsForJsonEnriched = parsed;
+    } catch {
+      // Fall through to normal (raw) snapshot write; secondary hydration path.
+    }
+  }
+
   // Per-line freight amounts (from the shipping-code breakdown, mapped by
   // variantId). Individual order line data, additive to lineItemsJson.
-  const freightLineAmounts = buildFreightLineItemAmounts(freightLine?.code, order.line_items);
-  const lineItemAmountByVariant = new Map(
-    freightLineAmounts.map((f) => [f.variantId, f]),
-  );
-  const lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
-    const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
-    return {
-      ...li,
-      unitPrice: freight?.unitPrice ?? 0,
-      productAmount: freight?.productAmount ?? 0,
-      freightAmount: freight?.freightAmount ?? 0,
-      individualTotal: freight?.individualTotal ?? 0,
-    };
-  });
+  if (!lineItemsForJsonEnriched.length) {
+    const freightLineAmounts = buildFreightLineItemAmounts(freightLine?.code, order.line_items);
+    const lineItemAmountByVariant = new Map(
+      freightLineAmounts.map((f) => [f.variantId, f]),
+    );
+    lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
+      const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
+      return {
+        ...li,
+        unitPrice: freight?.unitPrice ?? 0,
+        productAmount: freight?.productAmount ?? 0,
+        freightAmount: freight?.freightAmount ?? 0,
+        individualTotal: freight?.individualTotal ?? 0,
+      };
+    });
+  }
 
   try {
     await prisma.orderSnapshot.upsert({

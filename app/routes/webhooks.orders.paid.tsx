@@ -1,7 +1,6 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
-import { type OrderPayload, saveOrderSnapshot, attemptCreatePaymentsForOrder } from "../lib/order-webhook.server";
-import { reindexOrderById } from "../lib/line-index.server";
+import { type OrderPayload, refreshOrderSnapshotForWebhook, attemptCreatePaymentsForOrder } from "../lib/order-webhook.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
@@ -20,8 +19,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       console.log(`[Cin7PaymentWebhook] current_subtotal_price=${String((order as any).current_subtotal_price ?? "")}`);
       console.log(`[Cin7PaymentWebhook] subtotal_price=${String((order as any).subtotal_price ?? "")}`);
     } catch (e) {}
-    await saveOrderSnapshot(shop, order);
-    await reindexOrderById(shop, String(order.id));
+    await refreshOrderSnapshotForWebhook(shop, order);
     // Attempt payment-only processing triggered by orders/paid
     try {
       console.log(`[Cin7PaymentWebhook] calling payment retry orderId=${String(order.id)}`);

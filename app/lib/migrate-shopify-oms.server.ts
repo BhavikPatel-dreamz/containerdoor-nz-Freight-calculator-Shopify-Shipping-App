@@ -242,7 +242,7 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
         lineItemGroup: li?.lineItemGroup
           ? {
               id: li.lineItemGroup.id,
-              parentLineItemId: li.lineItemGroup.id,
+              parentLineItemId: li.lineItemGroup.parentLineItemId,
               parentVariantId: li.lineItemGroup.variantId,
               parentProductId: li.lineItemGroup.productId,
               parentSku: li.lineItemGroup.variantSku,
