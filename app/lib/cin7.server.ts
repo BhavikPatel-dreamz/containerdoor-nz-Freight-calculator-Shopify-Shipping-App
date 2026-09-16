@@ -35,6 +35,20 @@ export function getCin7AuthHeader(): string {
   return "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
 }
 
+async function fetchCin7WithRateLimit(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(url, init);
+    if (response.status !== 429 || attempt === 2) return response;
+
+    const retryAfter = Number(response.headers.get("retry-after") || 0);
+    const waitMs = retryAfter > 0 ? retryAfter * 1000 : 60_000;
+    debug("Cin7", `Rate limited; waiting ${waitMs}ms before retry ${attempt + 2}/3`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  throw new Error("Cin7 rate-limit retry failed");
+}
+
 export type Cin7LineItem = {
   code: string; // Product SKU — Cin7 matches an existing product by this
   name?: string;
@@ -313,7 +327,7 @@ async function queryCin7SalesOrders(where: string): Promise<Cin7SalesOrderMatch[
     "id,code,reference,customerOrderNo,lineItems",
   )}&rows=50`;
   try {
-    const res = await fetch(url, {
+    const res = await fetchCin7WithRateLimit(url, {
       method: "GET",
       headers: { Authorization: getCin7AuthHeader() },
     });
@@ -771,7 +785,7 @@ export async function createCin7SalesOrder(
 
   debug("Cin7", "POST SalesOrder", body);
 
-  const res = await fetch(CIN7_API_URL, {
+  const res = await fetchCin7WithRateLimit(CIN7_API_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
