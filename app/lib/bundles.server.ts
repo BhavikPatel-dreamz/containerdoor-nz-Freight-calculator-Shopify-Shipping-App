@@ -262,7 +262,7 @@ export async function attachBundleRelationships(
     if (!line) continue;
     line.lineItemGroup = {
       id: relationship.id,
-      parentLineItemId: relationship.parentLineItemId ?? relationship.id,
+      parentLineItemId: relationship.parentLineItemId,
       parentVariantId: relationship.parentVariantId ?? relationship.variantId ?? relationship.variant?.id,
       parentProductId: relationship.parentProductId ?? relationship.productId ?? relationship.variant?.product?.id,
       parentSku: relationship.parentSku ?? relationship.variantSku ?? relationship.sku ?? relationship.variant?.sku ?? "",
