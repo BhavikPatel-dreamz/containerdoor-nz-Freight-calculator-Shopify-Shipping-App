@@ -15,6 +15,14 @@ import {
   saveCin7LineLink,
   resolveCin7SalesOrderId,
 } from "./cin7-adapter.server";
+import {
+  attachBundleRelationships,
+  buildBundleCin7LineItems,
+  bundleComponentRows,
+  getBundleComponentVariantIds,
+  getBundleGroups,
+  getCustomerFacingLineItems,
+} from "./bundles.server";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -83,6 +91,8 @@ export type OrderPayload = {
     price?: string | number;
     price_set?: { presentment_money?: { amount?: string; currency_code?: string } };
     properties?: Array<{ name?: string; value?: string }>;
+    lineItemGroup?: any;
+    groupedBy?: any;
   }>;
 };
 
@@ -621,7 +631,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     ? buildDepotCollectionTitle(freightLine?.title ?? "", selectedDepot)
     : (freightLine?.title ?? "");
 
-  const lineItemsForJson = (order.line_items ?? []).map((li) => ({
+  const lineItemsForJson = getCustomerFacingLineItems(order).map((li) => ({
     id: li.id,
     variantId: (li as any).variant_id,
     productId: li.product_id ?? null,
@@ -631,6 +641,8 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     sku: li.sku,
     vendor: li.vendor ?? "",
     price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
+    isBundleParent: Boolean((li as any).isBundleParent),
+    bundleGroupId: (li as any).bundleGroupId ?? "",
   }));
 
   // Per-line freight amounts (from the shipping-code breakdown, mapped by
@@ -720,7 +732,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
 
 export async function createOrderLineItemRecords(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
-  const lineItems = order.line_items ?? [];
+  const lineItems = getCustomerFacingLineItems(order);
   const selectedDepot = extractSelectedDepotAddress(order);
 
   // Build freight lookup so we can attach carrier info from the shipping line
@@ -935,8 +947,20 @@ export async function ingestShopifyOrderIntoOms(
   await saveOrderSnapshot(shop, order);
   await reindexOrderById(shop, String(order.id ?? ""));
   await createOrderLineItemRecords(shop, order);
+  await saveBundleComponents(shop, order);
   await backfillOrderDepotData(shop, String(order.id ?? ""));
   await writeFreightMetafield(admin, order);
+}
+
+async function saveBundleComponents(shop: string, order: OrderPayload): Promise<void> {
+  const orderId = String(order.id ?? "");
+  const rows = bundleComponentRows(order);
+  await prisma.bundleComponent.deleteMany({ where: { shop, orderId } });
+  if (!rows.length) return;
+  await prisma.bundleComponent.createMany({
+    data: rows.map((row) => ({ shop, orderId, ...row })) as any,
+    skipDuplicates: true,
+  });
 }
 
 type OperationalLine = {
@@ -949,6 +973,8 @@ type OperationalLine = {
 
 /** Freight-code lines when present; otherwise Shopify line items (imported/old orders). */
 export function getOperationalLines(order: OrderPayload): OperationalLine[] {
+  const componentVariantIds = getBundleComponentVariantIds(order);
+  const bundleGroups = getBundleGroups(order);
   const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
   const breakdown = parseFreightCode(
     freightLine?.code,
@@ -961,6 +987,7 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
   if (breakdown?.lineItems?.length) {
     const lines = breakdown.lineItems
       .filter((li) => li.variantId)
+      .filter((li) => !componentVariantIds.has(String(li.variantId)))
       .map((li) => ({
         variantId: String(li.variantId),
         title: li.title ?? "",
@@ -968,11 +995,23 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         company: String(li.company || ""),
         boxes: Number(li.boxes) || 0,
       }));
+    for (const group of bundleGroups.values()) {
+      if (lines.some((line) => line.variantId === group.parentVariantId)) continue;
+      const componentFreight = breakdown.lineItems.filter((line) => group.components.some((component) => component.variantId === String(line.variantId)));
+      if (!componentFreight.length) continue;
+      lines.unshift({
+        variantId: group.parentVariantId,
+        title: group.parentTitle,
+        sku: group.parentSku,
+        company: String(componentFreight[0].company || ""),
+        boxes: componentFreight.reduce((sum, line) => sum + (Number(line.boxes) || 0), 0),
+      });
+    }
     // Append Shopify line items absent from the freight code (operational $0
     // BOGOS free gifts, etc.) so Cin7/Monday still receive them. These lines
     // carry no freight — no invented carrier or package data.
     const freightVariantIds = new Set(lines.map((l) => l.variantId));
-    for (const li of order.line_items ?? []) {
+    for (const li of getCustomerFacingLineItems(order)) {
       if (li.variant_id == null) continue;
       const vid = String(li.variant_id);
       if (freightVariantIds.has(vid)) continue;
@@ -985,9 +1024,18 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         boxes: 0,
       });
     }
-    return lines;
+    // Bundle orders collapse component lines into one parent row that must be
+    // emitted in Shopify line-item order. Non-bundle orders (including ones
+    // whose optional bundle hydration returned nothing or failed) keep the
+    // exact historical path: freight-code order first, appended non-freight
+    // lines after, no reordering or dropping.
+    if (!bundleGroups.size) return lines;
+    const lineByVariant = new Map(lines.map((line) => [line.variantId, line]));
+    return getCustomerFacingLineItems(order)
+      .map((line) => lineByVariant.get(String(line.variant_id ?? line.id ?? "")))
+      .filter((line): line is OperationalLine => Boolean(line));
   }
-  return (order.line_items ?? [])
+  return getCustomerFacingLineItems(order)
     .filter((li) => li.variant_id != null || li.id != null)
     .map((li) => ({
       variantId: String(li.variant_id ?? li.id ?? ""),
@@ -1180,6 +1228,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       const shopifyLine = (order.line_items ?? []).find(
         (x) => String(x.variant_id) === String(li.variantId),
       );
+      const bundleLineItems = buildBundleCin7LineItems(order, li.variantId);
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
 
       const existingMatch = pickCin7MatchForLine(existingCin7, {
@@ -1204,7 +1253,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         continue;
       }
 
-      if (!sku) {
+      if (!sku && !bundleLineItems.length) {
         console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
         await prisma.orderLineItemOperationalData.update({
           where: { id: ops.id },
@@ -1225,7 +1274,8 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       });
 
       try {
-        const qty = Number(shopifyLine?.quantity ?? 1) || 1;
+        const bundleGroup = [...getBundleGroups(order).values()].find((group) => group.parentVariantId === li.variantId);
+        const qty = Number(shopifyLine?.quantity ?? bundleGroup?.parentQuantity ?? 1) || 1;
         const unitPrice = Number(
           shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
         );
@@ -1280,14 +1330,9 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           // box counts are not available, split evenly across valid lines.
           freightTotal: freightFinal,
           freightDescription: freightLine?.title || li.company || "",
-          lineItems: [
-            {
-              code: sku,
-              name: li.title ?? shopifyLine?.title ?? "",
-              qty,
-              unitPrice,
-            },
-          ],
+          lineItems: bundleLineItems.length
+            ? bundleLineItems
+            : [{ code: sku, name: li.title ?? shopifyLine?.title ?? "", qty, unitPrice }],
         });
 
         await saveCin7LineLink({

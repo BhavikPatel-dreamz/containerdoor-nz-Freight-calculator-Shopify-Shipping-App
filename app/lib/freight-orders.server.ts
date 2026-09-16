@@ -90,11 +90,34 @@ function snapshotsFromLineItemsJson(snap: any): LineItemSnapshot[] {
     vendor?: string;
     quantity?: number;
     price?: string | number;
+    isBundleParent?: boolean;
+    bundleGroupId?: string;
   }> = [];
   try {
     parsed = JSON.parse(snap?.lineItemsJson ?? "[]");
   } catch {
     return [];
+  }
+  const freightParts = String(snap?.shippingCode ?? "").split("::")[4] ?? "";
+  const bundleParent = parsed.find((li) => li.isBundleParent);
+  if (bundleParent && freightParts) {
+    const freightItems = freightParts.split("|").map((part) => part.split(":")[0]).filter(Boolean);
+    if (freightItems.length > 1 && !freightItems.includes(String(bundleParent.variantId))) {
+      const totalBoxes = Number(snap.packageCount?.replace(/[^0-9.]/g, "") ?? 0) || 0;
+      return [{
+        idx: 0,
+        variantId: String(bundleParent.variantId),
+        letterSuffix: "A",
+        productTitle: bundleParent.title ?? "",
+        productId: bundleParent.productId != null ? String(bundleParent.productId) : "",
+        variantTitle: bundleParent.variantTitle ?? "",
+        sku: bundleParent.sku ?? "",
+        vendor: bundleParent.vendor ?? "",
+        company: String(snap.carriers ?? "").split(",")[0] ?? "",
+        boxes: totalBoxes,
+        amount: Number(snap.totalFreight ?? 0),
+      }];
+    }
   }
   const out: LineItemSnapshot[] = [];
   parsed.forEach((li, idx) => {
@@ -122,10 +145,36 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
   if (!lineItemsRaw) return snapshotsFromLineItemsJson(snap);
 
-  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string }> = [];
+  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string; isBundleParent?: boolean }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
+
+  // A bundle snapshot has one synthesized parent (isBundleParent), while its
+  // unchanged checkout freight code can contain several physical component
+  // variants. Guarded on isBundleParent so a normal single-line order with a
+  // multi-part freight code still parses the per-variant breakdown unchanged.
+  if (
+    parsedLineItems.length === 1 &&
+    parsedLineItems[0]?.isBundleParent &&
+    lineItemsRaw.split("|").filter(Boolean).length > 1
+  ) {
+    const parent = parsedLineItems[0];
+    const codeParts = String(snap.shippingCode ?? "").split("::");
+    return [{
+      idx: 0,
+      variantId: parent.variantId != null ? String(parent.variantId) : "",
+      letterSuffix: "A",
+      productTitle: parent.title ?? "",
+      productId: parent.productId != null ? String(parent.productId) : "",
+      variantTitle: parent.variantTitle ?? "",
+      sku: parent.sku ?? "",
+      vendor: parent.vendor ?? "",
+      company: String(snap.carriers ?? "").split(",")[0] ?? "",
+      boxes: Number(String(snap.packageCount ?? codeParts[2] ?? "").replace(/[^0-9.]/g, "")) || 0,
+      amount: Number(snap.totalFreight ?? String(codeParts[3] ?? "").replace(/[^0-9.-]/g, "")) || 0,
+    }];
+  }
 
   const variantTitleMap = new Map<string, string>();
   const variantProductIdMap = new Map<string, string>();
