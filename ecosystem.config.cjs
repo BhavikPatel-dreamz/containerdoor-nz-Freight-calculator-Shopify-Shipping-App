@@ -10,7 +10,7 @@
  * ── First-time on AWS ───────────────────────────────────────────────────────
  *   1. Clone repo, copy .env (SHOPIFY_*, DATABASE_URL, CRON_SECRET, APP_URL, RESEND_…)
  *   2. pnpm install --frozen-lockfile
- *   3. pnpm run build          # prisma generate + migrate + react-router build
+ *   3. pnpm run setup && pnpm run build   # migrate (AWS) then generate + react-router build
  *   4. pm2 start ecosystem.config.cjs
  *   5. pm2 save && pm2 startup
  *

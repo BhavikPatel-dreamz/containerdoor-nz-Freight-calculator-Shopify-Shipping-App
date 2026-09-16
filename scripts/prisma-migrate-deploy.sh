@@ -1,8 +1,18 @@
 #!/usr/bin/env bash
 # Apply Prisma migrations using a direct (non-PgBouncer) URL.
-# Neon pooler hosts cannot hold pg_advisory_lock, which makes
-# `prisma migrate deploy` fail with P1002 during Vercel builds.
+#
+# Vercel: skip by default. Concurrent preview/prod builds plus killed
+# migrate processes leave pg_advisory_lock(72707369) held on Neon, so
+# `prisma migrate deploy` fails with P1002 and the whole deploy dies.
+# The JS bundle only needs `prisma generate`. Apply SQL from a laptop
+# or AWS: pnpm exec prisma migrate deploy
+# Opt-in on Vercel: RUN_PRISMA_MIGRATE=1
 set -euo pipefail
+
+if [ "${VERCEL:-}" = "1" ] && [ "${RUN_PRISMA_MIGRATE:-}" != "1" ]; then
+  echo "[prisma] skipping migrate deploy on Vercel build (set RUN_PRISMA_MIGRATE=1 to force)"
+  exit 0
+fi
 
 resolve_direct_url() {
   if [ -n "${DIRECT_URL:-}" ]; then
