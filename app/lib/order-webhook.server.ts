@@ -346,8 +346,10 @@ async function processQueuedOrderWebhookJob(job: any) {
       persistReport: false,
     });
     const omsFailed = processed.steps?.some((s) => s.step === "oms_sync" && !s.ok);
-    if (processed.critical || omsFailed) {
-      throw new Error(processed.error || "OMS ingest failed");
+    const integrationFailed = Boolean(processed.cin7?.failed || processed.monday?.failed);
+    const pipelineFailed = processed.steps?.some((s) => !s.ok);
+    if (processed.critical || omsFailed || integrationFailed || pipelineFailed) {
+      throw new Error(processed.error || "Order integration failed");
     }
 
     const targets = [
