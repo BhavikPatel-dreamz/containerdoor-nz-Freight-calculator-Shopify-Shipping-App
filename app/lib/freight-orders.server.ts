@@ -102,7 +102,7 @@ function snapshotsFromLineItemsJson(snap: any): LineItemSnapshot[] {
   const bundleParent = parsed.find((li) => li.isBundleParent);
   if (bundleParent && freightParts) {
     const freightItems = freightParts.split("|").map((part) => part.split(":")[0]).filter(Boolean);
-    if (freightItems.length > 1 && !freightItems.includes(String(bundleParent.variantId))) {
+    if (!freightItems.includes(String(bundleParent.variantId))) {
       const totalBoxes = Number(snap.packageCount?.replace(/[^0-9.]/g, "") ?? 0) || 0;
       return [{
         idx: 0,
@@ -154,11 +154,7 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   // unchanged checkout freight code can contain several physical component
   // variants. Guarded on isBundleParent so a normal single-line order with a
   // multi-part freight code still parses the per-variant breakdown unchanged.
-  if (
-    parsedLineItems.length === 1 &&
-    parsedLineItems[0]?.isBundleParent &&
-    lineItemsRaw.split("|").filter(Boolean).length > 1
-  ) {
+  if (parsedLineItems.length === 1 && parsedLineItems[0]?.isBundleParent) {
     const parent = parsedLineItems[0];
     const codeParts = String(snap.shippingCode ?? "").split("::");
     return [{
