@@ -57,7 +57,7 @@ export function OrderTable({
             <th style={{ textAlign: "center", width: "80px" }}>EDD</th>
             <th title="Customer-facing fulfilment lifecycle (Pending → Confirmed → Dispatched → Delivered / Cancelled). Not payment or warehouse." style={{textAlign: "center" , width: "130px"}}>Customer status</th>
             {!hiddenColumns.has("warehouse") && <th style={{ textAlign: "center" }}>Warehouse</th>}
-            {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" ,width: "70px"  }}>Payment</th>}
+            {!hiddenColumns.has("payment") && <th style={{ textAlign: "center" ,width: "90px"  }}>Payment</th>}
             {!hiddenColumns.has("carrier") && <th style={{ width: "120px" , textAlign: "center" }}>Carrier</th>}
             {!hiddenColumns.has("tracking") && <th style={{ textAlign: "center" }}>Tracking</th>}
             {!hiddenColumns.has("freightRef") && <th>Ref</th>}
