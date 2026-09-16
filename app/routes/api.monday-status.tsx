@@ -46,7 +46,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         const isFresh = !force && checkedAt && now - checkedAt < MONDAY_STATUS_CACHE_MS;
 
         const lineKeys = order.lineItems.map((li) => `${order.orderId}::${li.variantId}`);
-        const allCached = lineKeys.every((k) => recordMap.has(k) && (recordMap.get(k) as any).mondayCachedStatus !== undefined);
+        // A cached match is not proof that the Monday item still exists; items
+        // can be deleted or archived outside this app. Recheck green lines so
+        // the dashboard cannot keep showing a stale Monday tick.
+        const allCached = lineKeys.every((k) => {
+          const cached = recordMap.get(k) as any;
+          return recordMap.has(k) && cached?.mondayCachedStatus !== undefined && cached.mondayCachedStatus !== "match";
+        });
         if (isFresh && allCached) {
           perOrderResults[order.orderId] = {
             results: order.lineItems.map((li) => {
