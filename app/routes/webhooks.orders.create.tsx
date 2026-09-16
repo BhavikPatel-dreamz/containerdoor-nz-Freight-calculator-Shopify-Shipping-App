@@ -1,6 +1,7 @@
 import type { ActionFunctionArgs } from "react-router";
 import { authenticate, unauthenticated } from "../shopify.server";
 import { enqueueOrderWebhookJob, writeFreightMetafield, type OrderPayload } from "../lib/order-webhook.server";
+import { attachBundleRelationships } from "../lib/bundles.server";
 import { isFreightShippingCode, parseFreightCode } from "../lib/freight";
 
 // TEMP DEBUG ONLY (remove after verification): forward the raw orders/create
@@ -75,6 +76,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   // queued worker won't write it a second time. Never blocks/fails the webhook.
   try {
     const { admin } = await unauthenticated.admin(shop);
+    try {
+      await attachBundleRelationships(admin, order);
+    } catch (e) {
+      console.error(`[WebhookCreate] bundle hydration failed for order ${String(order.id ?? "")}:`, e);
+    }
     await writeFreightMetafield(admin, order);
   } catch (e) {
     console.error(`[WebhookCreate] freight metafield write failed for order ${String(order.id ?? "")}:`, e);

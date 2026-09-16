@@ -98,6 +98,9 @@ const ORDER_FIELDS = `
       vendor
       originalUnitPriceSet { presentmentMoney { amount currencyCode } }
       variant { id sku product { id } }
+      lineItemGroup {
+        id title quantity productId variantId variantSku
+      }
     }
   }
 `;
@@ -236,6 +239,17 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
             currency_code: li?.originalUnitPriceSet?.presentmentMoney?.currencyCode,
           },
         },
+        lineItemGroup: li?.lineItemGroup
+          ? {
+              id: li.lineItemGroup.id,
+              parentLineItemId: li.lineItemGroup.id,
+              parentVariantId: li.lineItemGroup.variantId,
+              parentProductId: li.lineItemGroup.productId,
+              parentSku: li.lineItemGroup.variantSku,
+              parentTitle: li.lineItemGroup.title,
+              quantity: li.lineItemGroup.quantity,
+            }
+          : undefined,
       };
     }),
   } as OrderPayload;

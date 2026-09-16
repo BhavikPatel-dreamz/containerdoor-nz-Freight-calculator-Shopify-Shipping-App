@@ -132,9 +132,33 @@ model OrderSnapshot {
   operational  OrderOperationalData?
   lineItemOps  OrderLineItemOperationalData[]
   lineIndex    OrderLineItemIndex[]
+  bundleComponents BundleComponent[]
 
   @@unique([shop, orderId])
   @@index([shop, createdAt])
+}
+
+model BundleComponent {
+  id                  String   @id @default(cuid())
+  shop                String
+  orderId             String
+  bundleGroupId       String
+  parentLineItemId    String
+  parentVariantId     String
+  parentSku           String   @default("")
+  parentQuantity      Int
+  componentLineItemId String
+  componentVariantId  String
+  componentSku        String   @default("")
+  componentQuantity   Int
+  componentTitle      String   @default("")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
+  @@unique([shop, orderId, bundleGroupId, componentLineItemId])
+  @@index([shop, orderId, parentVariantId])
 }
 
 model OrderOperationalData {
