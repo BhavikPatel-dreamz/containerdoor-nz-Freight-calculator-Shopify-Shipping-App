@@ -234,7 +234,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }))
       .filter((li: { code: any; }) => li.code);
 
-    if (lineItems.length === 0) {
+    // Bundle parents are customer-facing OMS lines but Shopify's order query
+    // exposes the physical component variants. Use the persisted component
+    // rows only when the selected parent variant is absent from Shopify lines.
+    const bundleComponents = normalizedVariantId
+      ? await prisma.bundleComponent.findMany({
+          where: { shop, orderId: orderIdStr, parentVariantId: normalizedVariantId },
+          select: { componentSku: true, componentTitle: true, componentQuantity: true },
+        })
+      : [];
+    const bundleTargetLineItems = bundleComponents
+      .filter((component) => String(component.componentSku || "").trim())
+      .map((component) => ({
+        code: component.componentSku,
+        name: component.componentTitle,
+        qty: component.componentQuantity,
+        unitPrice: 0,
+        variantId: null,
+      }));
+    const parentVariantPresent = lineItems.some((li: any) => {
+      const currentId = String(li.variantId ?? "");
+      return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+    });
+
+    if (lineItems.length === 0 && bundleTargetLineItems.length === 0) {
       console.log(`[Cin7][API][${orderIdStr}] SKIP - no line items with a SKU`);
       return Response.json(
         { ok: false, error: "No line items with SKU found" },
@@ -242,7 +265,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    const targetLineItems = normalizedVariantId
+    const targetLineItems = normalizedVariantId && !parentVariantPresent && bundleTargetLineItems.length
+      ? bundleTargetLineItems
+      : normalizedVariantId
       ? lineItems.filter((li: any) => {
           const currentId = String(li.variantId ?? "");
           return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
@@ -312,7 +337,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         ? allOrderLineItems.find((li: any) => {
             const currentId = String(li?.variant?.id ?? "");
             return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
-          })?.sku
+          })?.sku || bundleTargetLineItems[0]?.code
         : allOrderLineItems[0]?.sku) || "",
     ).trim();
     const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
