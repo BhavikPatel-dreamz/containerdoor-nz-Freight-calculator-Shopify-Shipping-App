@@ -273,6 +273,25 @@ export async function attemptCreatePaymentsForOrder(shop: string, order: OrderPa
 
 export async function processQueuedOrderWebhookJobs(limit = 10) {
   console.log("[WebhookWorker] started");
+  const staleAfterMs = Number(process.env.ORDER_WEBHOOK_STALE_MS || 15 * 60 * 1000);
+  const staleBefore = new Date(Date.now() - staleAfterMs);
+  const recovered = await prisma.shopifyWebhookJob.updateMany({
+    where: {
+      status: "PROCESSING",
+      OR: [
+        { startedAt: { lt: staleBefore } },
+        { startedAt: null, lastAttemptAt: { lt: staleBefore } },
+      ],
+    },
+    data: {
+      status: "PENDING",
+      completedAt: null,
+      error: "Recovered stale processing job",
+    },
+  });
+  if (recovered.count > 0) {
+    console.warn(`[WebhookWorker] recovered ${recovered.count} stale processing job(s)`);
+  }
   const jobs = await prisma.shopifyWebhookJob.findMany({
     where: { status: "PENDING" },
     orderBy: { createdAt: "asc" },

@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { ActionFunctionArgs } from "react-router";
 import prisma from "../db.server";
-import { fetchMondayItem } from "../lib/monday.server";
+import { buildMondayPulseName, fetchMondayItem } from "../lib/monday.server";
 
 type LineItemInput = { variantId: string };
 type OrderInput = { orderId: string; lineItems: LineItemInput[] };
@@ -29,6 +29,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       select: { orderId: true, mondayStatusCheckedAt: true },
     });
     const recordByOrderId = new Map(orderRecords.map((r) => [r.orderId, r]));
+    const snapshots = await prisma.orderSnapshot.findMany({
+      where: { shop, orderId: { in: orders.map((o) => o.orderId) } },
+      select: { orderId: true, orderName: true },
+    });
+    const snapshotByOrderId = new Map(snapshots.map((r) => [r.orderId, r]));
 
     const perOrderResults: Record<string, { results: any[] }> = {};
     const now = Date.now();
@@ -69,7 +74,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         const results: any[] = [];
-        for (const li of order.lineItems) {
+        for (const [lineIndex, li] of order.lineItems.entries()) {
           const rec = recordMap.get(`${order.orderId}::${li.variantId}`) as any | undefined;
           if (!rec?.mondayItemId) {
             results.push({ variantId: li.variantId, status: "missing", mismatches: [] });
@@ -78,6 +83,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           const mondayData = await fetchMondayItem(rec.mondayItemId);
           if (!mondayData) {
             results.push({ variantId: li.variantId, status: "missing", mismatches: [] });
+            continue;
+          }
+          const expectedName = buildMondayPulseName(
+            snapshotByOrderId.get(order.orderId)?.orderName,
+            String.fromCharCode(65 + lineIndex),
+            order.orderId,
+          );
+          if (mondayData.name.trim() !== expectedName) {
+            results.push({ variantId: li.variantId, status: "missing", mismatches: ["mondayItem"] });
             continue;
           }
           const mismatches: string[] = [];
