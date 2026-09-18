@@ -95,7 +95,7 @@ async function main() {
       .split(",")
       .map((s) => s.trim());
     if (!parts.includes("read_orders") && !args.force) {
-      const appUrl = (process.env.SHOPIFY_APP_URL || process.env.APPLICATION_URL || "https://containerdoor-nz-freight-calculator.vercel.app").replace(/\/$/, "");
+      const appUrl = (process.env.SHOPIFY_APP_URL || process.env.APPLICATION_URL || "https://containerdoor.dddemo.net").replace(/\/$/, "");
       const authUrl = `${appUrl}/auth?shop=${encodeURIComponent(row.shop)}`;
       console.log("STOP: this Session token still does not have read_orders.");
       console.log("Deploying an app version does not update the token. The merchant must re-open the app and approve scopes.");

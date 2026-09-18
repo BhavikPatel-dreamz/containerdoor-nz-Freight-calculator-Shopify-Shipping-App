@@ -308,7 +308,7 @@ async function processNextBatch(shopFilter?: string) {
       return Response.json({ ok: true, message: "No pending jobs" });
     }
 
-    const appUrl = process.env.APP_URL || "https://containerdoor-nz-freight-calculator.vercel.app";
+    const appUrl = process.env.APP_URL || "https://containerdoor.dddemo.net";
 
     // ── Step 3: Send batch via provider (only from our queue tables) ──
     let sent = 0;
