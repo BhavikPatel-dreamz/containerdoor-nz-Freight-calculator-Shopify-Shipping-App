@@ -9,8 +9,34 @@
 # Opt-in on Vercel: RUN_PRISMA_MIGRATE=1
 set -euo pipefail
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+# Prisma CLI loads dotenv via prisma.config.ts; this bash wrapper does not
+# inherit that. Pull DATABASE_URL / DIRECT_URL from .env for local builds.
+if [ -z "${DIRECT_URL:-}" ] && [ -z "${DATABASE_URL_UNPOOLED:-}" ] && [ -z "${DATABASE_URL:-}" ]; then
+  if [ -f "$ROOT/.env" ]; then
+    eval "$(node --input-type=module -e '
+      import dotenv from "dotenv";
+      import { resolve } from "path";
+      dotenv.config({ path: resolve(process.cwd(), ".env"), quiet: true });
+      for (const k of ["DATABASE_URL", "DIRECT_URL", "DATABASE_URL_UNPOOLED"]) {
+        const v = process.env[k];
+        if (v) process.stdout.write("export " + k + "=" + JSON.stringify(v) + "\n");
+      }
+    ')"
+  fi
+fi
+
 if [ "${VERCEL:-}" = "1" ] && [ "${RUN_PRISMA_MIGRATE:-}" != "1" ]; then
   echo "[prisma] skipping migrate deploy on Vercel build (set RUN_PRISMA_MIGRATE=1 to force)"
+  exit 0
+fi
+
+# Local/CI compile: `prisma generate` + `react-router build` do not need a DB.
+# Apply SQL with DATABASE_URL set: pnpm exec prisma migrate deploy
+if [ -z "${DIRECT_URL:-}" ] && [ -z "${DATABASE_URL_UNPOOLED:-}" ] && [ -z "${DATABASE_URL:-}" ]; then
+  echo "[prisma] skipping migrate deploy (DATABASE_URL is not set)"
   exit 0
 fi
 
