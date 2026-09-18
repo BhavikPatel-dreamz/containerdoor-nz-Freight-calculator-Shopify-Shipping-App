@@ -770,7 +770,7 @@ async function persistReport(input: {
   }
 }
 
-export async function listMigrateReports(shop: string, take = 30) {
+export async function listMigrateReports(shop: string, take = 5) {
   try {
     const rows = await prisma.orderMigrateReport.findMany({
       where: { shop },

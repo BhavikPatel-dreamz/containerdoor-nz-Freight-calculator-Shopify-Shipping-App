@@ -330,9 +330,9 @@ export default function MigrateOrdersPage() {
             systems: json.systems || null,
           });
           if (stopAll.current) continue;
-          pushLog("Waiting 10s before next order…");
+          pushLog("Waiting 5s before next order…");
           setAllProgress((p) => ({ ...p, message: "Waiting 10s before next order…", logs: logs.slice(0, 500) }));
-          const waitUntil = Date.now() + 10_000;
+          const waitUntil = Date.now() + 5_000;
           while (Date.now() < waitUntil && !stopAll.current) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
