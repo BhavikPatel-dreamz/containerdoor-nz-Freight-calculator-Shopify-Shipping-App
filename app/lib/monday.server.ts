@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MONDAY_API_URL = "https://api.monday.com/v2";
-const MONDAY_API_GAP_MS = Math.max(0, Number(process.env.MONDAY_API_GAP_MS || "1000"));
+const MONDAY_API_GAP_MS = Math.max(0, Number(process.env.MONDAY_API_GAP_MS || "200"));
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));

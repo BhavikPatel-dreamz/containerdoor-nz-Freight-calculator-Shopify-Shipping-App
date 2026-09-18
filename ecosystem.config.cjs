@@ -92,7 +92,7 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         ORDER_SYNC_CRON_APP_URL: "http://127.0.0.1:3000",
-        ORDER_SYNC_CRON_INTERVAL_MS: "10000",
+        ORDER_SYNC_CRON_INTERVAL_MS: "500",
         ORDER_SYNC_CRON_IDLE_MS: "300000",
       },
     },

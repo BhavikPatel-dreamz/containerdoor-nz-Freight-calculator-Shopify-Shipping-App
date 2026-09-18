@@ -330,9 +330,9 @@ export default function MigrateOrdersPage() {
             systems: json.systems || null,
           });
           if (stopAll.current) continue;
-          pushLog("Waiting 5s before next order…");
-          setAllProgress((p) => ({ ...p, message: "Waiting 10s before next order…", logs: logs.slice(0, 500) }));
-          const waitUntil = Date.now() + 5_000;
+          pushLog("Waiting 1s before next order…");
+          setAllProgress((p) => ({ ...p, message: "Waiting 1s before next order…", logs: logs.slice(0, 500) }));
+          const waitUntil = Date.now() + 1_000;
           while (Date.now() < waitUntil && !stopAll.current) {
             await new Promise((resolve) => setTimeout(resolve, 1000));
           }
@@ -542,7 +542,7 @@ export default function MigrateOrdersPage() {
           <div className="settings-card">
             <strong>Sync all unsynced</strong>
             <p style={{ color: "#52606d", fontSize: 13, margin: "8px 0 12px" }}>
-              Newest first. After each order waits 10s, then starts the next automatically. Failed orders are logged and skipped so the queue continues.
+              Newest first. About 20–30 orders per minute. After each order waits 1s, then starts the next automatically. Failed orders are logged and skipped so the queue continues.
             </p>
             <button
               type="button"

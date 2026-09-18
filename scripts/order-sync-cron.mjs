@@ -9,7 +9,7 @@
  *   APP_URL or ORDER_SYNC_CRON_APP_URL  — usually http://127.0.0.1:3000
  *   CRON_SECRET
  *   ORDER_SYNC_SHOP or SHOPIFY_SHOP     — e.g. store.myshopify.com
- *   ORDER_SYNC_CRON_INTERVAL_MS         — pause after an order (default 10000)
+ *   ORDER_SYNC_CRON_INTERVAL_MS         — pause after an order (default 500 ≈ 20–30/min)
  *   ORDER_SYNC_CRON_IDLE_MS             — pause when caught up (default 300000)
  *   ORDER_SYNC_MODE                     — full | dry_run (default full)
  */
@@ -18,7 +18,7 @@ import { resolve } from "path";
 
 dotenv.config({ path: resolve(process.cwd(), ".env") });
 
-const INTERVAL_MS = Number(process.env.ORDER_SYNC_CRON_INTERVAL_MS || "10000");
+const INTERVAL_MS = Number(process.env.ORDER_SYNC_CRON_INTERVAL_MS || "500");
 const IDLE_MS = Number(process.env.ORDER_SYNC_CRON_IDLE_MS || "300000");
 const APP_URL = (
   process.env.ORDER_SYNC_CRON_APP_URL ||
