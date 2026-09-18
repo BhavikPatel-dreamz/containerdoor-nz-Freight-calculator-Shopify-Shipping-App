@@ -398,25 +398,101 @@ export async function importRatesCsv(shop: string, csv: string) {
   const rowsWithoutId = rowsToProcess.filter((r) => !r.id);
 
   if (rowsWithoutId.length > 0) {
-    // Use very small chunks (100) and add delay between batches to prevent pooler timeout
-    const chunkSize = 100;
-    for (let i = 0; i < rowsWithoutId.length; i += chunkSize) {
-      const chunk = rowsWithoutId.slice(i, i + chunkSize);
-      try {
-        const result = await prisma.shippingRate.createMany({
-          data: chunk.map((r) => r.data),
-          skipDuplicates: true,
-        });
-        created += result.count;
-      } catch (error) {
-        console.error(`[importRatesCsv] Error on chunk ${Math.floor(i / chunkSize)}:`, error);
-        throw error;
+    // Multi-row text INSERT via $executeRawUnsafe. The previous createMany path
+    // took ~6s per 1000 rows (per-row round trip through the pg adapter) plus a
+    // 100ms inter-batch delay, so a 200k+ row rate card exceeded the
+    // nginx/Vercel request timeout and 502'd mid-import. A parameterized
+    // $executeRaw with Prisma.sql was still slow (large bind messages over the
+    // bundled proxy), so we ship literal multi-row VALUES; all values are
+    // normalised/escaped below and come from the carrier rate CSV.
+    const chunkSize = 2000;
+    const concurrency = 4;
+
+    const insertSql = (chunk: Array<{ data: any }>): string => {
+      const columns = [
+        "id",
+        "shop",
+        "company",
+        "serviceType",
+        "city",
+        "sector",
+        "postalCode",
+        "useWeightRange",
+        "minWeightGrams",
+        "maxWeightGrams",
+        "useVolumeRange",
+        "minVolumeCm3",
+        "maxVolumeCm3",
+        "rate",
+        "baseFee",
+        "zoneSurcharge",
+        "minimumCharge",
+        "signatureSurcharge",
+        "ruralSurcharge",
+        "ageRestrictedSurcharge",
+        "homeDeliveryFee",
+        "residentialFee",
+        "mode",
+        "active",
+        "createdAt",
+        "updatedAt",
+      ]
+        .map((c) => `"${c}"`)
+        .join(",");
+      const rows = chunk
+        .map((r) => {
+          const d = r.data;
+          const now = new Date().toISOString();
+          const cells = [
+            crypto.randomUUID(),
+            d.shop,
+            d.company,
+            d.serviceType,
+            d.city,
+            d.sector,
+            d.postalCode,
+            d.useWeightRange,
+            d.minWeightGrams,
+            d.maxWeightGrams,
+            d.useVolumeRange,
+            d.minVolumeCm3,
+            d.maxVolumeCm3,
+            d.rate,
+            d.baseFee,
+            d.zoneSurcharge,
+            d.minimumCharge,
+            d.signatureSurcharge,
+            d.ruralSurcharge,
+            d.ageRestrictedSurcharge,
+            d.homeDeliveryFee,
+            d.residentialFee,
+            d.mode,
+            d.active,
+            now,
+            now,
+          ];
+          return `(${cells.map(sqlLiteral).join(",")})`;
+        })
+        .join(",");
+      return `INSERT INTO "ShippingRate" (${columns}) VALUES ${rows}`;
+    };
+
+    let next = 0;
+    const worker = async () => {
+      while (next < rowsWithoutId.length) {
+        const i = next;
+        next += chunkSize;
+        const chunk = rowsWithoutId.slice(i, i + chunkSize);
+        try {
+          const result = await prisma.$executeRawUnsafe(insertSql(chunk));
+          created += result;
+        } catch (error) {
+          console.error(`[importRatesCsv] Error on chunk ${Math.floor(i / chunkSize)}:`, error);
+          throw error;
+        }
       }
-      // Add 100ms delay between batches to allow connection pooler to recover
-      if (i + chunkSize < rowsWithoutId.length) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
+    };
+    await Promise.all(Array.from({ length: concurrency }, worker));
   }
 
   if (rowsWithId.length > 0) {
@@ -848,6 +924,17 @@ function escapeCsvCell(value: unknown) {
   const cell = String(value ?? "");
   if (!/[",\n]/.test(cell)) return cell;
   return `"${cell.replace(/"/g, '""')}"`;
+}
+
+// SQL literal for use in the bulk multi-row INSERT. Strings are single-quote
+// escaped (standard_conforming_strings=on → only ' needs doubling); numbers,
+// booleans and enums come from normalised CSV data so they are emitted as-is
+// or quoted. Nulls become NULL.
+function sqlLiteral(value: unknown) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function parseCsvLine(line: string) {
