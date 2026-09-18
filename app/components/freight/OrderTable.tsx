@@ -117,7 +117,7 @@ export function OrderTable({
                     {item.quantity || 1}
                   </td>
                   {!hiddenColumns.has("supplier") && (
-                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280",width: "80px" }}>
+                    <td className="fo-td" style={{ fontSize: "12px", color: "#6b7280",width: "80px" , textAlign: "center" }}>
                       {item.vendor || "—"}
                     </td>
                   )}

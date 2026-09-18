@@ -4,7 +4,7 @@
  *
  * Polls GET /api/order-webhook/process with CRON_SECRET.
  * Env:
- *   APP_URL or ORDER_WEBHOOK_CRON_APP_URL — e.g. https://containerdoor-nz-freight-calculator.vercel.app
+ *   APP_URL or ORDER_WEBHOOK_CRON_APP_URL — e.g. https://containerdoor.dddemo.net
  *   CRON_SECRET                         — same as API worker
  *   ORDER_WEBHOOK_CRON_INTERVAL_MS      — default 30000 (30s)
  */

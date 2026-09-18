@@ -6,7 +6,7 @@
  * Use when Vercel Hobby cannot run minutely crons.
  *
  * Env:
- *   APP_URL or EMAIL_CRON_APP_URL  — e.g. https://containerdoor-nz-freight-calculator.vercel.app
+ *   APP_URL or EMAIL_CRON_APP_URL  — e.g. https://containerdoor.dddemo.net
  *   CRON_SECRET                    — same as API worker
  *   EMAIL_CRON_INTERVAL_MS         — default 60000
  *
