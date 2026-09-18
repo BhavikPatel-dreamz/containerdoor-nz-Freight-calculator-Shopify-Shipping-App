@@ -312,24 +312,137 @@ async function upsertWithRetry(id: string, data: any, retries: number): Promise<
   }
 }
 
+const RATE_INSERT_COLUMNS = [
+  "id",
+  "shop",
+  "company",
+  "serviceType",
+  "city",
+  "sector",
+  "postalCode",
+  "useWeightRange",
+  "minWeightGrams",
+  "maxWeightGrams",
+  "useVolumeRange",
+  "minVolumeCm3",
+  "maxVolumeCm3",
+  "rate",
+  "baseFee",
+  "zoneSurcharge",
+  "minimumCharge",
+  "signatureSurcharge",
+  "ruralSurcharge",
+  "ageRestrictedSurcharge",
+  "homeDeliveryFee",
+  "residentialFee",
+  "mode",
+  "active",
+  "createdAt",
+  "updatedAt",
+]
+  .map((c) => `"${c}"`)
+  .join(",");
+
+function buildRateInsertSql(chunk: Array<{ data: any }>): string {
+  const now = new Date().toISOString();
+  const rows = chunk
+    .map((r) => {
+      const d = r.data;
+      const cells = [
+        crypto.randomUUID(),
+        d.shop,
+        d.company,
+        d.serviceType,
+        d.city,
+        d.sector,
+        d.postalCode,
+        d.useWeightRange,
+        d.minWeightGrams,
+        d.maxWeightGrams,
+        d.useVolumeRange,
+        d.minVolumeCm3,
+        d.maxVolumeCm3,
+        d.rate,
+        d.baseFee,
+        d.zoneSurcharge,
+        d.minimumCharge,
+        d.signatureSurcharge,
+        d.ruralSurcharge,
+        d.ageRestrictedSurcharge,
+        d.homeDeliveryFee,
+        d.residentialFee,
+        d.mode,
+        d.active,
+        now,
+        now,
+      ];
+      return `(${cells.map(sqlLiteral).join(",")})`;
+    })
+    .join(",");
+  return `INSERT INTO "ShippingRate" (${RATE_INSERT_COLUMNS}) VALUES ${rows}`;
+}
+
+function rateRowSignature(data: any) {
+  return [
+    data.company,
+    data.serviceType,
+    data.city,
+    data.sector ?? "",
+    data.postalCode,
+    data.useWeightRange ? 1 : 0,
+    data.minWeightGrams ?? "",
+    data.maxWeightGrams ?? "",
+    data.useVolumeRange ? 1 : 0,
+    data.minVolumeCm3 ?? "",
+    data.maxVolumeCm3 ?? "",
+    String(data.rate),
+    data.mode ?? "",
+    data.active ? 1 : 0,
+  ].join("|");
+}
+
 export async function importRatesCsv(shop: string, csv: string) {
-  // Warm up the Neon connection pool before bulk ops
   await prisma.$queryRaw`SELECT 1`;
 
-  const [headerLine, ...lines] = csv.split(/\r?\n/).filter(Boolean);
-  if (!headerLine) return { ok: false, message: "CSV is empty" };
-
-  const headers = parseCsvLine(headerLine);
+  let headers: string[] | null = null;
+  const seenRows = new Set<string>();
+  const insertBuffer: Array<{ data: any }> = [];
+  const upsertBuffer: Array<{ id: string; data: any }> = [];
   let created = 0;
   let updated = 0;
+  const insertChunkSize = 1500;
 
-  const seenRows = new Set<string>();
+  const flushInserts = async () => {
+    if (insertBuffer.length === 0) return;
+    for (let i = 0; i < insertBuffer.length; i += insertChunkSize) {
+      const chunk = insertBuffer.slice(i, i + insertChunkSize);
+      try {
+        const result = await prisma.$executeRawUnsafe(buildRateInsertSql(chunk));
+        created += Number(result) || chunk.length;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const retriable = msg.includes("cache lookup failed") || msg.includes("Can't reach database") || msg.includes("P1001");
+        if (retriable) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const result = await prisma.$executeRawUnsafe(buildRateInsertSql(chunk));
+          created += Number(result) || chunk.length;
+        } else {
+          console.error(`[importRatesCsv] insert failed at offset ${i}:`, error);
+          throw error;
+        }
+      }
+    }
+    insertBuffer.length = 0;
+  };
 
-  // Build all data objects first — no DB calls yet
-  const rowsToProcess: Array<{ id: string; data: any }> = [];
+  for (const rawLine of csv.split(/\r?\n/)) {
+    if (!rawLine) continue;
+    if (!headers) {
+      headers = parseCsvLine(rawLine);
+      continue;
+    }
 
-  for (const line of lines) {
-    const cells = parseCsvLine(line);
+    const cells = parseCsvLine(rawLine);
     const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
 
     const data = {
@@ -360,155 +473,34 @@ export async function importRatesCsv(shop: string, csv: string) {
 
     if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
 
-    const rowSignature = JSON.stringify({
-      shop: data.shop,
-      company: data.company,
-      serviceType: data.serviceType,
-      city: data.city,
-      sector: data.sector ?? null,
-      postalCode: data.postalCode,
-      useWeightRange: data.useWeightRange,
-      minWeightGrams: data.minWeightGrams ?? null,
-      maxWeightGrams: data.maxWeightGrams ?? null,
-      useVolumeRange: data.useVolumeRange,
-      minVolumeCm3: data.minVolumeCm3 ?? null,
-      maxVolumeCm3: data.maxVolumeCm3 ?? null,
-      rate: String(data.rate),
-      baseFee: String(data.baseFee),
-      zoneSurcharge: String(data.zoneSurcharge),
-      minimumCharge: String(data.minimumCharge),
-      signatureSurcharge: String(data.signatureSurcharge),
-      ruralSurcharge: String(data.ruralSurcharge),
-      ageRestrictedSurcharge: String(data.ageRestrictedSurcharge),
-      homeDeliveryFee: data.homeDeliveryFee == null ? null : String(data.homeDeliveryFee),
-      residentialFee: String(data.residentialFee),
-      mode: data.mode ?? null,
-      active: data.active,
-    });
+    const signature = rateRowSignature(data);
+    if (seenRows.has(signature)) continue;
+    seenRows.add(signature);
 
-    if (seenRows.has(rowSignature)) continue;
-    seenRows.add(rowSignature);
-
-    rowsToProcess.push({ id: row.id || "", data });
-  }
-
-  // Rows WITH id → upsert in parallel
-  const rowsWithId = rowsToProcess.filter((r) => r.id);
-  // Rows WITHOUT id → batch createMany in smaller chunks with delay
-  const rowsWithoutId = rowsToProcess.filter((r) => !r.id);
-
-  if (rowsWithoutId.length > 0) {
-    // Multi-row text INSERT via $executeRawUnsafe. The previous createMany path
-    // took ~6s per 1000 rows (per-row round trip through the pg adapter) plus a
-    // 100ms inter-batch delay, so a 200k+ row rate card exceeded the
-    // nginx/Vercel request timeout and 502'd mid-import. A parameterized
-    // $executeRaw with Prisma.sql was still slow (large bind messages over the
-    // bundled proxy), so we ship literal multi-row VALUES; all values are
-    // normalised/escaped below and come from the carrier rate CSV.
-    const chunkSize = 2000;
-    const concurrency = 4;
-
-    const insertSql = (chunk: Array<{ data: any }>): string => {
-      const columns = [
-        "id",
-        "shop",
-        "company",
-        "serviceType",
-        "city",
-        "sector",
-        "postalCode",
-        "useWeightRange",
-        "minWeightGrams",
-        "maxWeightGrams",
-        "useVolumeRange",
-        "minVolumeCm3",
-        "maxVolumeCm3",
-        "rate",
-        "baseFee",
-        "zoneSurcharge",
-        "minimumCharge",
-        "signatureSurcharge",
-        "ruralSurcharge",
-        "ageRestrictedSurcharge",
-        "homeDeliveryFee",
-        "residentialFee",
-        "mode",
-        "active",
-        "createdAt",
-        "updatedAt",
-      ]
-        .map((c) => `"${c}"`)
-        .join(",");
-      const rows = chunk
-        .map((r) => {
-          const d = r.data;
-          const now = new Date().toISOString();
-          const cells = [
-            crypto.randomUUID(),
-            d.shop,
-            d.company,
-            d.serviceType,
-            d.city,
-            d.sector,
-            d.postalCode,
-            d.useWeightRange,
-            d.minWeightGrams,
-            d.maxWeightGrams,
-            d.useVolumeRange,
-            d.minVolumeCm3,
-            d.maxVolumeCm3,
-            d.rate,
-            d.baseFee,
-            d.zoneSurcharge,
-            d.minimumCharge,
-            d.signatureSurcharge,
-            d.ruralSurcharge,
-            d.ageRestrictedSurcharge,
-            d.homeDeliveryFee,
-            d.residentialFee,
-            d.mode,
-            d.active,
-            now,
-            now,
-          ];
-          return `(${cells.map(sqlLiteral).join(",")})`;
-        })
-        .join(",");
-      return `INSERT INTO "ShippingRate" (${columns}) VALUES ${rows}`;
-    };
-
-    let next = 0;
-    const worker = async () => {
-      while (next < rowsWithoutId.length) {
-        const i = next;
-        next += chunkSize;
-        const chunk = rowsWithoutId.slice(i, i + chunkSize);
-        try {
-          const result = await prisma.$executeRawUnsafe(insertSql(chunk));
-          created += result;
-        } catch (error) {
-          console.error(`[importRatesCsv] Error on chunk ${Math.floor(i / chunkSize)}:`, error);
-          throw error;
-        }
+    if (row.id) {
+      upsertBuffer.push({ id: row.id, data });
+    } else {
+      insertBuffer.push({ data });
+      if (insertBuffer.length >= insertChunkSize) {
+        await flushInserts();
       }
-    };
-    await Promise.all(Array.from({ length: concurrency }, worker));
-  }
-
-  if (rowsWithId.length > 0) {
-    const BATCH = 5;
-    for (let i = 0; i < rowsWithId.length; i += BATCH) {
-      const batch = rowsWithId.slice(i, i + BATCH);
-      await Promise.all(
-        batch.map((r) =>
-          upsertWithRetry(r.id, r.data, 3)
-        )
-      );
     }
-    updated = rowsWithId.length;
   }
 
-  return { ok: true, message: `${created} rates created, ${updated} rates updated` };
+  if (!headers) return { ok: false, message: "CSV is empty" };
+
+  await flushInserts();
+
+  if (upsertBuffer.length > 0) {
+    const BATCH = 5;
+    for (let i = 0; i < upsertBuffer.length; i += BATCH) {
+      const batch = upsertBuffer.slice(i, i + BATCH);
+      await Promise.all(batch.map((r) => upsertWithRetry(r.id, r.data, 3)));
+    }
+    updated = upsertBuffer.length;
+  }
+
+  return { ok: true, created, updated, message: `${created} rates created, ${updated} rates updated` };
 }
 export type ServiceRatesResult = {
   rates: CalculatedServiceRate[];

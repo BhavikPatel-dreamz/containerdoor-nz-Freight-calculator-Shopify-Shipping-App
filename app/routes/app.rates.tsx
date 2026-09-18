@@ -23,6 +23,50 @@ import {
 import { deleteRate, bulkDeleteRates, bulkToggleActive, exportRatesCsv, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
 import { authenticate } from "../shopify.server";
 
+async function* iterateCsvChunks(file: File, linesPerChunk: number) {
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let header = "";
+  let batch: string[] = [];
+  let bytesSinceYield = 0;
+
+  const yieldChunk = () => {
+    const csv = `${header}\n${batch.join("\n")}`;
+    const bytes = bytesSinceYield;
+    bytesSinceYield = 0;
+    batch = [];
+    return { csv, bytes };
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) bytesSinceYield += value.byteLength;
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const parts = buffer.split(/\r?\n/);
+    buffer = done ? "" : (parts.pop() ?? "");
+    for (const line of parts) {
+      if (!line) continue;
+      if (!header) {
+        header = line;
+        continue;
+      }
+      batch.push(line);
+      if (batch.length >= linesPerChunk) {
+        yield yieldChunk();
+      }
+    }
+    if (done) {
+      if (buffer) {
+        if (!header) header = buffer;
+        else batch.push(buffer);
+      }
+      if (header && batch.length > 0) yield yieldChunk();
+      break;
+    }
+  }
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const url = new URL(request.url);
@@ -95,9 +139,10 @@ export default function RatesPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [importingLarge, setImportingLarge] = useState(false);
-  const [uploadPhase, setUploadPhase] = useState<"" | "reading" | "uploading" | "processing">("");
+  const [uploadPhase, setUploadPhase] = useState<"" | "importing">("");
   const [uploadUploaded, setUploadUploaded] = useState(0);
   const [uploadTotal, setUploadTotal] = useState(0);
+  const [importCreated, setImportCreated] = useState(0);
   const uploadAbortRef = useRef<AbortController | null>(null);
   const isExporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "export";
 const isImporting = importingLarge || (navigation.state === "submitting" && navigation.formData?.get("intent") === "import");
@@ -113,23 +158,11 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
     const abort = new AbortController();
     uploadAbortRef.current = abort;
     setImportingLarge(true);
-    setUploadPhase("reading");
+    setUploadPhase("importing");
     setUploadUploaded(0);
-    setUploadTotal(0);
+    setUploadTotal(Math.max(file.size, 1));
+    setImportCreated(0);
     try {
-      const text = await file.text();
-      const lines = text.split(/\r?\n/);
-      const CHUNK_LINES = 800;
-      const chunks: string[] = [];
-      for (let i = 0; i < lines.length; i += CHUNK_LINES) {
-        chunks.push(lines.slice(i, i + CHUNK_LINES).join("\n"));
-      }
-      if (chunks.length === 0) {
-        setImportingLarge(false);
-        setUploadPhase("");
-        return;
-      }
-
       const readJson = async (res: Response) => {
         const raw = await res.text();
         if (!raw) return {};
@@ -139,9 +172,6 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
           throw new Error(`Import request failed (${res.status}): ${raw.slice(0, 200)}`);
         }
       };
-
-      setUploadPhase("uploading");
-      setUploadTotal(chunks.length);
 
       const initRes = await fetch("/api/import-rates", {
         method: "POST",
@@ -153,19 +183,23 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
       if (!initData.ok) throw new Error(initData.error || "Failed to start import");
       const { uploadId } = initData;
 
-      for (let i = 0; i < chunks.length; i++) {
+      const CHUNK_LINES = 4000;
+      let createdTotal = 0;
+
+      for await (const { csv, bytes } of iterateCsvChunks(file, CHUNK_LINES)) {
         const res = await fetch("/api/import-rates", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ intent: "chunk", uploadId, csv: chunks[i] }),
+          body: JSON.stringify({ intent: "chunk", uploadId, csv }),
           signal: abort.signal,
         });
         const d = await readJson(res);
-        if (!d.ok) throw new Error(d.error || "Chunk upload failed");
-        setUploadUploaded(i + 1);
+        if (!d.ok) throw new Error(d.message || d.error || "Chunk import failed");
+        createdTotal = d.createdTotal ?? createdTotal;
+        setImportCreated(createdTotal);
+        setUploadUploaded((prev) => Math.min(file.size, prev + bytes));
       }
 
-      setUploadPhase("processing");
       const commitRes = await fetch("/api/import-rates", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -187,6 +221,7 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
       setUploadPhase("");
       setUploadUploaded(0);
       setUploadTotal(0);
+      setImportCreated(0);
       uploadAbortRef.current = null;
     }
   }, []);
@@ -461,9 +496,12 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
       {importingLarge ? (
         <div className="upload-progress">
           <div className="upload-progress-label">
-            {uploadPhase === "reading" && "Reading file..."}
-            {uploadPhase === "uploading" && <>Uploading chunks <span>{uploadUploaded} / {uploadTotal}</span></>}
-            {uploadPhase === "processing" && "Importing rates into database..."}
+            {uploadPhase === "importing" && (
+              <>
+                Importing rates… {Math.min(100, Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100))}%
+                {importCreated > 0 ? ` · ${importCreated.toLocaleString()} created` : ""}
+              </>
+            )}
             <button
               type="button"
               className="upload-cancel"
@@ -474,8 +512,8 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
           </div>
           <div className="upload-progress-track">
             <div
-              className={`upload-progress-fill${uploadPhase === "processing" ? " processing" : ""}`}
-              style={{ width: uploadPhase === "reading" ? "15%" : uploadPhase === "processing" ? undefined : `${Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100)}%` }}
+              className="upload-progress-fill"
+              style={{ width: `${Math.min(100, Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100))}%` }}
             />
           </div>
         </div>
@@ -529,11 +567,9 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
               onChange={(event) => {
                 const file = event.currentTarget.files?.[0];
                 if (!file) return;
-                if (file.size > 3 * 1024 * 1024) {
-                  handleLargeImport(file);
-                } else {
-                  event.currentTarget.form?.requestSubmit();
-                }
+                event.preventDefault();
+                handleLargeImport(file);
+                event.currentTarget.value = "";
               }}
             />
           </label>

@@ -2,16 +2,19 @@ import type { ActionFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
 import { importRatesCsv } from "../models/freight.server";
 
-const uploads = new Map<string, { csv: string; created: number }>();
-const processedUploads = new Map<string, number>();
+type UploadJob = {
+  shop: string;
+  created: number;
+  updated: number;
+  createdAt: number;
+};
+
+const uploads = new Map<string, UploadJob>();
 
 setInterval(() => {
-  const cutoff = Date.now() - 30 * 60 * 1000;
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000;
   for (const [id, entry] of uploads) {
-    if (entry.created < cutoff) uploads.delete(id);
-  }
-  for (const [id, createdAt] of processedUploads) {
-    if (createdAt < cutoff) processedUploads.delete(id);
+    if (entry.createdAt < cutoff) uploads.delete(id);
   }
 }, 30 * 60 * 1000);
 
@@ -35,13 +38,11 @@ export async function action({ request }: ActionFunctionArgs) {
       intent?: "init" | "chunk" | "commit";
       uploadId?: string;
       csv?: string;
-      chunkIndex?: number;
-      totalChunks?: number;
     };
 
     if (body.intent === "init") {
       const id = crypto.randomUUID();
-      uploads.set(id, { csv: "", created: Date.now() });
+      uploads.set(id, { shop: session.shop, created: 0, updated: 0, createdAt: Date.now() });
       return Response.json({ ok: true, uploadId: id });
     }
 
@@ -53,37 +54,55 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!entry) {
         return Response.json({ ok: false, error: "Upload not found or expired" }, { status: 404 });
       }
-      entry.csv += body.csv ?? "";
-      return Response.json({ ok: true, uploadId: body.uploadId });
+      if (entry.shop !== session.shop) {
+        return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+      const csv = body.csv ?? "";
+      if (!csv.trim()) {
+        return Response.json({
+          ok: true,
+          created: 0,
+          updated: 0,
+          createdTotal: entry.created,
+          updatedTotal: entry.updated,
+        });
+      }
+      const result = await importRatesCsv(session.shop, csv);
+      if (!result.ok) {
+        return Response.json(result, { status: 400 });
+      }
+      entry.created += result.created ?? 0;
+      entry.updated += result.updated ?? 0;
+      return Response.json({
+        ok: true,
+        created: result.created ?? 0,
+        updated: result.updated ?? 0,
+        createdTotal: entry.created,
+        updatedTotal: entry.updated,
+        message: result.message,
+      });
     }
 
     if (body.intent === "commit") {
       if (!body.uploadId) {
         return Response.json({ ok: false, error: "Missing uploadId" }, { status: 400 });
       }
-      if (processedUploads.has(body.uploadId)) {
-        return Response.json({ ok: true, duplicate: true, message: "Import already processed" });
-      }
       const entry = uploads.get(body.uploadId);
       if (!entry) {
         return Response.json({ ok: false, error: "Upload not found or expired" }, { status: 404 });
       }
-      const csv = entry.csv;
-      console.log("[import-rates] commit-start", {
-        uploadId: body.uploadId,
-        shop: session.shop,
-        csvLength: csv.length,
-        chunks: csv.split(/\r?\n/).filter(Boolean).length,
-      });
-      processedUploads.set(body.uploadId, Date.now());
+      if (entry.shop !== session.shop) {
+        return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+      }
+      const created = entry.created;
+      const updated = entry.updated;
       uploads.delete(body.uploadId);
-      const result = await importRatesCsv(session.shop, csv);
-      console.log("[import-rates] commit-result", {
-        uploadId: body.uploadId,
-        shop: session.shop,
-        result,
+      return Response.json({
+        ok: true,
+        created,
+        updated,
+        message: `${created} rates created, ${updated} rates updated`,
       });
-      return result;
     }
 
     return Response.json({ ok: false, error: "Invalid intent" }, { status: 400 });
