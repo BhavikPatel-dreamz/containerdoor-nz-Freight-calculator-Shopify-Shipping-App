@@ -6,6 +6,7 @@ import {
   findNextEligibleShopifyOrder,
 } from "../lib/migrate-shopify-oms.server";
 import { processShopifyOrder, summarizeSyncSystems } from "../lib/process-shopify-order.server";
+import { loadOrderSyncCursor, saveOrderSyncCursor } from "../lib/order-sync-cursor.server";
 
 export const maxDuration = 60;
 
@@ -62,9 +63,13 @@ type StepBody = {
   newestFirst?: boolean;
   skipIds?: string[];
   countOnly?: boolean;
+  persist?: boolean;
+  resetCursor?: boolean;
+  statusOnly?: boolean;
 };
 
 async function runStep(request: Request, body: StepBody) {
+  const persist = Boolean(body.persist) || verifyCronSecret(request);
   let ctx: Awaited<ReturnType<typeof resolveAdmin>>;
   try {
     ctx = await resolveAdmin(request, String(body.shop || ""));
@@ -73,23 +78,67 @@ async function runStep(request: Request, body: StepBody) {
   }
   const { shop, admin, sentBy } = ctx;
 
+  if (body.resetCursor && persist) {
+    await saveOrderSyncCursor({ shop, reset: true });
+  }
+
+  if (body.statusOnly) {
+    const cursor = await loadOrderSyncCursor(shop);
+    return Response.json({
+      ok: true,
+      shop,
+      cursor,
+      message: cursor?.lastOrderName
+        ? `Last sync ${cursor.lastOrderName}${cursor.lastOk === false ? " FAIL" : cursor.lastOk ? " OK" : ""} — will resume from saved page`
+        : "No saved cursor yet — starting from newest",
+    });
+  }
+
   if (body.countOnly) {
     const total = await countShopifyOrders(admin);
     return Response.json({ ok: true, total, shop });
   }
 
+  const saved = persist ? await loadOrderSyncCursor(shop) : null;
   const mode = body.mode === "dry_run" ? "dry_run" : "full";
   const newestFirst = body.newestFirst !== false;
-  const after = body.after ? String(body.after) : null;
+  const after =
+    body.after != null && String(body.after).trim()
+      ? String(body.after)
+      : saved?.caughtUp
+        ? null
+        : saved?.after || null;
+  const skipIds = [
+    ...new Set([
+      ...(Array.isArray(body.skipIds) ? body.skipIds.map(String) : []),
+      ...(saved?.skipIds || []),
+    ]),
+  ].slice(-1500);
+
+  if (saved?.lastOrderName) {
+    console.log(
+      `[order-sync-step] resume shop=${shop} last=${saved.lastOrderName} processed=${saved.processed} after=${after ? "yes" : "start"}`,
+    );
+  }
 
   const next = await findNextEligibleShopifyOrder(admin, shop, {
     newestFirst,
     after,
     maxPages: 20,
-    skipIds: Array.isArray(body.skipIds) ? body.skipIds.map(String).slice(0, 2000) : [],
+    skipIds,
   });
 
   if ("error" in next) {
+    if (persist) {
+      await saveOrderSyncCursor({
+        shop,
+        after: next.resumeAfter,
+        skipIds,
+        lastMessage: next.error,
+        caughtUp: Boolean(next.done),
+        ...(next.done ? { after: "", skipIds: [] } : {}),
+      });
+    }
     return Response.json({
       ok: next.done !== false,
       done: Boolean(next.done),
@@ -98,8 +147,11 @@ async function runStep(request: Request, body: StepBody) {
       after: next.resumeAfter,
       skippedCompleted: next.skippedCompleted,
       pagesScanned: next.pagesScanned,
+      resumedFrom: saved?.lastOrderName || null,
     });
   }
+
+  const nextSkip = skipIds.includes(next.orderId) ? skipIds : [...skipIds, next.orderId];
 
   let one;
   try {
@@ -112,11 +164,26 @@ async function runStep(request: Request, body: StepBody) {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    if (persist) {
+      await saveOrderSyncCursor({
+        shop,
+        after: next.resumeAfter,
+        skipIds: nextSkip,
+        lastOrderId: next.orderId,
+        lastOrderName: next.orderName,
+        lastOk: false,
+        lastMessage: message,
+        bumpProcessed: true,
+        bumpFailed: true,
+        caughtUp: false,
+      });
+    }
     return Response.json({
       ok: false,
       done: false,
       after: next.resumeAfter,
       skippedCompleted: next.skippedCompleted,
+      resumedFrom: saved?.lastOrderName || null,
       order: {
         id: next.orderId,
         name: next.orderName,
@@ -128,11 +195,28 @@ async function runStep(request: Request, body: StepBody) {
   }
   const systems = summarizeSyncSystems(one);
 
+  if (persist) {
+    await saveOrderSyncCursor({
+      shop,
+      after: next.resumeAfter,
+      skipIds: nextSkip,
+      lastOrderId: one.orderId || next.orderId,
+      lastOrderName: one.orderName || next.orderName,
+      lastOk: one.ok,
+      lastMessage: one.ok ? "Synced" : one.error || "Failed",
+      bumpProcessed: true,
+      bumpSuccess: one.ok,
+      bumpFailed: !one.ok,
+      caughtUp: false,
+    });
+  }
+
   return Response.json({
     ok: one.ok,
     done: false,
     after: next.resumeAfter,
     skippedCompleted: next.skippedCompleted,
+    resumedFrom: saved?.lastOrderName || null,
     order: {
       id: one.orderId || next.orderId,
       name: one.orderName || next.orderName,
@@ -144,10 +228,6 @@ async function runStep(request: Request, body: StepBody) {
   });
 }
 
-/**
- * Process exactly one eligible Shopify order (newest first by default).
- * UI "Sync all" and DigitalOcean PM2 cron both call this.
- */
 export async function loader({ request }: LoaderFunctionArgs) {
   if (!verifyCronSecret(request)) {
     return cronUnauthorized(request);
@@ -164,6 +244,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
     newestFirst: url.searchParams.get("newestFirst") !== "0",
     skipIds: skip,
     countOnly: url.searchParams.get("countOnly") === "1",
+    statusOnly: url.searchParams.get("status") === "1",
+    persist: true,
+    resetCursor: url.searchParams.get("reset") === "1",
   });
 }
 
@@ -172,5 +255,6 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ error: "Method not allowed" }, { status: 405 });
   }
   const body = (await request.json().catch(() => ({}))) as StepBody;
+  if (verifyCronSecret(request)) body.persist = true;
   return runStep(request, body);
 }

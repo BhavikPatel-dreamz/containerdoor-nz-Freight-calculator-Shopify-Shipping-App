@@ -609,3 +609,24 @@ model BulkActionAudit {
   @@index([shop, orderId])
   @@index([shop, createdAt])
 }
+
+/// Resume point for historical Order Sync cron (survives PM2 / server restart).
+model OrderSyncCursor {
+  id            String   @id @default(cuid())
+  shop          String
+  source        String   @default("cron")
+  after         String   @default("")
+  skipIdsJson   String   @default("[]")
+  lastOrderId   String   @default("")
+  lastOrderName String   @default("")
+  lastOk        Boolean?
+  lastMessage   String   @default("")
+  processed     Int      @default(0)
+  success       Int      @default(0)
+  failed        Int      @default(0)
+  caughtUp      Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@unique([shop, source])
+}

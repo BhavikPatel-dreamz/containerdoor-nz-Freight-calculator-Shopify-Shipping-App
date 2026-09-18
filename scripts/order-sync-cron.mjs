@@ -46,31 +46,13 @@ if (!SHOP) {
 }
 
 const endpoint = `${APP_URL}/api/order-sync-step`;
-let after = null;
-let skipIds = [];
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function step() {
-  const started = Date.now();
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-        Authorization: `Bearer ${CRON_SECRET}`,
-        "X-Cron-Secret": CRON_SECRET,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      shop: SHOP,
-      mode: MODE,
-      newestFirst: true,
-      after,
-      skipIds,
-    }),
-  });
+async function fetchJson(url, init) {
+  const res = await fetch(url, init);
   const text = await res.text();
   let json = {};
   try {
@@ -78,23 +60,52 @@ async function step() {
   } catch {
     json = { error: text.slice(0, 200) };
   }
-  if (json.after) after = json.after;
-  const oid = String(json.order?.id || "");
-  if (oid && !skipIds.includes(oid)) {
-    skipIds.push(oid);
-    if (skipIds.length > 2000) skipIds = skipIds.slice(-1500);
-  }
+  return { res, json };
+}
+
+const headers = {
+  Authorization: `Bearer ${CRON_SECRET}`,
+  "X-Cron-Secret": CRON_SECRET,
+  Accept: "application/json",
+  "Content-Type": "application/json",
+};
+
+async function step() {
+  const started = Date.now();
+  const { res, json } = await fetchJson(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      shop: SHOP,
+      mode: MODE,
+      newestFirst: true,
+      persist: true,
+    }),
+  });
   const label = json.order
     ? `${json.order.name || json.order.id} ${json.order.ok ? "OK" : "FAIL"}`
     : json.message || json.error || "";
-  console.log(`[order-sync-cron] ${res.status} ${Date.now() - started}ms ${label}`.slice(0, 400));
+  const resume = json.resumedFrom ? ` (after ${json.resumedFrom})` : "";
+  console.log(
+    `[order-sync-cron] ${res.status} ${Date.now() - started}ms ${label}${resume}`.slice(0, 400),
+  );
   return json;
 }
 
 async function loop() {
+  const { json: status } = await fetchJson(`${endpoint}?status=1&shop=${encodeURIComponent(SHOP)}`, {
+    method: "GET",
+    headers,
+  });
   console.log(
     `[order-sync-cron] starting → ${endpoint} shop=${SHOP} mode=${MODE} wait=${INTERVAL_MS}ms`,
   );
+  console.log(`[order-sync-cron] ${status.message || "no saved cursor"}`);
+  if (status.cursor?.lastOrderName) {
+    console.log(
+      `[order-sync-cron] last=${status.cursor.lastOrderName} processed=${status.cursor.processed} ok=${status.cursor.success} fail=${status.cursor.failed}`,
+    );
+  }
   for (;;) {
     let json;
     try {
@@ -108,9 +119,7 @@ async function loop() {
       continue;
     }
     if (json.done) {
-      after = null;
-      skipIds = [];
-      console.log(`[order-sync-cron] caught up — idle ${IDLE_MS}ms then rescan`);
+      console.log(`[order-sync-cron] caught up — idle ${IDLE_MS}ms then rescan from newest unsynced`);
       await sleep(IDLE_MS);
       continue;
     }
