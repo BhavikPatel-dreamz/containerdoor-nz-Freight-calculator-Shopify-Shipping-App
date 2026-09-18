@@ -12,7 +12,7 @@
     "deploy": "shopify app deploy",
     "config:use": "shopify app config use",
     "env": "shopify app env",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "node --import ./scripts/preload-env.mjs node_modules/@react-router/serve/dist/cli.js ./build/server/index.js",
     "docker-start": "pnpm run setup && pnpm start",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",

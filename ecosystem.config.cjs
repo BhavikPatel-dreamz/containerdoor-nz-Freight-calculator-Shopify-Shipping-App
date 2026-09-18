@@ -33,8 +33,11 @@ module.exports = {
     {
       name: "oms-web",
       cwd: __dirname,
-      script: "node_modules/.bin/react-router-serve",
+      script: "node_modules/@react-router/serve/dist/cli.js",
       args: "./build/server/index.js",
+      interpreter: "node",
+      interpreter_args: "--import ./scripts/preload-env.mjs",
+      env_file: ".env",
       instances: 1,
       exec_mode: "fork",
       autorestart: true,
