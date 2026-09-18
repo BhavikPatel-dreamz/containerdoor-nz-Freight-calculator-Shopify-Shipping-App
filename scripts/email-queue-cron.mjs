@@ -13,6 +13,11 @@
  * Start later:
  *   pm2 start ecosystem.config.cjs --only oms-email-queue-cron
  */
+import dotenv from "dotenv";
+import { resolve } from "path";
+
+dotenv.config({ path: resolve(process.cwd(), ".env") });
+
 const INTERVAL_MS = Number(process.env.EMAIL_CRON_INTERVAL_MS || "60000");
 const APP_URL = (
   process.env.EMAIL_CRON_APP_URL ||
