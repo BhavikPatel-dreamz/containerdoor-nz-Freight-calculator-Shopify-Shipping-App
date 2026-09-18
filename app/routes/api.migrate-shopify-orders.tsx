@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate } from "../shopify.server";
+import { verifyCronSecret } from "../lib/cron-auth.server";
 import { migrateShopifyOrdersToOms } from "../lib/migrate-shopify-oms.server";
 
 /**
@@ -10,14 +11,6 @@ import { migrateShopifyOrdersToOms } from "../lib/migrate-shopify-oms.server";
  *
  * Auth: Shopify admin session, or Bearer CRON_SECRET.
  */
-function verifyCronSecret(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
-  if (authHeader === `Bearer ${secret}` || authHeader === secret) return true;
-  const url = new URL(request.url);
-  return url.searchParams.get("secret") === secret;
-}
 
 export async function loader({ request }: LoaderFunctionArgs) {
   return Response.json(

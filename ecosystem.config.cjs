@@ -56,6 +56,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "150M",
+      env_file: ".env",
       env: {
         NODE_ENV: "production",
         EMAIL_CRON_APP_URL: "http://127.0.0.1:3000",
@@ -71,6 +72,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "150M",
+      env_file: ".env",
       env: {
         NODE_ENV: "production",
         ORDER_WEBHOOK_CRON_APP_URL: "http://127.0.0.1:3000",
@@ -86,6 +88,7 @@ module.exports = {
       autorestart: true,
       watch: false,
       max_memory_restart: "150M",
+      env_file: ".env",
       env: {
         NODE_ENV: "production",
         ORDER_SYNC_CRON_APP_URL: "http://127.0.0.1:3000",

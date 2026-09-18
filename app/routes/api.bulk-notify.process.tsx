@@ -4,6 +4,7 @@ import prisma from "../db.server";
 import { tryGetEmailProvider } from "../lib/email-providers.server";
 import { finalizeQueuedEmailLog } from "../lib/communication-log.server";
 import { authenticate } from "../shopify.server";
+import { cronUnauthorized, verifyCronSecret } from "../lib/cron-auth.server";
 
 // ─── Cron Worker — process pending bulk email jobs from OUR queue tables ──────
 // Tables: BulkEmailJob + BulkEmailRecipient → send → update CommunicationLog
@@ -15,13 +16,6 @@ import { authenticate } from "../shopify.server";
 
 const BATCH_SIZE = Number(process.env.EMAIL_BATCH_SIZE || "50");
 const STUCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes — auto-fail stuck jobs
-
-function verifyCronSecret(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
-  return authHeader === `Bearer ${secret}` || authHeader === secret;
-}
 
 async function authorizeWorker(request: Request): Promise<{ ok: boolean; shop?: string }> {
   if (verifyCronSecret(request)) return { ok: true };
@@ -39,7 +33,7 @@ async function authorizeWorker(request: Request): Promise<{ ok: boolean; shop?: 
 export async function action({ request }: ActionFunctionArgs) {
   const auth = await authorizeWorker(request);
   if (!auth.ok) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    return cronUnauthorized(request);
   }
 
   const body = await request.json().catch(() => ({})) as { command?: string; jobId?: string };

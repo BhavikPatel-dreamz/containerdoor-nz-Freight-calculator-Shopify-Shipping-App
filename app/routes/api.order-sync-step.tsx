@@ -1,5 +1,6 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
 import { authenticate, unauthenticated } from "../shopify.server";
+import { cronUnauthorized, verifyCronSecret } from "../lib/cron-auth.server";
 import {
   countShopifyOrders,
   findNextEligibleShopifyOrder,
@@ -7,15 +8,6 @@ import {
 import { processShopifyOrder, summarizeSyncSystems } from "../lib/process-shopify-order.server";
 
 export const maxDuration = 60;
-
-function verifyCronSecret(request: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return false;
-  const authHeader = request.headers.get("Authorization") ?? request.headers.get("X-Cron-Secret");
-  if (authHeader === `Bearer ${secret}` || authHeader === secret) return true;
-  const url = new URL(request.url);
-  return url.searchParams.get("secret") === secret;
-}
 
 function shopFromBearerJwt(request: Request): string {
   const auth = request.headers.get("Authorization") || "";
@@ -158,7 +150,7 @@ async function runStep(request: Request, body: StepBody) {
  */
 export async function loader({ request }: LoaderFunctionArgs) {
   if (!verifyCronSecret(request)) {
-    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+    return cronUnauthorized(request);
   }
   const url = new URL(request.url);
   const skip = String(url.searchParams.get("skipIds") || "")

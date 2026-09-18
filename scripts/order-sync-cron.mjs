@@ -58,7 +58,8 @@ async function step() {
   const res = await fetch(endpoint, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${CRON_SECRET}`,
+        Authorization: `Bearer ${CRON_SECRET}`,
+        "X-Cron-Secret": CRON_SECRET,
       Accept: "application/json",
       "Content-Type": "application/json",
     },

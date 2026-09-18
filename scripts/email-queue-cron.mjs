@@ -44,6 +44,7 @@ async function tick() {
       method: "GET",
       headers: {
         Authorization: `Bearer ${CRON_SECRET}`,
+        "X-Cron-Secret": CRON_SECRET,
         Accept: "application/json",
       },
     });

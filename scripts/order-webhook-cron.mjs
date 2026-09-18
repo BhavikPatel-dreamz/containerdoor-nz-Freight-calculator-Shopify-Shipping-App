@@ -19,7 +19,7 @@ const INTERVAL_MS = Number(process.env.ORDER_WEBHOOK_CRON_INTERVAL_MS || "30000"
 const APP_URL = (
   process.env.ORDER_WEBHOOK_CRON_APP_URL || process.env.APP_URL || process.env.APP_BASE_URL || ""
 ).replace(/\/$/, "");
-const CRON_SECRET = process.env.CRON_SECRET || "";
+const CRON_SECRET = String(process.env.CRON_SECRET || "").trim().replace(/^["']|["']$/g, "");
 
 if (!APP_URL) {
   console.error("[order-webhook-cron] Missing APP_URL or ORDER_WEBHOOK_CRON_APP_URL");
@@ -30,6 +30,8 @@ if (!CRON_SECRET) {
   process.exit(1);
 }
 
+console.log(`[order-webhook-cron] CRON_SECRET loaded len=${CRON_SECRET.length}`);
+
 const endpoint = `${APP_URL}/api/order-webhook/process`;
 
 async function tick() {
@@ -39,6 +41,7 @@ async function tick() {
       method: "GET",
       headers: {
         Authorization: `Bearer ${CRON_SECRET}`,
+        "X-Cron-Secret": CRON_SECRET,
         Accept: "application/json",
       },
     });

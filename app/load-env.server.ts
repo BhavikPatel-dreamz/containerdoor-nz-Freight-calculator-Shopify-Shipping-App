@@ -24,3 +24,9 @@ if (!process.env.SHOPIFY_APP_URL) {
     process.env.SHOPIFY_APP_URL = fallback.replace(/\/$/, "");
   }
 }
+
+{
+  const key = ["CRON", "SECRET"].join("_");
+  const len = String(process.env[key] || "").trim().length;
+  console.log(`[env] ${key} configured=${len > 0} len=${len}`);
+}
