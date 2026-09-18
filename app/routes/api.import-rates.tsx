@@ -16,8 +16,17 @@ export async function action({ request }: ActionFunctionArgs) {
     return Response.json({ ok: false, error: "Method not allowed" }, { status: 405 });
   }
 
+  let session;
   try {
-    const { session } = await authenticate.admin(request);
+    ({ session } = await authenticate.admin(request));
+  } catch {
+    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!session?.shop) {
+    return Response.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
     const body = (await request.json()) as {
       intent?: "init" | "chunk" | "commit";
       uploadId?: string;
