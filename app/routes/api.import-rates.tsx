@@ -3,11 +3,15 @@ import { authenticate } from "../shopify.server";
 import { importRatesCsv } from "../models/freight.server";
 
 const uploads = new Map<string, { csv: string; created: number }>();
+const processedUploads = new Map<string, number>();
 
 setInterval(() => {
   const cutoff = Date.now() - 30 * 60 * 1000;
   for (const [id, entry] of uploads) {
     if (entry.created < cutoff) uploads.delete(id);
+  }
+  for (const [id, createdAt] of processedUploads) {
+    if (createdAt < cutoff) processedUploads.delete(id);
   }
 }, 30 * 60 * 1000);
 
@@ -57,13 +61,29 @@ export async function action({ request }: ActionFunctionArgs) {
       if (!body.uploadId) {
         return Response.json({ ok: false, error: "Missing uploadId" }, { status: 400 });
       }
+      if (processedUploads.has(body.uploadId)) {
+        return Response.json({ ok: true, duplicate: true, message: "Import already processed" });
+      }
       const entry = uploads.get(body.uploadId);
       if (!entry) {
         return Response.json({ ok: false, error: "Upload not found or expired" }, { status: 404 });
       }
       const csv = entry.csv;
+      console.log("[import-rates] commit-start", {
+        uploadId: body.uploadId,
+        shop: session.shop,
+        csvLength: csv.length,
+        chunks: csv.split(/\r?\n/).filter(Boolean).length,
+      });
+      processedUploads.set(body.uploadId, Date.now());
       uploads.delete(body.uploadId);
-      return await importRatesCsv(session.shop, csv);
+      const result = await importRatesCsv(session.shop, csv);
+      console.log("[import-rates] commit-result", {
+        uploadId: body.uploadId,
+        shop: session.shop,
+        result,
+      });
+      return result;
     }
 
     return Response.json({ ok: false, error: "Invalid intent" }, { status: 400 });

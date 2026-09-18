@@ -130,6 +130,16 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
         return;
       }
 
+      const readJson = async (res: Response) => {
+        const raw = await res.text();
+        if (!raw) return {};
+        try {
+          return JSON.parse(raw);
+        } catch {
+          throw new Error(`Import request failed (${res.status}): ${raw.slice(0, 200)}`);
+        }
+      };
+
       setUploadPhase("uploading");
       setUploadTotal(chunks.length);
 
@@ -139,7 +149,7 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
         body: JSON.stringify({ intent: "init" }),
         signal: abort.signal,
       });
-      const initData = await initRes.json();
+      const initData = await readJson(initRes);
       if (!initData.ok) throw new Error(initData.error || "Failed to start import");
       const { uploadId } = initData;
 
@@ -150,7 +160,7 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
           body: JSON.stringify({ intent: "chunk", uploadId, csv: chunks[i] }),
           signal: abort.signal,
         });
-        const d = await res.json();
+        const d = await readJson(res);
         if (!d.ok) throw new Error(d.error || "Chunk upload failed");
         setUploadUploaded(i + 1);
       }
@@ -162,7 +172,7 @@ const isBulkToggling = navigation.state === "submitting" && navigation.formData?
         body: JSON.stringify({ intent: "commit", uploadId }),
         signal: abort.signal,
       });
-      const result = await commitRes.json();
+      const result = await readJson(commitRes);
       if (result.ok) {
         window.location.reload();
       } else {

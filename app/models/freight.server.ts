@@ -323,6 +323,8 @@ export async function importRatesCsv(shop: string, csv: string) {
   let created = 0;
   let updated = 0;
 
+  const seenRows = new Set<string>();
+
   // Build all data objects first — no DB calls yet
   const rowsToProcess: Array<{ id: string; data: any }> = [];
 
@@ -357,6 +359,35 @@ export async function importRatesCsv(shop: string, csv: string) {
     };
 
     if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
+
+    const rowSignature = JSON.stringify({
+      shop: data.shop,
+      company: data.company,
+      serviceType: data.serviceType,
+      city: data.city,
+      sector: data.sector ?? null,
+      postalCode: data.postalCode,
+      useWeightRange: data.useWeightRange,
+      minWeightGrams: data.minWeightGrams ?? null,
+      maxWeightGrams: data.maxWeightGrams ?? null,
+      useVolumeRange: data.useVolumeRange,
+      minVolumeCm3: data.minVolumeCm3 ?? null,
+      maxVolumeCm3: data.maxVolumeCm3 ?? null,
+      rate: String(data.rate),
+      baseFee: String(data.baseFee),
+      zoneSurcharge: String(data.zoneSurcharge),
+      minimumCharge: String(data.minimumCharge),
+      signatureSurcharge: String(data.signatureSurcharge),
+      ruralSurcharge: String(data.ruralSurcharge),
+      ageRestrictedSurcharge: String(data.ageRestrictedSurcharge),
+      homeDeliveryFee: data.homeDeliveryFee == null ? null : String(data.homeDeliveryFee),
+      residentialFee: String(data.residentialFee),
+      mode: data.mode ?? null,
+      active: data.active,
+    });
+
+    if (seenRows.has(rowSignature)) continue;
+    seenRows.add(rowSignature);
 
     rowsToProcess.push({ id: row.id || "", data });
   }
