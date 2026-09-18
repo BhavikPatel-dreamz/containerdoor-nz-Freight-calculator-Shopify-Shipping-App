@@ -2,7 +2,7 @@
 
 client_id = "787d83dca600474d64ea044ad28e4a2d"
 name = "ContainerDoor OMS"
-application_url = "https://containerdoor-nz-freight-calculator.vercel.app"
+application_url = "https://containerdoor.dddemo.net"
 embedded = true
 
 [build]
@@ -15,7 +15,8 @@ api_version = "unstable"
   handle = "containerdoor-product-events"
   topic = "Product"
   actions = [ "update" ]
-  uri = "https://containerdoor-nz-freight-calculator.vercel.app/events/products"
+  triggers = [ "product.variants.*" ]
+  uri = "https://containerdoor.dddemo.net/events/products"
   api_version = "unstable"
 
 [webhooks]
@@ -43,10 +44,10 @@ scopes = "read_all_orders,read_customers,read_orders,read_products,read_shipping
 
 [auth]
 redirect_urls = [
-  "https://containerdoor-nz-freight-calculator.vercel.app/api/auth"
+  "https://containerdoor.dddemo.net/api/auth"
 ]
 
 [app_proxy]
-url = "https://containerdoor-nz-freight-calculator.vercel.app/apps/containerdoor"
+url = "https://containerdoor.dddemo.net/apps/containerdoor"
 subpath = "containerdoor"
 prefix = "apps"
