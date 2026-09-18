@@ -1,7 +1,37 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const MONDAY_API_URL = "https://api.monday.com/v2";
+const MONDAY_API_GAP_MS = Math.max(0, Number(process.env.MONDAY_API_GAP_MS || "1000"));
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+let mondayQueue: Promise<unknown> = Promise.resolve();
+let lastMondayCallAt = 0;
 
 async function mondayRequest(
+  query: string,
+  variables?: Record<string, any>,
+  retries = 3,
+): Promise<any> {
+  const run = async () => {
+    const wait = MONDAY_API_GAP_MS - (Date.now() - lastMondayCallAt);
+    if (wait > 0) {
+      console.log(`[Monday API] waiting ${wait}ms before next call`);
+      await sleep(wait);
+    }
+    lastMondayCallAt = Date.now();
+    return mondayRequestNow(query, variables, retries);
+  };
+  const next = mondayQueue.then(run, run);
+  mondayQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+async function mondayRequestNow(
   query: string,
   variables?: Record<string, any>,
   retries = 3,
@@ -30,8 +60,9 @@ async function mondayRequest(
     console.log(
       `[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`,
     );
-    await new Promise((r) => setTimeout(r, waitSeconds * 1000));
-    return mondayRequest(query, variables, retries - 1);
+    await sleep(waitSeconds * 1000);
+    lastMondayCallAt = Date.now();
+    return mondayRequestNow(query, variables, retries - 1);
   }
 
   if (json.errors) throw new Error(JSON.stringify(json.errors));
@@ -890,16 +921,20 @@ export async function findMondayItemByName(itemName: string): Promise<string | n
 
 export async function findMondayItemByNameDetailed(
   itemName: string,
+  extraTerms: string[] = [],
 ): Promise<{ id: string; name: string } | null> {
   const name = String(itemName || "").trim();
   if (!name) return null;
   const boardId = process.env.MONDAY_BOARD_ID;
   if (!boardId) return null;
 
+  const stripped = name.replace(/^#/, "");
+  const term = [...new Set([stripped, `#${stripped}`, name, ...extraTerms.map((t) => String(t || "").trim()).filter(Boolean)])];
+
   try {
     const data = await mondayRequest(
-      `query ($boardId: [ID!], $term: CompareValue) {
-        boards(ids: $boardId) {
+      `query ($boardId: ID!, $term: CompareValue!) {
+        boards(ids: [$boardId]) {
           items_page(
             limit: 25
             query_params: {
@@ -910,17 +945,22 @@ export async function findMondayItemByNameDetailed(
           }
         }
       }`,
-      { boardId: [boardId], term: [name.replace(/^#/, "")] },
+      { boardId, term },
     );
     const items = data?.boards?.[0]?.items_page?.items ?? [];
-    const want = normalizeMondayPulseName(name);
-    const exact = items.find((item: any) => normalizeMondayPulseName(item?.name) === want);
-    if (exact?.id) return { id: String(exact.id), name: String(exact.name || name) };
-    const withLetter = items.find((item: any) => {
-      const n = normalizeMondayPulseName(item?.name);
-      return n === want || n.startsWith(want);
-    });
-    if (withLetter?.id) return { id: String(withLetter.id), name: String(withLetter.name || name) };
+    const wants = term.map(normalizeMondayPulseName).filter(Boolean);
+    const scored = items
+      .map((item: any) => {
+        const n = normalizeMondayPulseName(item?.name);
+        const exact = wants.includes(n);
+        const prefix = wants.some((w) => n === w || n.startsWith(w));
+        return { item, exact, prefix };
+      })
+      .filter((row: { exact: boolean; prefix: boolean }) => row.exact || row.prefix);
+    const best = scored.find((row: { exact: boolean }) => row.exact) || scored[0];
+    if (best?.item?.id) {
+      return { id: String(best.item.id), name: String(best.item.name || name) };
+    }
   } catch (err) {
     console.error("[Monday] findMondayItemByName failed", name, err);
   }
@@ -935,39 +975,42 @@ export async function findMondayItemForLine(input: {
   sku?: string | null;
 }): Promise<{ id: string; name: string } | null> {
   const names = mondayPulseNameCandidates(input.orderName, input.letterSuffix, input.orderId);
-  for (const name of names) {
-    const hit = await findMondayItemByNameDetailed(name);
+  if (names.length) {
+    const hit = await findMondayItemByNameDetailed(names[0], names.slice(1));
     if (hit?.id) return hit;
   }
-  const skuId = await findMondayItemBySkuAndOrderName({
+  const skuHit = await findMondayItemBySkuAndOrderName({
     sku: input.sku,
     orderName: input.orderName,
+    letterSuffix: input.letterSuffix,
   });
-  if (skuId) return { id: skuId, name: names[0] || String(input.orderName || "") };
+  if (skuHit?.id) return skuHit;
   return null;
 }
 
 export async function findMondayItemBySkuAndOrderName(input: {
   sku?: string | null;
   orderName?: string | null;
-}): Promise<string | null> {
+  letterSuffix?: string | null;
+}): Promise<{ id: string; name: string } | null> {
   const sku = String(input.sku || "").trim();
   const orderName = String(input.orderName || "").trim();
-  if (!sku) return null;
+  if (!sku || !orderName) return null;
 
   try {
     const colIds = await getOrCreateColumnIds();
     if (!colIds.sku) return null;
     const items = await findMondayItemsByColumnValue(colIds.sku, sku);
     if (!items.length) return null;
-    if (orderName) {
-      const needle = orderName.replace(/^#/, "");
-      const named = items.find((item: any) =>
-        normalizeMondayPulseName(item?.name).includes(needle.toLowerCase()),
-      );
-      if (named?.id) return String(named.id);
-    }
-    if (items.length === 1 && items[0]?.id) return String(items[0].id);
+    const letter = String(input.letterSuffix || "").trim().toUpperCase();
+    const needle = orderName.replace(/^#/, "").toLowerCase();
+    const named = items.find((item: any) => {
+      const n = normalizeMondayPulseName(item?.name);
+      if (!n.includes(needle)) return false;
+      if (letter && !n.endsWith(letter.toLowerCase()) && n !== needle) return false;
+      return true;
+    });
+    if (named?.id) return { id: String(named.id), name: String(named.name || "") };
   } catch (err) {
     console.error("[Monday] findMondayItemBySkuAndOrderName failed", input, err);
   }
