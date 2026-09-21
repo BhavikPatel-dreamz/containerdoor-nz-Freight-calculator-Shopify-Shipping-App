@@ -70,7 +70,7 @@ Prefixes: `standard_delivery::`, `depot_delivery::`, `customer_pickup::`. `app.f
 ### Existing: `box-dimensions-block`
 - Type `ui_extension`, target `admin.product-variant-details.block.render`.
 - Lets merchant set box L/W/H + weight metafields per variant.
-- `@shopify/ui-extensions` is pinned to `2026.7.0`; `@shopify/ui-extensions-react` latest published version remains `2025.7.3`.
+- `@shopify/ui-extensions` + `@shopify/ui-extensions-react` are pinned to the matching `2025.7.3` SDK pair.
 
 ## Order-page freight extensions (built)
 
