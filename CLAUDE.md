@@ -70,26 +70,26 @@ Prefixes: `standard_delivery::`, `depot_delivery::`, `customer_pickup::`. `app.f
 ### Existing: `box-dimensions-block`
 - Type `ui_extension`, target `admin.product-variant-details.block.render`.
 - Lets merchant set box L/W/H + weight metafields per variant.
-- Deps pinned to `@shopify/ui-extensions` + `@shopify/ui-extensions-react` `2025.7.3`.
+- `@shopify/ui-extensions` is pinned to `2026.7.0`; `@shopify/ui-extensions-react` latest published version remains `2025.7.3`.
 
 ## Order-page freight extensions (built)
 
 Two extensions show freight info per variant on the order page:
 
 ### `extensions/order-freight-block` — ADMIN
-- Target `admin.order-details.block.render`, `@shopify/ui-extensions-react/admin`, API `2025-07`.
+- Target `admin.order-details.block.render`, `@shopify/ui-extensions-react/admin`, API `2026-07`.
 - Reads `order.shippingLines.nodes[].code` directly via the authenticated `api.query()` hook, parses with `src/freight.ts` `parseFreightCode()`, displays per-variant carrier + boxes.
 - Merchant must manually add the block to the order page (Shopify UI extensions aren't auto-placed).
 
 ### `extensions/order-freight-customer` — CUSTOMER ACCOUNT (order status block)
-- Target `customer-account.order-status.block.render`, `@shopify/ui-extensions-react/customer-account`, API `2025-07`.
+- Target `customer-account.order-status.block.render`, `@shopify/ui-extensions-react/customer-account`, API `2026-07`.
 
 ### `extensions/order-freight-customer-page` — CUSTOMER ACCOUNT (full order page)
 - Target `customer-account.order.page.render`. **Gotcha:** the full-page `*.page.render` target "cannot be combined with any other targets" — it must live in its own extension. Shares the same `OrderFreight.tsx`/`freight.ts` (copied, not imported — separate builds).
 
 Both customer extensions:
 - **Key constraint:** the customer-account `ShippingLine` object exposes ONLY `title`/`handle`/`originalPrice` — **NOT `code`**. So the freight breakdown can't be read customer-side from the shipping line.
-- **Workaround:** the `orders/create` webhook (`app/routes/webhooks.orders.create.tsx` → `writeFreightMetafield`) parses the shipping-line `code` and writes a JSON **order metafield** `containerdoor_freight.freight_data`. The customer extension reads that metafield via the Customer Account GraphQL API (`shopify://customer-account/api/2025-07/graphql.json`).
+- **Workaround:** the `orders/create` webhook (`app/routes/webhooks.orders.create.tsx` → `writeFreightMetafield`) parses the shipping-line `code` and writes a JSON **order metafield** `containerdoor_freight.freight_data`. The customer extension reads that metafield via the Customer Account GraphQL API (`shopify://customer-account/api/2026-07/graphql.json`).
 
 ### Supporting changes
 - `shopify.app.toml`: added `orders/create` webhook subscription + `write_orders` scope (needed for `metafieldsSet` on an order). **Merchant must re-approve the updated scope** on next install/deploy.

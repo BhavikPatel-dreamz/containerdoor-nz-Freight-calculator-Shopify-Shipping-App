@@ -136,7 +136,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   let allOrders: ShopifyOrderNode[] = [];
   try {
     console.log(`[DASHBOARD LOADER] Fetching orders for shop: ${shop}`);
-    const gqlRes = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+    const gqlRes = await fetch(`https://${shop}/admin/api/2026-07/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
       body: JSON.stringify({
@@ -169,7 +169,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   }
   try {
     console.log(`[dashboard loader] Fetching orders for shop: ${shop}, session shop: ${session.shop}`);
-    const gqlRes = await fetch(`https://${shop}/admin/api/2024-10/graphql.json`, {
+    const gqlRes = await fetch(`https://${shop}/admin/api/2026-07/graphql.json`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": session.accessToken },
       body: JSON.stringify({

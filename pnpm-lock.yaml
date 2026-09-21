@@ -148,11 +148,11 @@ importers:
   extensions/box-dimensions-block:
     dependencies:
       '@shopify/ui-extensions':
-        specifier: 2025.7.3
-        version: 2025.7.3
+        specifier: 2026.7.0
+        version: 2026.7.0
       '@shopify/ui-extensions-react':
         specifier: 2025.7.3
-        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+        version: 2025.7.3(@shopify/ui-extensions@2026.7.0)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -160,11 +160,11 @@ importers:
   extensions/checkout-shipping-note:
     dependencies:
       '@shopify/ui-extensions':
-        specifier: 2025.7.3
-        version: 2025.7.3
+        specifier: 2026.7.0
+        version: 2026.7.0
       '@shopify/ui-extensions-react':
         specifier: 2025.7.3
-        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+        version: 2025.7.3(@shopify/ui-extensions@2026.7.0)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -172,11 +172,11 @@ importers:
   extensions/customer-order-status:
     dependencies:
       '@shopify/ui-extensions':
-        specifier: 2025.7.3
-        version: 2025.7.3
+        specifier: 2026.7.0
+        version: 2026.7.0
       '@shopify/ui-extensions-react':
         specifier: 2025.7.3
-        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+        version: 2025.7.3(@shopify/ui-extensions@2026.7.0)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -184,11 +184,11 @@ importers:
   extensions/order-status-block:
     dependencies:
       '@shopify/ui-extensions':
-        specifier: 2025.7.3
-        version: 2025.7.3
+        specifier: 2026.7.0
+        version: 2026.7.0
       '@shopify/ui-extensions-react':
         specifier: 2025.7.3
-        version: 2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
+        version: 2025.7.3(@shopify/ui-extensions@2026.7.0)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -1467,8 +1467,16 @@ packages:
       '@shopify/ui-extensions': 2025.7.3
       react: '>=18.0.0'
 
-  '@shopify/ui-extensions@2025.7.3':
-    resolution: {integrity: sha512-XqTEzLnU0YOD7s9vd2EEBdXuqxL6H2VMBkwXuHNHdohwMtN/50S5/OsKRrEsE97D3/+/TcEEhQywocA8z4IvSw==}
+  '@shopify/ui-extensions@2026.7.0':
+    resolution: {integrity: sha512-xqcExD7d5yAmTZMd+W8yB5sfB587UKobY/fPeONImZLITsEPRbUYfH9MPUHoGJ3uL+5oBYy9ZMZofysQ3vP7eQ==}
+    peerDependencies:
+      '@preact/signals': '*'
+      preact: '*'
+    peerDependenciesMeta:
+      '@preact/signals':
+        optional: true
+      preact:
+        optional: true
 
   '@stablelib/base64@1.0.1':
     resolution: {integrity: sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ==}
@@ -1478,6 +1486,9 @@ packages:
 
   '@ts-morph/common@0.11.1':
     resolution: {integrity: sha512-7hWZS0NRpEsNV8vWJzg7FEz6V8MaLNeJOmwmghqUXTpzk16V1LLZhdo+4QvE/+zv4cVci0OviuJFnqhEfoV3+g==}
+
+  '@ts-morph/common@0.26.1':
+    resolution: {integrity: sha512-Sn28TGl/4cFpcM+jwsH1wLncYq3FtN/BIpem+HOygfBWPT5pAeS5dB4VFVzV8FbnOKHpDLZmvAl4AjPEev5idA==}
 
   '@tybys/wasm-util@0.10.3':
     resolution: {integrity: sha512-F3fo1MYrRJYL3zER0OUOmkutjr1Vp23m7OsSgp7nq4SP6OqX6C/56XFIPAl5bt3zaBRjmW7SGz3u/6LwFpYcOg==}
@@ -2123,6 +2134,9 @@ packages:
 
   code-block-writer@10.1.1:
     resolution: {integrity: sha512-67ueh2IRGst/51p0n6FvPrnRjAGHY5F8xdjkgrYE7DDzpJe6qA07RYQ9VcoUeo5ATOjSOiWpSL3SWBRRbempMw==}
+
+  code-block-writer@13.0.3:
+    resolution: {integrity: sha512-Oofo0pq3IKnsFtuHqSF7TqBfr71aeyZDVJ0HpmqB7FBM2qEigL0iPONSCZSO9pE9dZTAxANe5XHG9Uy0YMv8cg==}
 
   color-convert@2.0.1:
     resolution: {integrity: sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ==}
@@ -4137,6 +4151,9 @@ packages:
   ts-morph@12.0.0:
     resolution: {integrity: sha512-VHC8XgU2fFW7yO1f/b3mxKDje1vmyzFXHWzOYmKEkCEwcLjDtbdLgBQviqj4ZwP4MJkQtRo6Ha2I29lq/B+VxA==}
 
+  ts-morph@25.0.1:
+    resolution: {integrity: sha512-QJEiTdnz1YjrB3JFhd626gX4rKHDLSjSVMvGGG4v7ONc3RBwa0Eei98G9AT9uNFDMtV54JyuXsFeC+OH0n6bXQ==}
+
   ts-toolbelt@6.15.5:
     resolution: {integrity: sha512-FZIXf1ksVyLcfr7M317jbB67XFJhOO1YqdTcuGaq9q5jLUoTikukZ+98TPjKiP2jC5CgmYdWWYs0s2nLSU0/1A==}
 
@@ -5963,20 +5980,19 @@ snapshots:
     dependencies:
       '@shopify/graphql-client': 1.4.2
 
-  '@shopify/ui-extensions-react@2025.7.3(@shopify/ui-extensions@2025.7.3)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)':
+  '@shopify/ui-extensions-react@2025.7.3(@shopify/ui-extensions@2026.7.0)(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@remote-ui/async-subscription': 2.1.18
       '@remote-ui/react': 5.0.8(react-reconciler@0.29.0(react@18.3.1))(react@18.3.1)
-      '@shopify/ui-extensions': 2025.7.3
+      '@shopify/ui-extensions': 2026.7.0
       '@types/react': 18.3.31
       react: 18.3.1
     transitivePeerDependencies:
       - react-reconciler
 
-  '@shopify/ui-extensions@2025.7.3':
+  '@shopify/ui-extensions@2026.7.0':
     dependencies:
-      '@remote-ui/async-subscription': 2.1.18
-      '@remote-ui/core': 2.2.7
+      ts-morph: 25.0.1
 
   '@stablelib/base64@1.0.1': {}
 
@@ -5987,6 +6003,12 @@ snapshots:
       fast-glob: 3.3.3
       minimatch: 3.1.5
       mkdirp: 1.0.4
+      path-browserify: 1.0.1
+
+  '@ts-morph/common@0.26.1':
+    dependencies:
+      fast-glob: 3.3.3
+      minimatch: 9.0.9
       path-browserify: 1.0.1
 
   '@tybys/wasm-util@0.10.3':
@@ -6718,6 +6740,8 @@ snapshots:
   clone@1.0.4: {}
 
   code-block-writer@10.1.1: {}
+
+  code-block-writer@13.0.3: {}
 
   color-convert@2.0.1:
     dependencies:
@@ -8938,6 +8962,11 @@ snapshots:
     dependencies:
       '@ts-morph/common': 0.11.1
       code-block-writer: 10.1.1
+
+  ts-morph@25.0.1:
+    dependencies:
+      '@ts-morph/common': 0.26.1
+      code-block-writer: 13.0.3
 
   ts-toolbelt@6.15.5: {}
 
