@@ -51,13 +51,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shop: session.shop, isOnline: false },
       orderBy: { id: "asc" },
     });
-    const token = offlineSession?.accessToken || session.accessToken;
+    const token = session.accessToken || offlineSession?.accessToken || null;
 
     if (!token) {
       return { ok: false, message: "No access token found for this shop. Reinstall app and try again." };
     }
 
     try {
+      console.log(
+        `Registering carrier service for ${session.shop} using ${session.accessToken ? "online" : "offline"} token`,
+      );
+      if (token) {
+        console.log(
+          `token diagnostic for ${session.shop}: prefix=${token.slice(0, 5)} len=${token.length} expires=${session.expires ?? "n/a"} isOnline=${session.isOnline}`,
+        );
+      }
       const result = await registerOrUpdateCarrierService(session.shop, token);
       const services = await listCarrierServices(session.shop, token);
       const names = services.map((service) => service.name).join(", ") || "none";
@@ -67,6 +75,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to register carrier service";
+      console.error(`Carrier service registration failed for ${session.shop}`, error);
       return { ok: false, message };
     }
   }
