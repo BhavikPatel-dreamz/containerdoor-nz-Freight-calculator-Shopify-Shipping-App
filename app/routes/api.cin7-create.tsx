@@ -318,12 +318,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";
 
     const allOrderLineItems = orderData.lineItems?.nodes ?? [];
-    const targetLineIndex = normalizedVariantId
-      ? allOrderLineItems.findIndex((li: any) => {
-          const currentId = String(li?.variant?.id ?? "");
-          return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+    // Letter follows the OMS line index (A/B/C…) so a bundle parent displayed as
+    // OMS line B gets reference #1271B — never a forced "A" from its position (or
+    // absence) among Shopify's physical component line items. Falls back to the
+    // previous Shopify line-item index when the ops rows aren't available yet.
+    const omsOpsLines = normalizedVariantId
+      ? await prisma.orderLineItemOperationalData.findMany({
+          where: { shop, orderId: orderIdStr },
+          select: { variantId: true },
+          orderBy: { createdAt: "asc" },
         })
+      : [];
+    const omsLineIndex = normalizedVariantId
+      ? omsOpsLines.findIndex((ops) => String(ops.variantId) === normalizedVariantId)
       : 0;
+    const targetLineIndex =
+      omsLineIndex >= 0
+        ? omsLineIndex
+        : normalizedVariantId
+          ? allOrderLineItems.findIndex((li: any) => {
+              const currentId = String(li?.variant?.id ?? "");
+              return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+            })
+          : 0;
     const lineLetter = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.max(targetLineIndex, 0) % 26] ?? "A";
     const cin7Reference = buildCin7SalesOrderReference({
       orderName: orderData.name ?? orderIdStr,

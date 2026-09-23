@@ -740,14 +740,34 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     const lineItemAmountByVariant = new Map(
       freightLineAmounts.map((f) => [f.variantId, f]),
     );
+    // Bundle parents are not in the freight code (their physical components
+    // are), so they inherit the carrier/boxes/amount their components were
+    // billed at checkout. Keeps the OMS bundle row's carrier consistent with
+    // the freight code while component variants stay internal-only.
+    const bundleFreightByVariant = new Map<string, { company: string; boxes: number; amount: number }>();
+    for (const group of getBundleGroups(order).values()) {
+      const componentLines = freightLineAmounts.filter((f) =>
+        group.components.some((c) => String(c.variantId) === String(f.variantId)),
+      );
+      if (!componentLines.length) continue;
+      bundleFreightByVariant.set(group.parentVariantId, {
+        company: componentLines.find((f) => f.company)?.company ?? "",
+        boxes: componentLines.reduce((sum, f) => sum + (Number(f.boxes) || 0), 0),
+        amount: componentLines.reduce((sum, f) => sum + (Number(f.amount) || 0), 0),
+      });
+    }
     lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
       const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
+      const bundle = bundleFreightByVariant.get(String(li.variantId ?? ""));
       return {
         ...li,
         unitPrice: freight?.unitPrice ?? 0,
         productAmount: freight?.productAmount ?? 0,
-        freightAmount: freight?.freightAmount ?? 0,
+        freightAmount: freight?.freightAmount ?? bundle?.amount ?? 0,
         individualTotal: freight?.individualTotal ?? 0,
+        company: bundle?.company ?? freight?.company ?? "",
+        boxes: bundle?.boxes ?? freight?.boxes ?? 0,
+        amount: bundle?.amount ?? freight?.amount ?? 0,
       };
     });
   }
@@ -836,6 +856,15 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
     for (const li of freightBreakdown.lineItems) {
       if (li.variantId && li.company) carrierByVariant.set(li.variantId, li.company);
     }
+  }
+  // The checkout freight code is encoded per physical component variant, but the
+  // OMS carrier lives on the customer-facing bundle parent. Inherit the parent's
+  // carrier from its freight-bearing component so the parent row is never blank.
+  for (const group of getBundleGroups(order).values()) {
+    const component = freightBreakdown?.lineItems.find((li) =>
+      group.components.some((c) => String(c.variantId) === String(li.variantId)),
+    );
+    if (component?.company) carrierByVariant.set(group.parentVariantId, component.company);
   }
 
   let created = 0;

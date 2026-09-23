@@ -408,6 +408,28 @@ function normalizeCin7Ref(value?: string | null): string {
     .toLowerCase();
 }
 
+/** Trailing line letter of a Cin7 reference: "#1273A" -> "A"; "#1273" -> "". */
+function cin7RefLineLetter(value?: string | null): string {
+  const m = /^#?.*\d+([A-Z])$/i.exec(String(value || "").trim());
+  return m ? m[1].toUpperCase() : "";
+}
+
+/** References match when a shared line letter is identical (same order), or legacy un-lettered. */
+function cin7RefLineMatches(reference: string, candidate?: string | null): boolean {
+  const refLetter = cin7RefLineLetter(reference);
+  const candidateRef = String(candidate || "").trim();
+  if (refLetter) {
+    const candidateLetter = cin7RefLineLetter(candidateRef);
+    // Lettered references must share BOTH the line letter and the order number
+    // (#1273A never matches #1273B or #1274A); un-lettered candidates keep the
+    // legacy historical-SO linkage (#1273A may match an un-lettered "#1273").
+    if (candidateLetter) {
+      return candidateLetter === refLetter && normalizeCin7Ref(reference) === normalizeCin7Ref(candidateRef);
+    }
+  }
+  return normalizeCin7Ref(reference) === normalizeCin7Ref(candidateRef);
+}
+
 export function pickCin7MatchForLine(
   candidates: Cin7SalesOrderMatch[],
   input: { reference?: string | null; sku?: string | null; orderName?: string | null },
@@ -416,11 +438,12 @@ export function pickCin7MatchForLine(
   const reference = String(input.reference || "").trim();
   const sku = String(input.sku || "").trim().toLowerCase();
   const orderKey = normalizeCin7Ref(input.orderName || reference);
+  const referenceLineLetter = cin7RefLineLetter(reference);
 
   if (reference) {
     const byRef = candidates.find((c) => String(c.reference || "").trim() === reference);
     if (byRef) return byRef;
-    const byRefNorm = candidates.find((c) => normalizeCin7Ref(c.reference) === normalizeCin7Ref(reference));
+    const byRefNorm = candidates.find((c) => cin7RefLineMatches(reference, c.reference));
     if (byRefNorm) return byRefNorm;
   }
 
@@ -428,7 +451,15 @@ export function pickCin7MatchForLine(
     const byOrderRef = candidates.filter((c) => {
       const ref = normalizeCin7Ref(c.reference);
       const cust = normalizeCin7Ref(c.customerOrderNo);
-      return ref === orderKey || cust === orderKey;
+      if (ref !== orderKey && cust !== orderKey) return false;
+      // A lettered reference must never link another line's SO: only a
+      // candidate with the same line letter (or a legacy un-lettered SO)
+      // may be treated as a match.
+      if (referenceLineLetter) {
+        const candidateLetter = cin7RefLineLetter(c.reference);
+        if (candidateLetter && candidateLetter !== referenceLineLetter) return false;
+      }
+      return true;
     });
     if (byOrderRef.length === 1) return byOrderRef[0];
     if (byOrderRef.length > 1 && sku) {
@@ -450,7 +481,11 @@ export function pickCin7MatchForLine(
     if (bySku.length > 1) return bySku[0];
   }
 
-  if (candidates.length === 1) return candidates[0];
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    if (!referenceLineLetter || cin7RefLineMatches(reference, only.reference)) return only;
+    return null;
+  }
   return null;
 }
 
