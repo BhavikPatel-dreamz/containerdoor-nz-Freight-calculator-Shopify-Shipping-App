@@ -10,6 +10,7 @@ import {
   findCin7SalesOrderByReference,
   findCin7SalesOrdersForShopifyOrder,
   pickCin7MatchForLine,
+  type Cin7SalesOrderMatch,
 } from "../lib/cin7.server";
 import {
   buildCin7SalesOrderReference,
@@ -357,11 +358,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           })?.sku || bundleTargetLineItems[0]?.code
         : allOrderLineItems[0]?.sku) || "",
     ).trim();
-    const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
-      orderName: orderData.name,
-      orderId: orderIdStr,
-      reference: cin7Reference,
-    });
+    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
+    // existing SO" — otherwise we'd silently create a duplicate here.
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    try {
+      existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+        orderName: orderData.name,
+        orderId: orderIdStr,
+        reference: cin7Reference,
+        strict: true,
+      });
+    } catch (lookupErr) {
+      const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+      console.error(`[Cin7][API][${orderIdStr}] existing SO lookup FAILED (retryable) - no SO created: ${msg}`);
+      return Response.json(
+        { ok: false, error: `Cin7 lookup unavailable (${msg}) - try again later`, retryable: true },
+        { status: 502 },
+      );
+    }
     const linked = pickCin7MatchForLine(existingCin7, { reference: cin7Reference, sku: skuForMatch });
     if (linked?.id && normalizedVariantId) {
       await saveCin7LineLink({

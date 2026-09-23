@@ -4,7 +4,7 @@ import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems } from "./monday.server";
-import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
+import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, type Cin7SalesOrderMatch } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
 import {
@@ -1299,10 +1299,23 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let failed = 0;
     const errors: string[] = [];
 
-    const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
-      orderName: order.name,
-      orderId,
-    });
+    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
+    // existing SO", otherwise this run would silently create a duplicate.
+    // On lookup failure, stop and return a retryable failure (no SO created).
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    try {
+      existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+        orderName: order.name,
+        orderId,
+        strict: true,
+      });
+    } catch (lookupErr) {
+      const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+      console.error(
+        `[Cin7][Webhook][${orderId}] existing SO lookup FAILED (retryable) - no SO created for ${customerOrderNo}: ${msg}`,
+      );
+      return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [`Cin7 lookup failed (retryable): ${msg}`] };
+    }
     console.log(
       `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} for ${customerOrderNo}`,
     );
@@ -1718,6 +1731,7 @@ export async function createMondayEntriesForOrder(
 
       // Ops row is usually already created by createOrderLineItemRecords — do NOT
       // require a fresh create (that unique-key race was skipping Monday entirely).
+      let ownedOpsNow = false;
       let ops = await prisma.orderLineItemOperationalData.findUnique({
         where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
       });
@@ -1733,6 +1747,7 @@ export async function createMondayEntriesForOrder(
               mondayItemId: "pending",
             },
           });
+          ownedOpsNow = true;
         } catch (createErr) {
           ops = await prisma.orderLineItemOperationalData.findUnique({
             where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
@@ -1774,12 +1789,27 @@ export async function createMondayEntriesForOrder(
         continue;
       }
 
-      // Mark pending so concurrent webhooks don't double-create Monday items.
-      if (ops.mondayItemId !== "pending") {
-        await prisma.orderLineItemOperationalData.update({
-          where: { id: ops.id },
+      // Atomically claim this line for Monday creation so overlapping runs
+      // (webhook worker, Sync Next, bulk) never both create the same item.
+      // A fresh "pending" means another run is mid-flight (skip, it will link);
+      // a stale "pending" (crashed run) is reclaimed after 5 minutes.
+      if (!ownedOpsNow) {
+        const claimStaleBefore = new Date(Date.now() - 5 * 60 * 1000);
+        const claimed = await prisma.orderLineItemOperationalData.updateMany({
+          where: {
+            id: ops.id,
+            OR: [
+              { mondayItemId: "" },
+              { mondayItemId: "pending", updatedAt: { lt: claimStaleBefore } },
+            ],
+          },
           data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: li.company || ops.carrier },
         });
+        if (claimed.count === 0) {
+          // Another run holds the claim (or this line got linked meanwhile) — skip to avoid duplicates.
+          skippedCount++;
+          continue;
+        }
       }
 
       let mondayItemId: string;

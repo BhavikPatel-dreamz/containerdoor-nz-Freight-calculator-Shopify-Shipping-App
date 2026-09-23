@@ -320,8 +320,14 @@ function cin7WhereEscape(value: string): string {
   return value.replace(/'/g, "''");
 }
 
-async function queryCin7SalesOrders(where: string): Promise<Cin7SalesOrderMatch[]> {
-  if (!CIN7_API_URL) return [];
+async function queryCin7SalesOrders(
+  where: string,
+  strict = false,
+): Promise<Cin7SalesOrderMatch[]> {
+  if (!CIN7_API_URL) {
+    if (strict) throw new Error("Cin7 API URL not configured");
+    return [];
+  }
   const base = getCin7UpdateUrl();
   const url = `${base}?where=${encodeURIComponent(where)}&fields=${encodeURIComponent(
     "id,code,reference,customerOrderNo,lineItems",
@@ -333,6 +339,9 @@ async function queryCin7SalesOrders(where: string): Promise<Cin7SalesOrderMatch[
     });
     if (!res.ok) {
       debug("Cin7", `GET SalesOrders where failed (${res.status}) where=${where}`);
+      if (strict) {
+        throw new Error(`Cin7 SalesOrder lookup failed: HTTP ${res.status} for ${where}`);
+      }
       return [];
     }
     const json: any = await res.json();
@@ -341,6 +350,7 @@ async function queryCin7SalesOrders(where: string): Promise<Cin7SalesOrderMatch[
       .filter((row): row is Cin7SalesOrderMatch => Boolean(row));
   } catch (error) {
     debug("Cin7", "GET SalesOrders where failed:", error);
+    if (strict) throw error;
     return [];
   }
 }
@@ -371,7 +381,9 @@ export async function findCin7SalesOrdersForShopifyOrder(input: {
   orderName?: string | null;
   orderId?: string | null;
   reference?: string | null;
+  strict?: boolean;
 }): Promise<Cin7SalesOrderMatch[]> {
+  const strict = Boolean(input.strict);
   const seen = new Set<string>();
   const out: Cin7SalesOrderMatch[] = [];
   const add = (rows: Cin7SalesOrderMatch[]) => {
@@ -390,11 +402,11 @@ export async function findCin7SalesOrdersForShopifyOrder(input: {
   }
   // Historical Cin7 SOs often used the order number as `reference` (no line letter).
   for (const key of [...new Set(refKeys.filter(Boolean))]) {
-    add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(key)}'`));
+    add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(key)}'`, strict));
   }
 
   for (const key of keys) {
-    add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(key)}'`));
+    add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(key)}'`, strict));
   }
 
   return out;
