@@ -41,7 +41,7 @@ async function fetchCin7WithRateLimit(url: string, init: RequestInit): Promise<R
     if (response.status !== 429 || attempt === 2) return response;
 
     const retryAfter = Number(response.headers.get("retry-after") || 0);
-    const waitMs = retryAfter > 0 ? retryAfter * 1000 : 60_000;
+    const waitMs = retryAfter > 0 ? Math.min(retryAfter, 60) * 1000 : 60_000;
     debug("Cin7", `Rate limited; waiting ${waitMs}ms before retry ${attempt + 2}/3`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
@@ -535,6 +535,37 @@ export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7Ord
   } catch (error) {
     debug("Cin7", "GET SalesOrder failed:", error);
     return null;
+  }
+}
+
+/** Update a Cin7 Sales Order's `logisticsCarrier` field via PUT /v1/SalesOrders. */
+export async function updateCin7SalesOrderCarrier(input: {
+  salesOrderId: string;
+  logisticsCarrier: string;
+}): Promise<{ updated: boolean; salesOrderId: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  const logisticsCarrier = input.logisticsCarrier?.trim() ?? "";
+  if (!salesOrderId || !CIN7_API_URL) return { updated: false, salesOrderId: "" };
+  try {
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, logisticsCarrier }];
+    const res = await fetch(getCin7UpdateUrl(), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      debug("Cin7", `PUT update carrier failed (${res.status}) for id=${salesOrderId}:`, text);
+      return { updated: false, salesOrderId, error: text };
+    }
+    const json: any = await res.json().catch(() => null);
+    const result = Array.isArray(json) ? json[0] : json;
+    if (result?.errors?.length) return { updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) return { updated: false, salesOrderId, error: `Cin7 returned success:false` };
+    return { updated: true, salesOrderId };
+  } catch (error) {
+    debug("Cin7", "PUT update carrier failed:", error);
+    return { updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

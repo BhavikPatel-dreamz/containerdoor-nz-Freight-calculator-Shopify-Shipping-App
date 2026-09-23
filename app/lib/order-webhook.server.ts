@@ -4,7 +4,7 @@ import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems } from "./monday.server";
-import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, type Cin7SalesOrderMatch } from "./cin7.server";
+import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, updateCin7SalesOrderCarrier, type Cin7SalesOrderMatch } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
 import {
@@ -1362,6 +1362,15 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       }
 
       if (isLinkedCin7Id(ops.cin7SalesOrderId)) {
+        if (li.company && li.company !== String(ops.carrier ?? "")) {
+          updateCin7SalesOrderCarrier({ salesOrderId: ops.cin7SalesOrderId, logisticsCarrier: li.company }).then((r) => {
+            if (r.updated) console.log(`[Cin7][Webhook][${orderId}] line ${letterSuffix} UPDATED carrier ${ops.carrier}→${li.company} on SO=${ops.cin7SalesOrderId}`);
+          }).catch(() => {});
+        }
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { carrier: li.company },
+        }).catch(() => {});
         skipped++;
         continue;
       }
@@ -1410,7 +1419,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           cin7SalesOrderId: "pending",
           cin7SalesOrderRef: reference,
           productTitle: li.title ?? ops.productTitle,
-          carrier: li.company || ops.carrier,
+          carrier: li.company,
         },
       });
 
@@ -1455,7 +1464,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           billingPostalCode: billing.zip ?? shipping.zip ?? "",
           billingCountry:
             billing.country ?? billing.country_code ?? shipping.country ?? shipping.country_code ?? "",
-          logisticsCarrier: li.company || extractCarrierFromOrder(order),
+          logisticsCarrier: li.company,
           currencyCode,
           customerOrderNo,
           internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
@@ -1803,7 +1812,7 @@ export async function createMondayEntriesForOrder(
               { mondayItemId: "pending", updatedAt: { lt: claimStaleBefore } },
             ],
           },
-          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: li.company || ops.carrier },
+          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: ops.carrier || li.company },
         });
         if (claimed.count === 0) {
           // Another run holds the claim (or this line got linked meanwhile) — skip to avoid duplicates.
@@ -1822,7 +1831,7 @@ export async function createMondayEntriesForOrder(
           ops: {
             ...ops,
             productTitle: li.title ?? ops.productTitle ?? "",
-            carrier: li.company || ops.carrier || "",
+            carrier: ops.carrier || li.company || "",
           },
         });
         mondayRowForColor = mondayRow;
@@ -1920,7 +1929,7 @@ export async function createMondayEntriesForOrder(
             mondayCachedStatus: "match",
             mondayCachedMismatches: "",
             productTitle: li.title ?? ops.productTitle,
-            carrier: li.company || ops.carrier,
+            carrier: ops.carrier || li.company,
             ...(carrierColor ? { carrierColor } : {}),
             ...(customerStatusColor ? { customerStatusColor } : {}),
             ...(paymentStatusColor ? { paymentStatusColor } : {}),
