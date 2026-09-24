@@ -195,6 +195,24 @@ export function getBundleGroups(order: any): Map<string, BundleGroup> {
     if (!normalized.components.some((item) => item.lineItemId === component.lineItemId)) normalized.components.push(component);
   }
 
+  for (const group of groups.values()) {
+    const parentLine = lines.find(
+      (line) =>
+        (group.parentLineItemId && group.parentLineItemId === lineId(line)) ||
+        (group.parentVariantId && group.parentVariantId === variantId(line)),
+    );
+    if (parentLine) {
+      if (!group.parentTitle) group.parentTitle = String(parentLine?.title ?? parentLine?.name ?? "");
+      if (!group.parentSku) group.parentSku = String(parentLine?.sku ?? parentLine?.variant?.sku ?? "");
+      const pVid = variantId(parentLine);
+      if (pVid) group.parentVariantId = pVid;
+      const pPid = asId(parentLine?.product_id ?? parentLine?.variant?.product?.id);
+      if (pPid) group.parentProductId = pPid;
+      const pLid = lineId(parentLine);
+      if (pLid) group.parentLineItemId = pLid;
+    }
+  }
+
   return new Map([...groups].filter(([, group]) => Boolean(group.parentVariantId && group.components.length)));
 }
 
