@@ -4,7 +4,7 @@ import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
 import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems } from "./monday.server";
-import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine } from "./cin7.server";
+import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, updateCin7SalesOrderCarrier, type Cin7SalesOrderMatch } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
 import {
@@ -740,14 +740,34 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
     const lineItemAmountByVariant = new Map(
       freightLineAmounts.map((f) => [f.variantId, f]),
     );
+    // Bundle parents are not in the freight code (their physical components
+    // are), so they inherit the carrier/boxes/amount their components were
+    // billed at checkout. Keeps the OMS bundle row's carrier consistent with
+    // the freight code while component variants stay internal-only.
+    const bundleFreightByVariant = new Map<string, { company: string; boxes: number; amount: number }>();
+    for (const group of getBundleGroups(order).values()) {
+      const componentLines = freightLineAmounts.filter((f) =>
+        group.components.some((c) => String(c.variantId) === String(f.variantId)),
+      );
+      if (!componentLines.length) continue;
+      bundleFreightByVariant.set(group.parentVariantId, {
+        company: componentLines.find((f) => f.company)?.company ?? "",
+        boxes: componentLines.reduce((sum, f) => sum + (Number(f.boxes) || 0), 0),
+        amount: componentLines.reduce((sum, f) => sum + (Number(f.amount) || 0), 0),
+      });
+    }
     lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
       const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
+      const bundle = bundleFreightByVariant.get(String(li.variantId ?? ""));
       return {
         ...li,
         unitPrice: freight?.unitPrice ?? 0,
         productAmount: freight?.productAmount ?? 0,
-        freightAmount: freight?.freightAmount ?? 0,
+        freightAmount: freight?.freightAmount ?? bundle?.amount ?? 0,
         individualTotal: freight?.individualTotal ?? 0,
+        company: bundle?.company ?? freight?.company ?? "",
+        boxes: bundle?.boxes ?? freight?.boxes ?? 0,
+        amount: bundle?.amount ?? freight?.amount ?? 0,
       };
     });
   }
@@ -836,6 +856,15 @@ export async function createOrderLineItemRecords(shop: string, order: OrderPaylo
     for (const li of freightBreakdown.lineItems) {
       if (li.variantId && li.company) carrierByVariant.set(li.variantId, li.company);
     }
+  }
+  // The checkout freight code is encoded per physical component variant, but the
+  // OMS carrier lives on the customer-facing bundle parent. Inherit the parent's
+  // carrier from its freight-bearing component so the parent row is never blank.
+  for (const group of getBundleGroups(order).values()) {
+    const component = freightBreakdown?.lineItems.find((li) =>
+      group.components.some((c) => String(c.variantId) === String(li.variantId)),
+    );
+    if (component?.company) carrierByVariant.set(group.parentVariantId, component.company);
   }
 
   let created = 0;
@@ -1270,10 +1299,23 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let failed = 0;
     const errors: string[] = [];
 
-    const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
-      orderName: order.name,
-      orderId,
-    });
+    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
+    // existing SO", otherwise this run would silently create a duplicate.
+    // On lookup failure, stop and return a retryable failure (no SO created).
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    try {
+      existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+        orderName: order.name,
+        orderId,
+        strict: true,
+      });
+    } catch (lookupErr) {
+      const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+      console.error(
+        `[Cin7][Webhook][${orderId}] existing SO lookup FAILED (retryable) - no SO created for ${customerOrderNo}: ${msg}`,
+      );
+      return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [`Cin7 lookup failed (retryable): ${msg}`] };
+    }
     console.log(
       `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} for ${customerOrderNo}`,
     );
@@ -1320,6 +1362,15 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       }
 
       if (isLinkedCin7Id(ops.cin7SalesOrderId)) {
+        if (li.company && li.company !== String(ops.carrier ?? "")) {
+          updateCin7SalesOrderCarrier({ salesOrderId: ops.cin7SalesOrderId, logisticsCarrier: li.company }).then((r) => {
+            if (r.updated) console.log(`[Cin7][Webhook][${orderId}] line ${letterSuffix} UPDATED carrier ${ops.carrier}→${li.company} on SO=${ops.cin7SalesOrderId}`);
+          }).catch(() => {});
+        }
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { carrier: li.company },
+        }).catch(() => {});
         skipped++;
         continue;
       }
@@ -1368,7 +1419,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           cin7SalesOrderId: "pending",
           cin7SalesOrderRef: reference,
           productTitle: li.title ?? ops.productTitle,
-          carrier: li.company || ops.carrier,
+          carrier: li.company,
         },
       });
 
@@ -1413,7 +1464,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           billingPostalCode: billing.zip ?? shipping.zip ?? "",
           billingCountry:
             billing.country ?? billing.country_code ?? shipping.country ?? shipping.country_code ?? "",
-          logisticsCarrier: li.company || extractCarrierFromOrder(order),
+          logisticsCarrier: li.company,
           currencyCode,
           customerOrderNo,
           internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
@@ -1689,6 +1740,7 @@ export async function createMondayEntriesForOrder(
 
       // Ops row is usually already created by createOrderLineItemRecords — do NOT
       // require a fresh create (that unique-key race was skipping Monday entirely).
+      let ownedOpsNow = false;
       let ops = await prisma.orderLineItemOperationalData.findUnique({
         where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
       });
@@ -1704,6 +1756,7 @@ export async function createMondayEntriesForOrder(
               mondayItemId: "pending",
             },
           });
+          ownedOpsNow = true;
         } catch (createErr) {
           ops = await prisma.orderLineItemOperationalData.findUnique({
             where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
@@ -1745,12 +1798,27 @@ export async function createMondayEntriesForOrder(
         continue;
       }
 
-      // Mark pending so concurrent webhooks don't double-create Monday items.
-      if (ops.mondayItemId !== "pending") {
-        await prisma.orderLineItemOperationalData.update({
-          where: { id: ops.id },
-          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: li.company || ops.carrier },
+      // Atomically claim this line for Monday creation so overlapping runs
+      // (webhook worker, Sync Next, bulk) never both create the same item.
+      // A fresh "pending" means another run is mid-flight (skip, it will link);
+      // a stale "pending" (crashed run) is reclaimed after 5 minutes.
+      if (!ownedOpsNow) {
+        const claimStaleBefore = new Date(Date.now() - 5 * 60 * 1000);
+        const claimed = await prisma.orderLineItemOperationalData.updateMany({
+          where: {
+            id: ops.id,
+            OR: [
+              { mondayItemId: "" },
+              { mondayItemId: "pending", updatedAt: { lt: claimStaleBefore } },
+            ],
+          },
+          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: ops.carrier || li.company },
         });
+        if (claimed.count === 0) {
+          // Another run holds the claim (or this line got linked meanwhile) — skip to avoid duplicates.
+          skippedCount++;
+          continue;
+        }
       }
 
       let mondayItemId: string;
@@ -1763,7 +1831,7 @@ export async function createMondayEntriesForOrder(
           ops: {
             ...ops,
             productTitle: li.title ?? ops.productTitle ?? "",
-            carrier: li.company || ops.carrier || "",
+            carrier: ops.carrier || li.company || "",
           },
         });
         mondayRowForColor = mondayRow;
@@ -1861,7 +1929,7 @@ export async function createMondayEntriesForOrder(
             mondayCachedStatus: "match",
             mondayCachedMismatches: "",
             productTitle: li.title ?? ops.productTitle,
-            carrier: li.company || ops.carrier,
+            carrier: ops.carrier || li.company,
             ...(carrierColor ? { carrierColor } : {}),
             ...(customerStatusColor ? { customerStatusColor } : {}),
             ...(paymentStatusColor ? { paymentStatusColor } : {}),

@@ -145,31 +145,66 @@ export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
   const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
   if (!lineItemsRaw) return snapshotsFromLineItemsJson(snap);
 
-  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string; isBundleParent?: boolean }> = [];
+  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string; isBundleParent?: boolean; company?: string; boxes?: number; amount?: number }> = [];
   try {
     parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
   } catch { /* empty */ }
 
-  // A bundle snapshot has one synthesized parent (isBundleParent), while its
-  // unchanged checkout freight code can contain several physical component
-  // variants. Guarded on isBundleParent so a normal single-line order with a
-  // multi-part freight code still parses the per-variant breakdown unchanged.
-  if (parsedLineItems.length === 1 && parsedLineItems[0]?.isBundleParent) {
-    const parent = parsedLineItems[0];
+  // A collapsed bundle snapshot carries customer-facing parent(s) flagged
+  // isBundleParent, while the unchanged checkout freight code still lists the
+  // physical component variants. Component variants must never surface as their
+  // own OMS rows: each bundle parent becomes the row (inheriting the carrier its
+  // components were billed at checkout) and non-bundle lines keep the per-variant
+  // freight-code breakdown. When there is no bundle parent, the freight code is
+  // parsed per-variant unchanged (normal / multi-part orders).
+  const bundleParents = parsedLineItems.filter((li) => li.isBundleParent);
+  if (bundleParents.length) {
     const codeParts = String(snap.shippingCode ?? "").split("::");
-    return [{
-      idx: 0,
-      variantId: parent.variantId != null ? String(parent.variantId) : "",
-      letterSuffix: "A",
-      productTitle: parent.title ?? "",
-      productId: parent.productId != null ? String(parent.productId) : "",
-      variantTitle: parent.variantTitle ?? "",
-      sku: parent.sku ?? "",
-      vendor: parent.vendor ?? "",
-      company: String(snap.carriers ?? "").split(",")[0] ?? "",
-      boxes: Number(String(snap.packageCount ?? codeParts[2] ?? "").replace(/[^0-9.]/g, "")) || 0,
-      amount: Number(snap.totalFreight ?? String(codeParts[3] ?? "").replace(/[^0-9.-]/g, "")) || 0,
-    }];
+    const fallbackCarrier = String(snap.carriers ?? "").split(",")[0] ?? "";
+    const fallbackBoxes =
+      Number(String(snap.packageCount ?? codeParts[2] ?? "").replace(/[^0-9.]/g, "")) || 0;
+    const fallbackAmount =
+      Number(snap.totalFreight ?? String(codeParts[3] ?? "").replace(/[^0-9.-]/g, "")) || 0;
+    const codeByVariant = new Map<string, { company: string; boxes: number; amount: number }>();
+    for (const part of lineItemsRaw.split("|")) {
+      const [variantId, rest] = part.split(":");
+      if (!variantId) continue;
+      const [company, boxesStr, amountStr] = (rest ?? "").split("x");
+      codeByVariant.set(variantId, {
+        company: company ?? "",
+        boxes: Number(boxesStr ?? 0),
+        amount: Number(amountStr ?? 0),
+      });
+    }
+    const out: LineItemSnapshot[] = [];
+    for (const li of parsedLineItems) {
+      if (li.variantId == null) continue;
+      const vid = String(li.variantId);
+      const code = codeByVariant.get(vid);
+      out.push({
+        idx: out.length,
+        variantId: vid,
+        letterSuffix: LETTERS[out.length % 26],
+        productTitle: li.title ?? "",
+        productId: li.productId != null ? String(li.productId) : "",
+        variantTitle: li.variantTitle ?? "",
+        sku: li.sku ?? "",
+        vendor: li.vendor ?? "",
+        // Bundle parent inherits the carrier/boxes/amount its components were
+        // billed (persisted on the snapshot line by saveOrderSnapshot), with a
+        // fallback to order-level freight data for legacy collapsed snapshots.
+        company: li.isBundleParent
+          ? (String(li.company ?? "").trim() || fallbackCarrier)
+          : (code?.company ?? ""),
+        boxes: li.isBundleParent
+          ? (Number(li.boxes ?? fallbackBoxes) || 0)
+          : (code?.boxes ?? 0),
+        amount: li.isBundleParent
+          ? (Number(li.amount ?? fallbackAmount) || 0)
+          : (code?.amount ?? 0),
+      });
+    }
+    return out;
   }
 
   const variantTitleMap = new Map<string, string>();

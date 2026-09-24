@@ -10,6 +10,7 @@ import {
   findCin7SalesOrderByReference,
   findCin7SalesOrdersForShopifyOrder,
   pickCin7MatchForLine,
+  type Cin7SalesOrderMatch,
 } from "../lib/cin7.server";
 import {
   buildCin7SalesOrderReference,
@@ -318,12 +319,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";
 
     const allOrderLineItems = orderData.lineItems?.nodes ?? [];
-    const targetLineIndex = normalizedVariantId
-      ? allOrderLineItems.findIndex((li: any) => {
-          const currentId = String(li?.variant?.id ?? "");
-          return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+    // Letter follows the OMS line index (A/B/C…) so a bundle parent displayed as
+    // OMS line B gets reference #1271B — never a forced "A" from its position (or
+    // absence) among Shopify's physical component line items. Falls back to the
+    // previous Shopify line-item index when the ops rows aren't available yet.
+    const omsOpsLines = normalizedVariantId
+      ? await prisma.orderLineItemOperationalData.findMany({
+          where: { shop, orderId: orderIdStr },
+          select: { variantId: true },
+          orderBy: { createdAt: "asc" },
         })
+      : [];
+    const omsLineIndex = normalizedVariantId
+      ? omsOpsLines.findIndex((ops) => String(ops.variantId) === normalizedVariantId)
       : 0;
+    const targetLineIndex =
+      omsLineIndex >= 0
+        ? omsLineIndex
+        : normalizedVariantId
+          ? allOrderLineItems.findIndex((li: any) => {
+              const currentId = String(li?.variant?.id ?? "");
+              return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
+            })
+          : 0;
     const lineLetter = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.max(targetLineIndex, 0) % 26] ?? "A";
     const cin7Reference = buildCin7SalesOrderReference({
       orderName: orderData.name ?? orderIdStr,
@@ -340,11 +358,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           })?.sku || bundleTargetLineItems[0]?.code
         : allOrderLineItems[0]?.sku) || "",
     ).trim();
-    const existingCin7 = await findCin7SalesOrdersForShopifyOrder({
-      orderName: orderData.name,
-      orderId: orderIdStr,
-      reference: cin7Reference,
-    });
+    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
+    // existing SO" — otherwise we'd silently create a duplicate here.
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    try {
+      existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+        orderName: orderData.name,
+        orderId: orderIdStr,
+        reference: cin7Reference,
+        strict: true,
+      });
+    } catch (lookupErr) {
+      const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+      console.error(`[Cin7][API][${orderIdStr}] existing SO lookup FAILED (retryable) - no SO created: ${msg}`);
+      return Response.json(
+        { ok: false, error: `Cin7 lookup unavailable (${msg}) - try again later`, retryable: true },
+        { status: 502 },
+      );
+    }
     const linked = pickCin7MatchForLine(existingCin7, { reference: cin7Reference, sku: skuForMatch });
     if (linked?.id && normalizedVariantId) {
       await saveCin7LineLink({
