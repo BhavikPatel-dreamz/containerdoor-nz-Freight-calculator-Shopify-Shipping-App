@@ -23,7 +23,7 @@ import {
   getBundleGroups,
   getCustomerFacingLineItems,
 } from "./bundles.server";
-import { sumLineItemValue } from "./cin7-allocation";
+
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -1493,6 +1493,13 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             ? totalFreightPreTax * ((Number(li.boxes) || 0) / totalBoxesAcrossLines)
             : totalFreightPreTax / validLineCount;
         const freightFinal = Number(Number(freightRaw).toFixed(2));
+
+        // Convert freight from tax-inclusive to tax-exclusive for Cin7 when
+        // Shopify prices include GST. Cin7 always adds 15% GST regardless of
+        // taxStatus, so we must send exclusive amounts with taxStatus="Excl".
+        const freightFinalExcl = order.taxes_included
+          ? Math.round(freightFinal / (1 + ourGstRate) * 100) / 100
+          : freightFinal;
         console.log(
           `[Cin7][Webhook][${orderId}] Freight calc line=${letterSuffix} variant=${li.variantId} li.amount=${Number(
             (li as any).amount ?? 0,
@@ -1527,18 +1534,23 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           taxRate: (() => {
             const fromShopify = Number(order.tax_lines?.[0]?.rate ?? 0) * 100;
             if (fromShopify > 0) return fromShopify;
-            if (order.taxes_included) return Number((ourGstRate * 100).toFixed(2));
-            return fromShopify;
+            return Number((ourGstRate * 100).toFixed(2));
           })(),
-          taxStatus: order.taxes_included ? "Incl" : "Excl",
+          taxStatus: "Excl",
           // Freight for THIS line, split from the real checkout freight
-          // amount (`freightLine.price`). Attempts to weight by boxes; if
-          // box counts are not available, split evenly across valid lines.
-          freightTotal: freightFinal,
+          // amount (`freightLine.price`). Convert to tax-exclusive for Cin7.
+          freightTotal: freightFinalExcl,
           freightDescription: freightLine?.title || li.company || "",
           lineItems: bundleLineItems.length
-            ? bundleLineItems
-            : [{ code: sku, name: li.title ?? shopifyLine?.title ?? "", qty, unitPrice }],
+            ? bundleLineItems.map((li: any) => ({
+                ...li,
+                unitPrice: order.taxes_included
+                  ? Math.round(li.unitPrice / (1 + ourGstRate) * 100) / 100
+                  : li.unitPrice,
+              }))
+            : [{ code: sku, name: li.title ?? shopifyLine?.title ?? "", qty, unitPrice: order.taxes_included
+                ? Math.round(unitPrice / (1 + ourGstRate) * 100) / 100
+                : unitPrice }],
         });
 
         await saveCin7LineLink({
@@ -1557,24 +1569,20 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
 
         // Record a Payment for this line's Cin7 SO so Cin7 shows Paid/Owing
         // reflecting the real Shopify financial status (0-100% range).
-        // IMPORTANT: Cin7 applies its OWN account-level tax settings to the
-        // order regardless of the taxRate we send (confirmed: we sent
-        // taxRate:0 but Cin7 still added 15% GST) — so we can't compute the
-        // total locally. Instead, fetch back the Cin7-computed total for this
-        // SO and pay against that, so Paid always matches Cin7's own total.
+        // We send tax-exclusive amounts to Cin7 with taxStatus="Excl", so Cin7
+        // adds GST once. The Cin7 total fetch returns the correct GST-inclusive
+        // total. Fallback uses tax-exclusive amounts + 15% GST.
         const paidRatio = resolveOrderPaidRatio(order);
-        // Fallback value for this SO = the product value of the lines actually
-        // sent + the freight allocated to it. Using qty*unitPrice alone ignored
-        // freight and read 0 for bundles (parent priced at 0), which would
-        // under-pay the SO if the Cin7 total fetch below fails.
-        const lineSubtotal = bundleLineItems.length
-          ? sumLineItemValue(bundleLineItems)
-          : qty * unitPrice;
         const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
-        const fallbackTotal = Math.round((lineSubtotal + freightFinal) * 100) / 100;
-        const lineTotalInclTax = cin7Total ?? fallbackTotal; // fallback if fetch fails
-        const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
-        if (linePaidAmount > 0) {
+        if (!cin7Total || Number(cin7Total) <= 0) {
+          console.error(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment SKIPPED — unable to fetch Cin7 SO total for SO ${result.id}. ` +
+              `Cannot create payment without verified Cin7 total. ` +
+              `SO will remain unpaid in Cin7; manual reconciliation required.`
+          );
+        } else {
+          const linePaidAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
+          if (linePaidAmount > 0) {
           const paymentResult = await createCin7Payment({
             orderId: result.id,
             amount: linePaidAmount,
@@ -1603,9 +1611,10 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             }
           }
         } else {
-          console.log(
-            `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
-          );
+            console.log(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
+            );
+          }
         }
       } catch (e: any) {
         const retryMatch =
@@ -1681,12 +1690,19 @@ async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): 
     });
     console.log(`[Cin7][Webhook][${orderId}] Claimed row for creation`);
 
+    const appSettings = await getAppSettings(shop);
+    const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+    const isTaxIncluded = order.taxes_included;
+    const toExcl = (amount: number) => isTaxIncluded
+      ? Math.round(amount / (1 + ourGstRate) * 100) / 100
+      : amount;
+
     const lineItems = (order.line_items ?? [])
       .map((li) => ({
         code: li.sku ?? "",
         name: li.title ?? "",
         qty: li.quantity ?? 1,
-        unitPrice: Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0),
+        unitPrice: toExcl(Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0)),
       }))
       .filter((li) => li.code);
 
@@ -1698,6 +1714,9 @@ async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): 
     const shipping = getShippingAddress(order);
     const billing = getBillingAddress(order);
     const customer = getCustomer(order);
+
+    const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    const freightTotalExcl = toExcl(Number(freightLine?.price ?? 0));
 
     const result = await createCin7SalesOrder({
       reference: `Shopify-${order.name ?? orderId}`.slice(0, 30),
@@ -1723,21 +1742,13 @@ async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): 
       currencyCode: order.current_total_price_set?.presentment_money?.currency_code ?? "NZD",
       customerOrderNo: order.name ?? orderId,
       internalComments: `Auto-created from Shopify order ${order.name ?? orderId} (grouped legacy)`,
-      freightTotal: Number(
-        (order as any).shipping_lines?.[0]?.discounted_price_set?.presentment_money?.amount ??
-          (order as any).current_shipping_price_set?.presentment_money?.amount ?? 0,
-      ),
+      freightTotal: freightTotalExcl,
       freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
       discountTotal: Number(order.total_discounts ?? 0),
       discountDescription: order.discount_codes?.[0]?.code ?? "",
-      taxRate: (() => {
-        const fromShopify = Number(order.tax_lines?.[0]?.rate ?? 0) * 100;
-        if (fromShopify > 0) return fromShopify;
-        if (order.taxes_included) return 15;
-        return fromShopify;
-      })(),
-      taxStatus: order.taxes_included ? "Incl" : "Excl",
-      lineItems,
+      taxRate: Number((ourGstRate * 100).toFixed(2)),
+      taxStatus: "Excl",
+      lineItems: lineItems.map((li) => ({ ...li, unitPrice: toExcl(li.unitPrice) })),
     });
 
     await prisma.orderOperationalData.update({
