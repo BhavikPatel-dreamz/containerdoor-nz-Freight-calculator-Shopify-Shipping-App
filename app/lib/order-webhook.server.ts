@@ -23,7 +23,7 @@ import {
   getBundleGroups,
   getCustomerFacingLineItems,
 } from "./bundles.server";
-import { sumLineItemValue } from "./cin7-allocation";
+
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -1573,21 +1573,16 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         // adds GST once. The Cin7 total fetch returns the correct GST-inclusive
         // total. Fallback uses tax-exclusive amounts + 15% GST.
         const paidRatio = resolveOrderPaidRatio(order);
-        // Use tax-exclusive unit price for fallback (same as sent to Cin7)
-        const unitPriceExcl = order.taxes_included
-          ? Math.round(unitPrice / (1 + ourGstRate) * 100) / 100
-          : unitPrice;
-        // Fallback value for this SO = the product value of the lines actually
-        // sent (tax-exclusive) + the freight allocated to it (tax-exclusive) + 15% GST.
-        const lineSubtotal = bundleLineItems.length
-          ? sumLineItemValue(bundleLineItems)
-          : qty * unitPriceExcl;
         const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
-        const fallbackTotalExcl = Math.round((lineSubtotal + freightFinalExcl) * 100) / 100;
-        const fallbackTotal = Math.round(fallbackTotalExcl * (1 + ourGstRate) * 100) / 100;
-        const lineTotalInclTax = cin7Total ?? fallbackTotal; // fallback if fetch fails
-        const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
-        if (linePaidAmount > 0) {
+        if (!cin7Total || Number(cin7Total) <= 0) {
+          console.error(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment SKIPPED — unable to fetch Cin7 SO total for SO ${result.id}. ` +
+              `Cannot create payment without verified Cin7 total. ` +
+              `SO will remain unpaid in Cin7; manual reconciliation required.`
+          );
+        } else {
+          const linePaidAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
+          if (linePaidAmount > 0) {
           const paymentResult = await createCin7Payment({
             orderId: result.id,
             amount: linePaidAmount,
@@ -1616,9 +1611,10 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             }
           }
         } else {
-          console.log(
-            `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
-          );
+            console.log(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
+            );
+          }
         }
       } catch (e: any) {
         const retryMatch =

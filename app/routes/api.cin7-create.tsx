@@ -22,7 +22,6 @@ import { parseFreightCode } from "../lib/freight";
 import {
   allocateFreightForVariant,
   buildBundleComponentLineItems,
-  sumLineItemValue,
 } from "../lib/cin7-allocation";
 
 type RequestPayload = {
@@ -413,13 +412,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const freightDescription = orderData.shippingLines?.nodes?.[0]?.title ?? "";
     const discountTotal = Number(orderData.totalDiscountsSet?.presentmentMoney?.amount ?? 0);
     const discountDescription = orderData.discountCodes?.[0] ?? "";
-    const taxRate = Number(orderData.taxLines?.[0]?.rate ?? 0) * 100;
-    if (taxRate === 0) {
-      // Use our GST rate as fallback
-      const appSettings = await getAppSettings(shop);
-      const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
-      return Number((ourGstRate * 100).toFixed(2));
-    }
     const taxStatus = "Excl";
     
     // Helper to convert tax-inclusive to tax-exclusive
@@ -683,32 +675,28 @@ let result;
 
     if (paidRatio > 0) {
       const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
-      // A per-line Sales Order must be paid for its own value only. Falling back to
-      // the order-wide totalPrice here would duplicate the order's payment once per
-      // generated Sales Order, so use this Sales Order's product value plus its
-      // allocated freight instead. All amounts are tax-exclusive; Cin7 adds GST.
-      const soValueExclFreight = sumLineItemValue(targetLineItems.map((li: any) => ({
-        ...li,
-        unitPrice: toExcl(li.unitPrice ?? 0),
-      })) as any[]);
-      const fallbackTotalExcl = Math.round((soValueExclFreight + freightTotalExcl) * 100) / 100;
-      const fallbackTotal = Math.round(fallbackTotalExcl * (1 + ourGstRate) * 100) / 100;
-      const lineTotalInclTax = cin7Total ?? fallbackTotal;
-      const paymentAmount = Math.round(Number(lineTotalInclTax) * paidRatio * 100) / 100;
-
-      if (paymentAmount > 0) {
-        const paymentResult = await createCin7Payment({
-          orderId: Number(result.id),
-          amount: paymentAmount,
-          comments: `Auto-paid from Shopify order ${orderData.name ?? orderIdStr}`,
-        });
-        if (!paymentResult.ok) {
-          console.error(`[Cin7][API][${orderIdStr}] Payment creation failed:`, paymentResult.error);
-        } else {
-          console.log(`[Cin7][API][${orderIdStr}] Payment created — id=${paymentResult.id}, amount=${paymentAmount} of ${lineTotalInclTax} (paidRatio=${paidRatio})`);
-        }
+      if (!cin7Total || Number(cin7Total) <= 0) {
+        console.error(
+          `[Cin7][API][${orderIdStr}] Payment SKIPPED — unable to fetch Cin7 SO total for SO ${result.id}. ` +
+            `Cannot create payment without verified Cin7 total. ` +
+            `SO will remain unpaid in Cin7; manual reconciliation required.`
+        );
       } else {
-        console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (paidRatio=${paidRatio})`);
+        const paymentAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
+        if (paymentAmount > 0) {
+          const paymentResult = await createCin7Payment({
+            orderId: Number(result.id),
+            amount: paymentAmount,
+            comments: `Auto-paid from Shopify order ${orderData.name ?? orderIdStr}`,
+          });
+          if (!paymentResult.ok) {
+            console.error(`[Cin7][API][${orderIdStr}] Payment creation failed:`, paymentResult.error);
+          } else {
+            console.log(`[Cin7][API][${orderIdStr}] Payment created — id=${paymentResult.id}, amount=${paymentAmount} of ${cin7Total} (paidRatio=${paidRatio})`);
+          }
+        } else {
+          console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (paidRatio=${paidRatio})`);
+        }
       }
     } else {
       console.log(`[Cin7][API][${orderIdStr}] SKIP payment - nothing paid yet (outstanding=${totalOutstanding})`);
