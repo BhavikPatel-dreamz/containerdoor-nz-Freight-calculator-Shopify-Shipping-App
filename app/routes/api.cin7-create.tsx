@@ -17,6 +17,7 @@ import {
   buildCin7SalesOrderUrl,
   saveCin7LineLink,
 } from "../lib/cin7-adapter.server";
+import { getAppSettings } from "../models/freight.server";
 import { parseFreightCode } from "../lib/freight";
 import {
   allocateFreightForVariant,
@@ -351,6 +352,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const orderFreightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.presentmentMoney?.amount ?? orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
     let carrier = extractCarrierFromShippingCode(shippingLineCode);
     let freightTotal = orderFreightTotal;
+    
+    // AppSettings GST rate for tax-exclusive conversion
+    const appSettings = await getAppSettings(shop);
+    const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+    const isTaxIncluded = orderData.taxesIncluded;
 
     if (normalizedVariantId) {
       // A per-line Sales Order may only carry the freight the checkout allocated to
@@ -396,13 +402,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       if (allocation.company) carrier = allocation.company;
     }
     
+    // Convert freight from tax-inclusive to tax-exclusive for Cin7
+    // Cin7 always adds 15% GST regardless of taxStatus, so send exclusive amounts
+    const freightTotalExcl = isTaxIncluded
+      ? Math.round(freightTotal / (1 + ourGstRate) * 100) / 100
+      : freightTotal;
+    
     // Extract phone from various sources
     const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
     const freightDescription = orderData.shippingLines?.nodes?.[0]?.title ?? "";
     const discountTotal = Number(orderData.totalDiscountsSet?.presentmentMoney?.amount ?? 0);
     const discountDescription = orderData.discountCodes?.[0] ?? "";
     const taxRate = Number(orderData.taxLines?.[0]?.rate ?? 0) * 100;
-    const taxStatus = orderData.taxesIncluded ? "Incl" : "Excl";
+    if (taxRate === 0) {
+      // Use our GST rate as fallback
+      const appSettings = await getAppSettings(shop);
+      const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+      return Number((ourGstRate * 100).toFixed(2));
+    }
+    const taxStatus = "Excl";
+    
+    // Helper to convert tax-inclusive to tax-exclusive
+    const toExcl = (amount: number) => isTaxIncluded
+      ? Math.round(amount / (1 + ourGstRate) * 100) / 100
+      : amount;
 
     const allOrderLineItems = orderData.lineItems?.nodes ?? [];
     // Letter follows the OMS line index (A/B/C…) so a bundle parent displayed as
@@ -482,7 +505,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     }
 
-    let result;
+let result;
     try {
       result = await createCin7SalesOrder({
         reference: cin7Reference,
@@ -496,13 +519,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         deliveryState: shippingAddress.province ?? "",
         deliveryPostalCode: shippingAddress.zip ?? "",
         deliveryCountry: shippingAddress.country ?? shippingAddress.countryCode ?? "",
-        billingFirstName: billingAddress.firstName ?? "",
-        billingLastName: billingAddress.lastName ?? "",
-        billingCompany: billingAddress.company ?? "",
-        billingAddress1: billingAddress.address1 ?? "",
-        billingCity: billingAddress.city ?? "",
-        billingState: billingAddress.province ?? "",
-        billingPostalCode: billingAddress.zip ?? "",
+        billingFirstName: billingAddress.firstName ?? shippingAddress.firstName ?? "",
+        billingLastName: billingAddress.lastName ?? shippingAddress.lastName ?? "",
+        billingCompany: billingAddress.company ?? shippingAddress.company ?? "",
+        billingAddress1: billingAddress.address1 ?? shippingAddress.address1 ?? "",
+        billingCity: billingAddress.city ?? shippingAddress.city ?? "",
+        billingState: billingAddress.province ?? shippingAddress.province ?? "",
+        billingPostalCode: billingAddress.zip ?? shippingAddress.zip ?? "",
         billingCountry: billingAddress.country ?? billingAddress.countryCode ?? "",
         logisticsCarrier: carrier,
         currencyCode: currencyCode,
@@ -510,17 +533,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         internalComments: normalizedVariantId
           ? `Auto-created from Shopify order ${orderData.name ?? orderIdStr} variant ${normalizedVariantId}`
           : `Auto-created from Shopify order ${orderData.name ?? orderIdStr}`,
-        freightTotal: freightTotal,
+        freightTotal: freightTotalExcl,
         freightDescription,
         discountTotal,
         discountDescription,
-        taxRate,
+        taxRate: ourGstRate * 100,
         taxStatus,
         lineItems: targetLineItems.map((li: any) => ({
           code: li.code,
           name: li.name ?? "",
           qty: li.qty ?? 1,
-          unitPrice: li.unitPrice ?? 0,
+          unitPrice: toExcl(li.unitPrice ?? 0),
         })),
       });
     } catch (err) {
@@ -663,11 +686,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       // A per-line Sales Order must be paid for its own value only. Falling back to
       // the order-wide totalPrice here would duplicate the order's payment once per
       // generated Sales Order, so use this Sales Order's product value plus its
-      // allocated freight instead.
-      const soValueExclFreight = sumLineItemValue(targetLineItems as any[]);
-      const fallbackTotal = normalizedVariantId
-        ? Math.round((soValueExclFreight + freightTotal) * 100) / 100
-        : totalPrice;
+      // allocated freight instead. All amounts are tax-exclusive; Cin7 adds GST.
+      const soValueExclFreight = sumLineItemValue(targetLineItems.map((li: any) => ({
+        ...li,
+        unitPrice: toExcl(li.unitPrice ?? 0),
+      })) as any[]);
+      const fallbackTotalExcl = Math.round((soValueExclFreight + freightTotalExcl) * 100) / 100;
+      const fallbackTotal = Math.round(fallbackTotalExcl * (1 + ourGstRate) * 100) / 100;
       const lineTotalInclTax = cin7Total ?? fallbackTotal;
       const paymentAmount = Math.round(Number(lineTotalInclTax) * paidRatio * 100) / 100;
 
