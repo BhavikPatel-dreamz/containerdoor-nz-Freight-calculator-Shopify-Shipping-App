@@ -23,6 +23,7 @@ import {
   getBundleGroups,
   getCustomerFacingLineItems,
 } from "./bundles.server";
+import { sumLineItemValue } from "./cin7-allocation";
 
 // ─── Order webhook payload type ──────────────────────────────────────────────
 
@@ -1097,6 +1098,13 @@ type OperationalLine = {
   sku: string;
   company: string;
   boxes: number;
+  /**
+   * Freight the checkout allocated to THIS line, taken from the freight code.
+   * `undefined` means the order has no usable freight-code breakdown, in which
+   * case callers fall back to their own freight estimation. For a bundle parent
+   * it is the sum of its components' entries (each counted once).
+   */
+  amount?: number;
 };
 
 /** Freight-code lines when present; otherwise Shopify line items (imported/old orders). */
@@ -1113,7 +1121,7 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
     })),
   );
   if (breakdown?.lineItems?.length) {
-    const lines = breakdown.lineItems
+    const lines: OperationalLine[] = breakdown.lineItems
       .filter((li) => li.variantId)
       .filter((li) => !componentVariantIds.has(String(li.variantId)))
       .map((li) => ({
@@ -1122,6 +1130,7 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         sku: String(li.sku || ""),
         company: String(li.company || ""),
         boxes: Number(li.boxes) || 0,
+        amount: Number(li.amount) || 0,
       }));
     for (const group of bundleGroups.values()) {
       if (lines.some((line) => line.variantId === group.parentVariantId)) continue;
@@ -1133,6 +1142,9 @@ export function getOperationalLines(order: OrderPayload): OperationalLine[] {
         sku: group.parentSku,
         company: String(componentFreight[0].company || ""),
         boxes: componentFreight.reduce((sum, line) => sum + (Number(line.boxes) || 0), 0),
+        // Component variants are filtered out of `lines` above, so summing their
+        // entries here allocates each breakdown entry to exactly one OMS line.
+        amount: componentFreight.reduce((sum, line) => sum + (Number(line.amount) || 0), 0),
       });
     }
     // Append Shopify line items absent from the freight code (operational $0
@@ -1293,6 +1305,37 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let totalFreightPreTax = orderTotalPreTax - productTotalsSum;
     if (!Number.isFinite(totalFreightPreTax) || totalFreightPreTax < 0) totalFreightPreTax = 0;
 
+    // The freight code carries a per-variant allocation (variantId -> carrier,
+    // boxes, freight amount). When that breakdown actually allocates money it IS
+    // the authoritative split, so each OMS line gets exactly its own amount and
+    // no two Sales Orders are charged the same freight.
+    //
+    // A breakdown summing to ZERO is NOT usable: depot collection and customer
+    // pickup deliberately encode amount 0 per line while Shopify checkout still
+    // charges real freight (see the historical note below), so those orders must
+    // keep the box-weighted split of the real charge. Orders with no breakdown
+    // at all (imports, old orders) fall through the same way, and BOGOS/imported
+    // lines inside a real order correctly keep amount 0.
+    const breakdownFreightTotal = breakdownLines.reduce(
+      (sum, x) => sum + (Number(x.amount) || 0),
+      0,
+    );
+    const hasBreakdownAllocation = breakdownFreightTotal > 0;
+    if (hasBreakdownAllocation) {
+      // Never silently treat the Shopify shipping charge and the freight-code
+      // header as equivalent: they can disagree (bad/stale shipping line, price
+      // edits post-checkout, or a store whose presentment currency differs from
+      // the rates the app quotes in). Surface it loudly and keep allocating from
+      // the verified per-variant breakdown rather than inventing an amount.
+      if (Math.abs(breakdownFreightTotal - totalFreightCharge) > 0.01) {
+        console.warn(
+          `[Cin7][Webhook][${orderId}] FREIGHT MISMATCH ${customerOrderNo}: shipping_lines[0].price=${totalFreightCharge.toFixed(2)} ` +
+            `but freight-code breakdown totals ${breakdownFreightTotal.toFixed(2)} (diff ${(totalFreightCharge - breakdownFreightTotal).toFixed(2)}). ` +
+            `Allocating per the freight-code breakdown; the two values are NOT equivalent.`,
+        );
+      }
+    }
+
     let created = 0;
     let linked = 0;
     let skipped = 0;
@@ -1378,7 +1421,17 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       const shopifyLine = (order.line_items ?? []).find(
         (x) => String(x.variant_id) === String(li.variantId),
       );
-      const bundleLineItems = buildBundleCin7LineItems(order, li.variantId);
+      const bundleGroup = [...getBundleGroups(order).values()].find((group) => group.parentVariantId === li.variantId);
+      let bundleLineItems = buildBundleCin7LineItems(order, li.variantId);
+      // The bundle parent is a synthetic OMS grouping variant that is not
+      // stocked in Cin7 (it resolves to productId 0). buildBundleCin7LineItems
+      // appends it at price 0 purely for reference; the priced component lines
+      // are the real representation, so drop the zero-priced parent rather than
+      // sending the warehouse a phantom, unfulfillable line. Only dropped when
+      // priced components remain, so a parent-only bundle is never emptied.
+      if (bundleGroup?.parentSku && bundleLineItems.some((l: any) => Number(l.unitPrice) > 0)) {
+        bundleLineItems = bundleLineItems.filter((l: any) => l.code !== bundleGroup.parentSku);
+      }
       const sku = String(li.sku || shopifyLine?.sku || "").trim();
 
       const existingMatch = pickCin7MatchForLine(existingCin7, {
@@ -1424,16 +1477,19 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       });
 
       try {
-        const bundleGroup = [...getBundleGroups(order).values()].find((group) => group.parentVariantId === li.variantId);
         const qty = Number(shopifyLine?.quantity ?? bundleGroup?.parentQuantity ?? 1) || 1;
         const unitPrice = Number(
           shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
         );
-        // Compute per-line freight: split checkout total (weighted by boxes)
-        // and remove our GST margin so Cin7 applies tax consistently.
-        // Derive this line's share of the order-level freight (pre-tax).
-        const freightRaw =
-          totalBoxesAcrossLines > 0
+        // This line's freight. A verified freight-code breakdown wins: it is the
+        // exact per-variant allocation, so lines sharing a box count (or a
+        // carrier) no longer collide on the same amount. The box-weighted split
+        // of the order-wide freight stays as the fallback for orders with no
+        // breakdown (imports/old orders, depot collection where the code's
+        // per-line amount is 0), preserving the historical path.
+        const freightRaw = hasBreakdownAllocation
+          ? Number(li.amount) || 0
+          : totalBoxesAcrossLines > 0
             ? totalFreightPreTax * ((Number(li.boxes) || 0) / totalBoxesAcrossLines)
             : totalFreightPreTax / validLineCount;
         const freightFinal = Number(Number(freightRaw).toFixed(2));
@@ -1507,9 +1563,16 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         // total locally. Instead, fetch back the Cin7-computed total for this
         // SO and pay against that, so Paid always matches Cin7's own total.
         const paidRatio = resolveOrderPaidRatio(order);
-        const lineSubtotal = qty * unitPrice;
+        // Fallback value for this SO = the product value of the lines actually
+        // sent + the freight allocated to it. Using qty*unitPrice alone ignored
+        // freight and read 0 for bundles (parent priced at 0), which would
+        // under-pay the SO if the Cin7 total fetch below fails.
+        const lineSubtotal = bundleLineItems.length
+          ? sumLineItemValue(bundleLineItems)
+          : qty * unitPrice;
         const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
-        const lineTotalInclTax = cin7Total ?? lineSubtotal; // fallback if fetch fails
+        const fallbackTotal = Math.round((lineSubtotal + freightFinal) * 100) / 100;
+        const lineTotalInclTax = cin7Total ?? fallbackTotal; // fallback if fetch fails
         const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
         if (linePaidAmount > 0) {
           const paymentResult = await createCin7Payment({

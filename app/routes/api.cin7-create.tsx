@@ -17,6 +17,12 @@ import {
   buildCin7SalesOrderUrl,
   saveCin7LineLink,
 } from "../lib/cin7-adapter.server";
+import { parseFreightCode } from "../lib/freight";
+import {
+  allocateFreightForVariant,
+  buildBundleComponentLineItems,
+  sumLineItemValue,
+} from "../lib/cin7-allocation";
 
 type RequestPayload = {
   shop?: string;
@@ -241,18 +247,53 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const bundleComponents = normalizedVariantId
       ? await prisma.bundleComponent.findMany({
           where: { shop, orderId: orderIdStr, parentVariantId: normalizedVariantId },
-          select: { componentSku: true, componentTitle: true, componentQuantity: true },
+          select: { componentSku: true, componentTitle: true, componentQuantity: true, componentVariantId: true },
         })
       : [];
-    const bundleTargetLineItems = bundleComponents
-      .filter((component) => String(component.componentSku || "").trim())
-      .map((component) => ({
-        code: component.componentSku,
-        name: component.componentTitle,
-        qty: component.componentQuantity,
-        unitPrice: 0,
+    const bundleComponentVariantIds = bundleComponents
+      .map((component: any) => String(component.componentVariantId ?? "").trim())
+      .filter((id: string) => Boolean(id));
+    // Price the components from the order's real line items so the Sales Order
+    // carries the actual product value instead of assuming 0. Only the SKU /
+    // title / quantity columns are persisted locally, so the Shopify payload is
+    // the only price source. Aggregated per SKU with a weighted unit price so
+    // repeated rows for one variant keep the exact combined value and the parent
+    // is never emitted alongside its components.
+    const pricedBundleLineItems = buildBundleComponentLineItems({
+      componentVariantIds: bundleComponentVariantIds,
+      shopifyLineItems: lineItems,
+    });
+    // Use the order-derived, per-SKU-aggregated component lines so a variant with
+    // several order rows yields a single line with the exact combined value. Any
+    // persisted component the order does not price is still listed (at 0) so it is
+    // never silently dropped.
+    const titledBySku = new Map(
+      bundleComponents
+        .filter((component: any) => String(component.componentSku || "").trim())
+        .map((component: any) => [String(component.componentSku).trim(), component.componentTitle]),
+    );
+    const pricedSkus = new Set(pricedBundleLineItems.map((line) => line.code));
+    const bundleTargetLineItems = [
+      ...pricedBundleLineItems.map((line) => ({
+        code: line.code,
+        name: titledBySku.get(line.code) || line.name,
+        qty: line.qty,
+        unitPrice: line.unitPrice,
         variantId: null,
-      }));
+      })),
+      ...bundleComponents
+        .filter((component: any) => {
+          const sku = String(component.componentSku || "").trim();
+          return sku && !pricedSkus.has(sku);
+        })
+        .map((component: any) => ({
+          code: component.componentSku,
+          name: component.componentTitle,
+          qty: component.componentQuantity,
+          unitPrice: 0,
+          variantId: component.componentVariantId ?? null,
+        })),
+    ];
     const parentVariantPresent = lineItems.some((li: any) => {
       const currentId = String(li.variantId ?? "");
       return currentId === normalizedVariantId || currentId.endsWith(`/${normalizedVariantId}`) || currentId === `gid://shopify/ProductVariant/${normalizedVariantId}`;
@@ -307,11 +348,56 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     
     // Extract carrier from first shipping line code (format: "service::CARRIER1,CARRIER2::boxes::...")
     const shippingLineCode = orderData.shippingLines?.nodes?.[0]?.code ?? "";
-    const carrier = extractCarrierFromShippingCode(shippingLineCode);
+    const orderFreightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.presentmentMoney?.amount ?? orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
+    let carrier = extractCarrierFromShippingCode(shippingLineCode);
+    let freightTotal = orderFreightTotal;
+
+    if (normalizedVariantId) {
+      // A per-line Sales Order may only carry the freight the checkout allocated to
+      // that line. A bundle parent inherits the sum of its components' entries; a
+      // normal line inherits its own entry. Never fall back to the order-wide
+      // freight here, or every Sales Order would be charged the full order freight.
+      const breakdown = parseFreightCode(shippingLineCode);
+      const allocation = allocateFreightForVariant({
+        breakdown,
+        variantId: normalizedVariantId,
+        componentVariantIds: bundleComponentVariantIds,
+      });
+
+      if (!allocation) {
+        console.log(
+          `[Cin7][API][${orderIdStr}] SKIP - no verifiable freight allocation for variant ${normalizedVariantId}`,
+        );
+        return Response.json(
+          {
+            ok: false,
+            error: "Freight for this line cannot be verified from the order's freight breakdown. Create the whole-order Sales Order instead, or fix the order's shipping line code.",
+          },
+          { status: 422 },
+        );
+      }
+
+      // A single line can never exceed the order-wide freight; anything else means
+      // the breakdown and the order disagree.
+      if (allocation.amount < 0 || allocation.amount > orderFreightTotal + 0.01) {
+        console.log(
+          `[Cin7][API][${orderIdStr}] SKIP - freight allocation ${allocation.amount} does not reconcile with order freight ${orderFreightTotal}`,
+        );
+        return Response.json(
+          {
+            ok: false,
+            error: `Allocated freight ${allocation.amount.toFixed(2)} does not reconcile with the order freight ${orderFreightTotal.toFixed(2)}. Create the whole-order Sales Order instead.`,
+          },
+          { status: 422 },
+        );
+      }
+
+      freightTotal = allocation.amount;
+      if (allocation.company) carrier = allocation.company;
+    }
     
     // Extract phone from various sources
     const phone = orderData.phone ?? shippingAddress.phone ?? billingAddress.phone ?? "";
-    const freightTotal = Number(orderData.shippingLines?.nodes?.[0]?.discountedPriceSet?.presentmentMoney?.amount ?? orderData.totalPriceSet?.presentmentMoney?.amount ?? 0);
     const freightDescription = orderData.shippingLines?.nodes?.[0]?.title ?? "";
     const discountTotal = Number(orderData.totalDiscountsSet?.presentmentMoney?.amount ?? 0);
     const discountDescription = orderData.discountCodes?.[0] ?? "";
@@ -574,7 +660,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (paidRatio > 0) {
       const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
-      const lineTotalInclTax = cin7Total ?? totalPrice;
+      // A per-line Sales Order must be paid for its own value only. Falling back to
+      // the order-wide totalPrice here would duplicate the order's payment once per
+      // generated Sales Order, so use this Sales Order's product value plus its
+      // allocated freight instead.
+      const soValueExclFreight = sumLineItemValue(targetLineItems as any[]);
+      const fallbackTotal = normalizedVariantId
+        ? Math.round((soValueExclFreight + freightTotal) * 100) / 100
+        : totalPrice;
+      const lineTotalInclTax = cin7Total ?? fallbackTotal;
       const paymentAmount = Math.round(Number(lineTotalInclTax) * paidRatio * 100) / 100;
 
       if (paymentAmount > 0) {
