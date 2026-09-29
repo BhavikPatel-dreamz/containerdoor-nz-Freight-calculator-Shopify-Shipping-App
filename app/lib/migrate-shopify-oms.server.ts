@@ -777,8 +777,6 @@ async function persistReport(input: {
   }
 }
 
-}
-
 /** Failed/partial migrate rows: skip closed Shopify orders, retry open ones for Monday. */
 export async function findNextFailedOperationalRetry(
   shop: string,
