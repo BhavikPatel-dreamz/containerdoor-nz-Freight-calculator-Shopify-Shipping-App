@@ -713,7 +713,9 @@ export default function MigrateOrdersPage() {
                     <thead>
                       <tr>
                         <th>Order</th>
-                        <th>Order status</th>
+                        <th>Payment status</th>
+                        <th>Fulfillment status</th>
+                        <th>Delivery status</th>
                         <th>Sync</th>
                         <th>OMS</th>
                         <th>Monday</th>
@@ -730,11 +732,9 @@ export default function MigrateOrdersPage() {
                               <strong>{r.orderName || r.orderId}</strong>
                               {r.lastError ? <div className="fail">{r.lastError}</div> : null}
                             </td>
-                            <td>
-                              <div>{r.fulfillmentStatus || "—"}</div>
-                              {r.customerStatus ? <small>{r.customerStatus}</small> : null}
-                              {r.financialStatus ? <div><small>{r.financialStatus}</small></div> : null}
-                            </td>
+                            <td>{r.paymentStatus || r.financialStatus || "—"}</td>
+                            <td>{r.fulfillmentStatus || "—"}</td>
+                            <td>{r.deliveryStatus || r.customerStatus || "—"}</td>
                             <td>{r.status}</td>
                             <td>{r.omsAction}</td>
                             <td>{r.mondayAction}</td>
@@ -757,8 +757,13 @@ export default function MigrateOrdersPage() {
                           </tr>
                           {expandedReport === r.id ? (
                             <tr>
-                              <td colSpan={8}>
+                              <td colSpan={10}>
                                 <div className="log">
+                                  <div className="info">
+                                    Payment: {r.paymentStatus || r.financialStatus || "—"}
+                                    {" · "}Fulfillment: {r.fulfillmentStatus || "—"}
+                                    {" · "}Delivery: {r.deliveryStatus || r.customerStatus || "—"}
+                                  </div>
                                   {(r.steps || []).length ? (
                                     r.steps.map((s, idx) => (
                                       <div key={idx} className={s.ok ? "ok" : "fail"}>
