@@ -189,6 +189,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   };
 };
 
+function actionLooksOk(action: string) {
+  const v = String(action || "").toLowerCase();
+  return v === "linked" || v === "created" || v === "mixed" || v === "skipped_closed";
+}
+
+function actionLooksFailed(action: string) {
+  return String(action || "").toLowerCase() === "failed";
+}
+
+function matchesReportFilter(
+  r: {
+    status: string;
+    mondayAction: string;
+    cin7Action: string;
+  },
+  filter: string,
+) {
+  if (filter === "all") return true;
+  if (filter === "failed") return r.status === "failed";
+  if (filter === "partial") return r.status === "partial";
+  if (filter === "success") return r.status === "success";
+  if (filter === "monday_failed") return actionLooksFailed(r.mondayAction);
+  if (filter === "cin7_failed") return actionLooksFailed(r.cin7Action);
+  if (filter === "monday_ok") return actionLooksOk(r.mondayAction);
+  if (filter === "cin7_ok") return actionLooksOk(r.cin7Action);
+  if (filter === "skipped_closed") return String(r.mondayAction).toLowerCase() === "skipped_closed";
+  return true;
+}
+
 export default function MigrateOrdersPage() {
   const { reports, shop } = useLoaderData<typeof loader>();
   const data = useActionData<typeof action>();
@@ -362,7 +391,17 @@ export default function MigrateOrdersPage() {
   };
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmCount, setConfirmCount] = useState(1);
-  const [reportFilter, setReportFilter] = useState<"all" | "failed" | "partial" | "success">("all");
+  const [reportFilter, setReportFilter] = useState<
+    | "all"
+    | "failed"
+    | "partial"
+    | "success"
+    | "monday_failed"
+    | "cin7_failed"
+    | "monday_ok"
+    | "cin7_ok"
+    | "skipped_closed"
+  >("all");
   const [expandedReport, setExpandedReport] = useState("");
   const pendingForm = useRef<HTMLFormElement | null>(null);
 
@@ -617,32 +656,46 @@ export default function MigrateOrdersPage() {
       </s-section>
 
       <s-section heading="3. Saved reports">
-        <s-paragraph>Each order keeps one report. Filter by status, then sync failed or partial orders again.</s-paragraph>
+        <s-paragraph>Each order keeps one report. Filter by overall status or Monday / Cin7 outcome, then retry.</s-paragraph>
         {reports.length ? (
           <>
             <div className="mode-row" style={{ margin: "8px 0 12px", flexWrap: "wrap" }}>
-              {(["all", "failed", "partial", "success"] as const).map((f) => (
+              {([
+                { id: "all", label: "All" },
+                { id: "failed", label: "Failed" },
+                { id: "partial", label: "Partial" },
+                { id: "success", label: "Done" },
+                { id: "monday_failed", label: "Monday failed" },
+                { id: "cin7_failed", label: "Cin7 failed" },
+                { id: "monday_ok", label: "Monday OK" },
+                { id: "cin7_ok", label: "Cin7 OK" },
+                { id: "skipped_closed", label: "Monday skipped (closed)" },
+              ] as const).map((f) => {
+                const count = reports.filter((r) => matchesReportFilter(r, f.id)).length;
+                return (
                 <button
-                  key={f}
+                  key={f.id}
                   type="button"
-                  onClick={() => setReportFilter(f)}
+                  onClick={() => setReportFilter(f.id)}
                   style={{
                     padding: "6px 12px",
                     borderRadius: 8,
                     border: "1px solid #bec5cc",
-                    background: reportFilter === f ? "#1a1a1a" : "#fff",
-                    color: reportFilter === f ? "#fff" : "#1a1a1a",
+                    background: reportFilter === f.id ? "#1a1a1a" : "#fff",
+                    color: reportFilter === f.id ? "#fff" : "#1a1a1a",
                     cursor: "pointer",
-                    textTransform: "capitalize",
                   }}
                 >
-                  {f} ({f === "all" ? reports.length : reports.filter((r) => r.status === f).length})
+                  {f.label} ({count})
                 </button>
-              ))}
+              );
+              })}
             </div>
             {(() => {
-              const filtered = reportFilter === "all" ? reports : reports.filter((r) => r.status === reportFilter);
-              const retryIds = filtered.filter((r) => r.status === "failed" || r.status === "partial").map((r) => r.orderId);
+              const filtered = reports.filter((r) => matchesReportFilter(r, reportFilter));
+              const retryIds = filtered
+                .filter((r) => r.status === "failed" || r.status === "partial" || r.mondayAction === "failed" || r.cin7Action === "failed")
+                .map((r) => r.orderId);
               return (
                 <>
                   {retryIds.length ? (
@@ -660,7 +713,8 @@ export default function MigrateOrdersPage() {
                     <thead>
                       <tr>
                         <th>Order</th>
-                        <th>Status</th>
+                        <th>Order status</th>
+                        <th>Sync</th>
                         <th>OMS</th>
                         <th>Monday</th>
                         <th>Cin7</th>
@@ -675,6 +729,11 @@ export default function MigrateOrdersPage() {
                             <td>
                               <strong>{r.orderName || r.orderId}</strong>
                               {r.lastError ? <div className="fail">{r.lastError}</div> : null}
+                            </td>
+                            <td>
+                              <div>{r.fulfillmentStatus || "—"}</div>
+                              {r.customerStatus ? <small>{r.customerStatus}</small> : null}
+                              {r.financialStatus ? <div><small>{r.financialStatus}</small></div> : null}
                             </td>
                             <td>{r.status}</td>
                             <td>{r.omsAction}</td>
@@ -698,7 +757,7 @@ export default function MigrateOrdersPage() {
                           </tr>
                           {expandedReport === r.id ? (
                             <tr>
-                              <td colSpan={7}>
+                              <td colSpan={8}>
                                 <div className="log">
                                   {(r.steps || []).length ? (
                                     r.steps.map((s, idx) => (

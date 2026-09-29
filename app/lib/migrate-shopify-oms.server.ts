@@ -877,11 +877,37 @@ export async function listMigrateReports(shop: string, take = 5) {
       orderBy: { updatedAt: "desc" },
       take,
     });
-    return rows.map((r) => ({
-      ...r,
-      steps: safeJson(r.stepsJson, [] as MigrateLogStep[]),
-      lines: safeJson(r.linesJson, [] as MigrateLineReport[]),
-    }));
+    const orderIds = rows.map((r) => r.orderId);
+    const snaps = orderIds.length
+      ? await prisma.orderSnapshot.findMany({
+          where: { shop, orderId: { in: orderIds } },
+          select: { orderId: true, fulfillmentStatus: true, financialStatus: true },
+        })
+      : [];
+    const snapByOrder = new Map(snaps.map((s) => [s.orderId, s]));
+    const ops = orderIds.length
+      ? await prisma.orderLineItemOperationalData.findMany({
+          where: { shop, orderId: { in: orderIds } },
+          select: { orderId: true, customerStatus: true },
+        })
+      : [];
+    const customerByOrder = new Map<string, string>();
+    for (const row of ops) {
+      if (!customerByOrder.has(row.orderId) && row.customerStatus) {
+        customerByOrder.set(row.orderId, row.customerStatus);
+      }
+    }
+    return rows.map((r) => {
+      const snap = snapByOrder.get(r.orderId);
+      return {
+        ...r,
+        steps: safeJson(r.stepsJson, [] as MigrateLogStep[]),
+        lines: safeJson(r.linesJson, [] as MigrateLineReport[]),
+        fulfillmentStatus: snap?.fulfillmentStatus || "",
+        financialStatus: snap?.financialStatus || "",
+        customerStatus: customerByOrder.get(r.orderId) || "",
+      };
+    });
   } catch (err) {
     console.error("[Migrate] list reports failed (run prisma migrate deploy?)", err);
     return [];
