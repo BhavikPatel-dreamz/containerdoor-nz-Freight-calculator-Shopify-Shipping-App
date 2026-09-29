@@ -1798,7 +1798,7 @@ export async function createMondayEntriesForOrder(
 
   if (!isMondayOperationalOrder(order)) {
     console.log(
-      `[Monday][Webhook][${orderId}] SKIP - not operational (fulfilled/cancelled/closed) fulfillment=${String(order.fulfillment_status || "") || "empty"}`,
+      `[Monday][Webhook][${orderId}] SKIP - not operational (fulfilled/cancelled) fulfillment=${String(order.fulfillment_status || "") || "empty"} financial=${String(order.financial_status || "") || "empty"}`,
     );
     return { created: 0, linked: 0, skipped: 1, failed: 0 };
   }
