@@ -394,29 +394,15 @@ export async function findCin7SalesOrdersForShopifyOrder(input: {
     }
   };
 
-  const keys = cin7CustomerOrderNoCandidates(input.orderName, input.orderId);
-  const extraRef = String(input.reference || "").trim();
-  if (extraRef) {
-    keys.push(extraRef, extraRef.replace(/^#/, ""), extraRef.startsWith("#") ? extraRef : `#${extraRef}`);
-  }
-  const unique = [...new Set(keys.filter(Boolean))];
+  const unique = [...new Set(cin7CustomerOrderNoCandidates(input.orderName, input.orderId).filter(Boolean))];
   if (!unique.length) return [];
 
   const clauses = unique.flatMap((key) => [
-    `reference='${cin7WhereEscape(key)}'`,
     `customerOrderNo='${cin7WhereEscape(key)}'`,
+    `reference='${cin7WhereEscape(key)}'`,
   ]);
-  try {
-    add(await queryCin7SalesOrders(clauses.join(" OR "), strict));
-    return out;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (!msg.includes("HTTP 429") && unique[0]) {
-      add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(unique[0])}'`, strict));
-      return out;
-    }
-    throw err;
-  }
+  add(await queryCin7SalesOrders(clauses.join(" OR "), strict));
+  return out;
 }
 
 function normalizeCin7Ref(value?: string | null): string {

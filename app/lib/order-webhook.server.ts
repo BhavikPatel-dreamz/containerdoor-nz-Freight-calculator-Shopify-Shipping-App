@@ -1372,9 +1372,9 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       } catch (lookupErr) {
         const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
         console.error(
-          `[Cin7][Webhook][${orderId}] existing SO lookup FAILED (retryable) - no SO created for ${customerOrderNo}: ${msg}`,
+          `[Cin7][Webhook][${orderId}] existing SO lookup FAILED — continuing to POST create (no GET match): ${msg}`,
         );
-        return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [`Cin7 lookup failed (retryable): ${msg}`] };
+        existingCin7 = [];
       }
     }
     console.log(
@@ -1644,12 +1644,11 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
           );
         }
       } catch (e: any) {
-        const retryMatch =
-          pickCin7MatchForLine(existingCin7, { reference, sku, orderName: order.name }) ||
-          pickCin7MatchForLine(
-            await findCin7SalesOrdersForShopifyOrder({ orderName: order.name, orderId, reference }),
-            { reference, sku, orderName: order.name },
-          );
+        const retryMatch = pickCin7MatchForLine(existingCin7, {
+          reference,
+          sku,
+          orderName: order.name,
+        });
         if (retryMatch?.id) {
           await saveCin7LineLink({
             shop,

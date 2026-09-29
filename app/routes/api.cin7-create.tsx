@@ -16,6 +16,7 @@ import {
   buildCin7SalesOrderReference,
   buildCin7SalesOrderUrl,
   saveCin7LineLink,
+  isLinkedCin7Id,
 } from "../lib/cin7-adapter.server";
 import { getAppSettings } from "../models/freight.server";
 import { parseFreightCode } from "../lib/freight";
@@ -459,23 +460,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           })?.sku || bundleTargetLineItems[0]?.code
         : allOrderLineItems[0]?.sku) || "",
     ).trim();
-    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
-    // existing SO" — otherwise we'd silently create a duplicate here.
+
+    if (normalizedVariantId) {
+      const existingLine = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId: orderIdStr, variantId: normalizedVariantId } },
+        select: { cin7SalesOrderId: true, cin7SalesOrderCode: true, cin7SalesOrderRef: true },
+      });
+      if (isLinkedCin7Id(existingLine?.cin7SalesOrderId)) {
+        return Response.json({
+          ok: true,
+          cin7SalesOrderId: existingLine!.cin7SalesOrderId,
+          cin7SalesOrderUrl: buildCin7SalesOrderUrl(existingLine!.cin7SalesOrderId) ?? "",
+          linked: true,
+        });
+      }
+    }
+
     let existingCin7: Cin7SalesOrderMatch[] = [];
     try {
       existingCin7 = await findCin7SalesOrdersForShopifyOrder({
         orderName: orderData.name,
         orderId: orderIdStr,
-        reference: cin7Reference,
         strict: true,
       });
     } catch (lookupErr) {
       const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
-      console.error(`[Cin7][API][${orderIdStr}] existing SO lookup FAILED (retryable) - no SO created: ${msg}`);
-      return Response.json(
-        { ok: false, error: `Cin7 lookup unavailable (${msg}) - try again later`, retryable: true },
-        { status: 502 },
+      console.error(
+        `[Cin7][API][${orderIdStr}] existing SO lookup FAILED — continuing to POST create: ${msg}`,
       );
+      existingCin7 = [];
     }
     const linked = pickCin7MatchForLine(existingCin7, { reference: cin7Reference, sku: skuForMatch });
     if (linked?.id && normalizedVariantId) {
