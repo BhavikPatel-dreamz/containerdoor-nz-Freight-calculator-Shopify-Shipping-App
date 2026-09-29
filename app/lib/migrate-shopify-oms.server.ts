@@ -9,6 +9,7 @@ import { unauthenticated } from "../shopify.server";
 import { type OrderPayload } from "./order-webhook.server";
 import { runOrderPipeline } from "./migration-pipeline.server";
 import { isLinkedCin7Id } from "./cin7-adapter.server";
+import { SHOPIFY_OPEN_OPS_QUERY } from "./monday-scope.server";
 import {
   bumpMigrationRunCounters,
   createMigrationRun,
@@ -68,6 +69,9 @@ const ORDER_FIELDS = `
   phone
   createdAt
   displayFinancialStatus
+  displayFulfillmentStatus
+  cancelledAt
+  closedAt
   taxesIncluded
   customAttributes { key value }
   shippingAddress {
@@ -166,6 +170,9 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
     phone: node?.phone,
     taxes_included: Boolean(node?.taxesIncluded),
     financial_status: financial,
+    fulfillment_status: String(node?.displayFulfillmentStatus || "").toLowerCase(),
+    cancelled_at: node?.cancelledAt || null,
+    closed_at: node?.closedAt || null,
     current_total_price: presentment?.amount,
     total_price: node?.totalPriceSet?.presentmentMoney?.amount,
     current_total_price_set: {
@@ -463,7 +470,7 @@ export async function findNextEligibleShopifyOrder(
   for (let page = 0; page < maxPages; page++) {
     const pageAfter = after;
     const res = await admin.graphql(ORDER_SCAN_QUERY, {
-      variables: { first: SCAN_PAGE_SIZE, after, query: "status:any", reverse },
+      variables: { first: SCAN_PAGE_SIZE, after, query: SHOPIFY_OPEN_OPS_QUERY, reverse },
     });
     const json = await res.json();
     if (json?.errors?.length) {
@@ -531,7 +538,7 @@ export async function countShopifyOrders(admin: AdminGraphql): Promise<number | 
   try {
     const res = await admin.graphql(`#graphql
       query SyncAllOrdersCount {
-        ordersCount(query: "status:any") { count }
+        ordersCount(query: SHOPIFY_OPEN_OPS_QUERY) { count }
       }
     `);
     const json = await res.json();
@@ -555,7 +562,7 @@ function shopifyCreatedAtRangeQuery(fromDate: string, toDate: string): string {
   const from = String(fromDate || "").trim();
   const to = String(toDate || "").trim();
   const toExclusive = addUtcDays(to, 1);
-  return `(created_at:>='${from}' AND created_at:<'${toExclusive}') AND status:any`;
+  return `(created_at:>='${from}' AND created_at:<'${toExclusive}') AND ${SHOPIFY_OPEN_OPS_QUERY}`;
 }
 
 /** List Shopify orders in a created-at date range (inclusive). Oldest first. Does not sync. */

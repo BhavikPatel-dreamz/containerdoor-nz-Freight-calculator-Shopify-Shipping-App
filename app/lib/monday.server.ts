@@ -69,6 +69,16 @@ async function mondayRequestNow(
   return json.data;
 }
 
+export async function deleteMondayItem(itemId: string): Promise<boolean> {
+  const id = String(itemId || "").trim();
+  if (!id || id === "pending") return false;
+  const data = await mondayRequest(
+    `mutation ($id: ID!) { delete_item (item_id: $id) { id } }`,
+    { id },
+  );
+  return Boolean(data?.delete_item?.id);
+}
+
 export function isStaleMondayItemError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (

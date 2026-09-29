@@ -15,6 +15,7 @@ import {
   saveCin7LineLink,
   resolveCin7SalesOrderId,
 } from "./cin7-adapter.server";
+import { isMondayOperationalOrder } from "./monday-scope.server";
 import {
   attachBundleRelationships,
   buildBundleCin7LineItems,
@@ -78,6 +79,9 @@ export type OrderPayload = {
   tax_lines?: Array<{ rate?: string | number }>;
   taxes_included?: boolean;
   financial_status?: string;
+  fulfillment_status?: string;
+  cancelled_at?: string | null;
+  closed_at?: string | null;
   shipping_lines?: Array<{ title?: string; code?: string; price?: string | number }>;
   line_items?: Array<{
     id?: number;
@@ -1772,6 +1776,13 @@ export async function createMondayEntriesForOrder(
 ): Promise<IntegrationSyncStats> {
   const orderId = String(order.id);
   console.log(`[Monday][Webhook][${orderId}] START for order ${order.name}`);
+
+  if (!isMondayOperationalOrder(order)) {
+    console.log(
+      `[Monday][Webhook][${orderId}] SKIP - not operational (fulfilled/cancelled/closed) fulfillment=${String(order.fulfillment_status || "") || "empty"}`,
+    );
+    return { created: 0, linked: 0, skipped: 1, failed: 0 };
+  }
 
   try {
     const breakdownLines = getOperationalLines(order);
