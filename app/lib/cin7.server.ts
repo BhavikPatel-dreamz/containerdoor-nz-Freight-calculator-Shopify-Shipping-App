@@ -396,20 +396,27 @@ export async function findCin7SalesOrdersForShopifyOrder(input: {
 
   const keys = cin7CustomerOrderNoCandidates(input.orderName, input.orderId);
   const extraRef = String(input.reference || "").trim();
-  const refKeys = [...keys];
   if (extraRef) {
-    refKeys.push(extraRef, extraRef.replace(/^#/, ""), extraRef.startsWith("#") ? extraRef : `#${extraRef}`);
+    keys.push(extraRef, extraRef.replace(/^#/, ""), extraRef.startsWith("#") ? extraRef : `#${extraRef}`);
   }
-  // Historical Cin7 SOs often used the order number as `reference` (no line letter).
-  for (const key of [...new Set(refKeys.filter(Boolean))]) {
-    add(await queryCin7SalesOrders(`reference='${cin7WhereEscape(key)}'`, strict));
-  }
+  const unique = [...new Set(keys.filter(Boolean))];
+  if (!unique.length) return [];
 
-  for (const key of keys) {
-    add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(key)}'`, strict));
+  const clauses = unique.flatMap((key) => [
+    `reference='${cin7WhereEscape(key)}'`,
+    `customerOrderNo='${cin7WhereEscape(key)}'`,
+  ]);
+  try {
+    add(await queryCin7SalesOrders(clauses.join(" OR "), strict));
+    return out;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes("HTTP 429") && unique[0]) {
+      add(await queryCin7SalesOrders(`customerOrderNo='${cin7WhereEscape(unique[0])}'`, strict));
+      return out;
+    }
+    throw err;
   }
-
-  return out;
 }
 
 function normalizeCin7Ref(value?: string | null): string {
