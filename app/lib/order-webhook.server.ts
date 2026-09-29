@@ -7,6 +7,7 @@ import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveM
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, updateCin7SalesOrderCarrier, type Cin7SalesOrderMatch } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
+import { sumLineItemValue } from "./cin7-allocation";
 import {
   buildCin7CustomerOrderNo,
   buildCin7SalesOrderReference,
@@ -1577,16 +1578,35 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         // adds GST once. The Cin7 total fetch returns the correct GST-inclusive
         // total. Fallback uses tax-exclusive amounts + 15% GST.
         const paidRatio = resolveOrderPaidRatio(order);
+        // Fallback value for this SO = the product value of the lines actually
+        // sent (tax-exclusive) + the freight allocated to it (tax-exclusive)
+        // + 15% GST. When the live Cin7 total fetch fails (e.g. 429), pay this
+        // instead of skipping — a skipped payment leaves the SO unpaid forever.
+        const unitPriceExcl = order.taxes_included
+          ? Math.round(unitPrice / (1 + ourGstRate) * 100) / 100
+          : unitPrice;
+        const lineSubtotalExcl = bundleLineItems.length
+          ? sumLineItemValue(
+              bundleLineItems.map((bli: any) => ({
+                qty: bli.qty,
+                unitPrice: order.taxes_included
+                  ? Math.round(Number(bli.unitPrice ?? 0) / (1 + ourGstRate) * 100) / 100
+                  : Number(bli.unitPrice ?? 0),
+              })),
+            )
+          : qty * unitPriceExcl;
+        const fallbackTotalExcl = Math.round((lineSubtotalExcl + freightFinalExcl) * 100) / 100;
+        const fallbackTotal = Math.round(fallbackTotalExcl * (1 + ourGstRate) * 100) / 100;
         const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
         if (!cin7Total || Number(cin7Total) <= 0) {
           console.error(
-            `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment SKIPPED — unable to fetch Cin7 SO total for SO ${result.id}. ` +
-              `Cannot create payment without verified Cin7 total. ` +
-              `SO will remain unpaid in Cin7; manual reconciliation required.`
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} Cin7 SO total fetch failed for SO ${result.id}; ` +
+              `falling back to locally computed total ${fallbackTotal} for payment.`,
           );
-        } else {
-          const linePaidAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
-          if (linePaidAmount > 0) {
+        }
+        const lineTotalInclTax = cin7Total && Number(cin7Total) > 0 ? Number(cin7Total) : fallbackTotal;
+        const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
+        if (linePaidAmount > 0) {
           const paymentResult = await createCin7Payment({
             orderId: result.id,
             amount: linePaidAmount,
@@ -1615,10 +1635,9 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
             }
           }
         } else {
-            console.log(
-              `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
-            );
-          }
+          console.log(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
+          );
         }
       } catch (e: any) {
         const retryMatch =
