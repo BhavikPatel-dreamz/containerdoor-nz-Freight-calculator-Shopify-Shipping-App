@@ -45,16 +45,25 @@ export function verifyCronSecret(request: Request): boolean {
 
 export function cronUnauthorized(request: Request) {
   const secret = getCronSecret();
-  const hasHeader = Boolean(
-    request.headers.get("Authorization") || request.headers.get("X-Cron-Secret"),
-  );
+  const rawAuth = request.headers.get("Authorization") ?? request.headers.get("authorization") ?? "";
+  const presented = normalizeSecret(rawAuth).replace(/^Bearer\s+/i, "");
+  const hasHeader = Boolean(rawAuth || request.headers.get("X-Cron-Secret"));
   const hint = !secret
-    ? "oms-web has no CRON_SECRET — add it to .env and pm2 restart oms-web"
-    : !hasHeader
-      ? "request missing Authorization Bearer CRON_SECRET"
-      : "CRON_SECRET on oms-web does not match the cron process";
+    ? "oms-web has no CRON_SECRET — add it to .env in the app folder and pm2 restart oms-web"
+    : !presented
+      ? "shell CRON_SECRET is empty — cd to the app folder, then: set -a && source .env && set +a"
+      : `secret length mismatch (oms-web=${secret.length} curl=${presented.length}). Restart oms-web from the same folder as .env: pm2 restart oms-web --update-env`;
   console.warn(
-    `[cron-auth] unauthorized secretConfigured=${Boolean(secret)} secretLen=${secret.length} header=${hasHeader}`,
+    `[cron-auth] unauthorized secretConfigured=${Boolean(secret)} webLen=${secret.length} curlLen=${presented.length} header=${hasHeader}`,
   );
-  return Response.json({ ok: false, error: "Unauthorized", hint }, { status: 401 });
+  return Response.json(
+    {
+      ok: false,
+      error: "Unauthorized",
+      hint,
+      webSecretLen: secret.length,
+      curlSecretLen: presented.length,
+    },
+    { status: 401 },
+  );
 }

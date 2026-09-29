@@ -9,7 +9,7 @@ import { unauthenticated } from "../shopify.server";
 import { type OrderPayload } from "./order-webhook.server";
 import { runOrderPipeline } from "./migration-pipeline.server";
 import { isLinkedCin7Id } from "./cin7-adapter.server";
-import { SHOPIFY_OPEN_OPS_QUERY } from "./monday-scope.server";
+import { SHOPIFY_OPEN_OPS_QUERY, isClosedFulfillmentStatus, isMondayOperationalOrder } from "./monday-scope.server";
 import {
   bumpMigrationRunCounters,
   createMigrationRun,
@@ -775,6 +775,101 @@ async function persistReport(input: {
   } catch (err) {
     console.error("[Migrate] persist report failed", err);
   }
+}
+
+}
+
+/** Failed/partial migrate rows: skip closed Shopify orders, retry open ones for Monday. */
+export async function findNextFailedOperationalRetry(
+  shop: string,
+  admin: AdminGraphql,
+): Promise<
+  | { orderId: string; orderName: string }
+  | { closedMarked: number; continueScan: true }
+  | null
+> {
+  const rows = await prisma.orderMigrateReport.findMany({
+    where: { shop, status: { in: ["failed", "partial"] } },
+    orderBy: { updatedAt: "asc" },
+    take: 40,
+    select: { orderId: true, orderName: true, mondayAction: true },
+  }).catch(() => []);
+  if (!rows.length) return null;
+
+  let closedMarked = 0;
+  for (const row of rows) {
+    const snap = await prisma.orderSnapshot.findUnique({
+      where: { shop_orderId: { shop, orderId: row.orderId } },
+      select: { fulfillmentStatus: true, orderName: true },
+    }).catch(() => null);
+    const ops = await prisma.orderLineItemOperationalData.findMany({
+      where: { shop, orderId: row.orderId },
+      select: { mondayItemId: true, customerStatus: true },
+    });
+    const alreadyMonday = ops.length > 0 && ops.every((o) => {
+      const id = String(o.mondayItemId || "").trim();
+      return Boolean(id && id !== "pending");
+    });
+    if (alreadyMonday) {
+      await persistReport({
+        shop,
+        orderId: row.orderId,
+        orderName: row.orderName || snap?.orderName || row.orderId,
+        status: "success",
+        omsAction: "existed",
+        mondayAction: "linked",
+        cin7Action: "",
+        lastError: "",
+        steps: [{ at: new Date().toISOString(), step: "monday", ok: true, message: "Already linked — no retry" }],
+        lines: [],
+        sentBy: "monday-recheck",
+      });
+      closedMarked += 1;
+      continue;
+    }
+    const cancelledOps = ops.length > 0 && ops.every((o) => {
+      const s = String(o.customerStatus || "").toLowerCase();
+      return s === "cancelled" || s === "delivered";
+    });
+    if (isClosedFulfillmentStatus(snap?.fulfillmentStatus) || cancelledOps) {
+      await persistReport({
+        shop,
+        orderId: row.orderId,
+        orderName: row.orderName || snap?.orderName || row.orderId,
+        status: "success",
+        omsAction: "existed",
+        mondayAction: "skipped_closed",
+        cin7Action: "",
+        lastError: "",
+        steps: [{ at: new Date().toISOString(), step: "monday", ok: true, message: "Skipped Monday — fulfilled/cancelled, not operational" }],
+        lines: [],
+        sentBy: "monday-recheck",
+      });
+      closedMarked += 1;
+      continue;
+    }
+    const live = await fetchShopifyOrderById(admin, row.orderId);
+    if (live && !isMondayOperationalOrder(live)) {
+      await persistReport({
+        shop,
+        orderId: row.orderId,
+        orderName: live.name || row.orderName,
+        status: "success",
+        omsAction: "existed",
+        mondayAction: "skipped_closed",
+        cin7Action: "",
+        lastError: "",
+        steps: [{ at: new Date().toISOString(), step: "monday", ok: true, message: `Skipped Monday — Shopify ${live.fulfillment_status || "closed"}` }],
+        lines: [],
+        sentBy: "monday-recheck",
+      });
+      closedMarked += 1;
+      continue;
+    }
+    return { orderId: row.orderId, orderName: row.orderName || live?.name || row.orderId };
+  }
+  if (closedMarked) return { closedMarked, continueScan: true };
+  return null;
 }
 
 export async function listMigrateReports(shop: string, take = 5) {

@@ -4,8 +4,10 @@ import { cronUnauthorized, verifyCronSecret } from "../lib/cron-auth.server";
 import {
   countShopifyOrders,
   findNextEligibleShopifyOrder,
+  findNextFailedOperationalRetry,
+  processShopifyOrder,
+  summarizeSyncSystems,
 } from "../lib/migrate-shopify-oms.server";
-import { processShopifyOrder, summarizeSyncSystems } from "../lib/process-shopify-order.server";
 import { loadOrderSyncCursor, saveOrderSyncCursor } from "../lib/order-sync-cursor.server";
 
 export const maxDuration = 60;
@@ -119,6 +121,56 @@ async function runStep(request: Request, body: StepBody) {
     console.log(
       `[order-sync-step] resume shop=${shop} last=${saved.lastOrderName} processed=${saved.processed} after=${after ? "yes" : "start"}`,
     );
+  }
+
+  const retry = await findNextFailedOperationalRetry(shop, admin);
+  if (retry && "continueScan" in retry) {
+    return Response.json({
+      ok: true,
+      done: false,
+      continueScan: true,
+      message: `Rechecked ${retry.closedMarked} failed historic order(s) — closed/fulfilled, Monday not required`,
+      resumedFrom: saved?.lastOrderName || null,
+    });
+  }
+  if (retry && "orderId" in retry) {
+    const one = await processShopifyOrder({
+      shop,
+      admin,
+      shopifyOrderId: retry.orderId,
+      sentBy,
+      mode,
+    });
+    const systems = summarizeSyncSystems(one);
+    if (persist) {
+      await saveOrderSyncCursor({
+        shop,
+        after,
+        skipIds,
+        lastOrderId: one.orderId || retry.orderId,
+        lastOrderName: one.orderName || retry.orderName,
+        lastOk: one.ok,
+        lastMessage: one.ok ? "Retried open order Monday" : one.error || "Retry failed",
+        bumpProcessed: true,
+        bumpSuccess: one.ok,
+        bumpFailed: !one.ok,
+        caughtUp: false,
+      });
+    }
+    return Response.json({
+      ok: one.ok,
+      done: false,
+      after,
+      resumedFrom: saved?.lastOrderName || null,
+      order: {
+        id: one.orderId || retry.orderId,
+        name: one.orderName || retry.orderName,
+        ok: one.ok,
+        error: one.error,
+        steps: one.steps,
+      },
+      systems,
+    });
   }
 
   const next = await findNextEligibleShopifyOrder(admin, shop, {
