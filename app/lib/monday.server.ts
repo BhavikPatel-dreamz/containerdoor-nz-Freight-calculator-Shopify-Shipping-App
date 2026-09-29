@@ -79,6 +79,33 @@ export async function deleteMondayItem(itemId: string): Promise<boolean> {
   return Boolean(data?.delete_item?.id);
 }
 
+export async function listMondayBoardItemsPage(cursor?: string | null): Promise<{
+  cursor: string | null;
+  items: Array<{ id: string; name: string }>;
+}> {
+  const boardId = process.env.MONDAY_BOARD_ID;
+  if (!boardId) return { cursor: null, items: [] };
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $cursor: String) {
+      boards(ids: [$boardId]) {
+        items_page(limit: 100, cursor: $cursor) {
+          cursor
+          items { id name }
+        }
+      }
+    }`,
+    { boardId, cursor: cursor || null },
+  );
+  const page = data?.boards?.[0]?.items_page;
+  return {
+    cursor: page?.cursor ? String(page.cursor) : null,
+    items: (page?.items ?? []).map((item: any) => ({
+      id: String(item?.id || ""),
+      name: String(item?.name || ""),
+    })),
+  };
+}
+
 export function isMondayBoardFullError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.includes("Board has reached its max size") || msg.includes("RecordInvalidException");

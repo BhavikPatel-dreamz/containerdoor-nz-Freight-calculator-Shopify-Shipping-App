@@ -47,6 +47,28 @@ export function isClosedFulfillmentStatus(status?: string | null): boolean {
   return fulfillment === "fulfilled" || fulfillment === "restocked";
 }
 
+/** True = pulse should leave the live Monday queue (keep pending / unfulfilled / paid+unfulfilled). */
+export function shouldPruneMondayPulse(input: {
+  fulfillmentStatus?: string | null;
+  financialStatus?: string | null;
+  customerStatus?: string | null;
+}): boolean {
+  const customer = norm(input.customerStatus);
+  if (customer === "cancelled" || customer === "canceled" || customer === "delivered") return true;
+
+  const financial = norm(input.financialStatus);
+  if (
+    financial === "cancelled" ||
+    financial === "canceled" ||
+    financial === "voided" ||
+    financial === "expired"
+  ) {
+    return true;
+  }
+
+  return isClosedFulfillmentStatus(input.fulfillmentStatus);
+}
+
 /**
  * Historic scan: still needs shipping. Explicitly includes paid + unfulfilled.
  * Do not use status:open alone — paid unfulfilled orders must stay in the queue.
