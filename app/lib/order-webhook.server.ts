@@ -1347,25 +1347,38 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     let failed = 0;
     const errors: string[] = [];
 
-    // Strict lookup: a Cin7 API error (429/5xx) must NEVER be treated as "no
-    // existing SO", otherwise this run would silently create a duplicate.
-    // On lookup failure, stop and return a retryable failure (no SO created).
-    let existingCin7: Cin7SalesOrderMatch[] = [];
-    try {
-      existingCin7 = await findCin7SalesOrdersForShopifyOrder({
-        orderName: order.name,
-        orderId,
-        strict: true,
+    const opsByVariant = new Map<string, Awaited<ReturnType<typeof prisma.orderLineItemOperationalData.findUnique>>>();
+    let unlinkedCount = 0;
+    for (const li of breakdownLines) {
+      if (!li.variantId) continue;
+      const existingOps = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
       });
-    } catch (lookupErr) {
-      const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
-      console.error(
-        `[Cin7][Webhook][${orderId}] existing SO lookup FAILED (retryable) - no SO created for ${customerOrderNo}: ${msg}`,
-      );
-      return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [`Cin7 lookup failed (retryable): ${msg}`] };
+      if (existingOps) opsByVariant.set(li.variantId, existingOps);
+      if (!existingOps || !isLinkedCin7Id(existingOps.cin7SalesOrderId)) unlinkedCount++;
+    }
+
+    // Strict lookup only when a line still needs a Sales Order. Already-linked
+    // lines (historical Cin7 UI OrderId) must not call Cin7 — 429 was failing
+    // whole-order sync even when OMS already stored the id.
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    if (unlinkedCount > 0) {
+      try {
+        existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+          orderName: order.name,
+          orderId,
+          strict: true,
+        });
+      } catch (lookupErr) {
+        const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+        console.error(
+          `[Cin7][Webhook][${orderId}] existing SO lookup FAILED (retryable) - no SO created for ${customerOrderNo}: ${msg}`,
+        );
+        return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [`Cin7 lookup failed (retryable): ${msg}`] };
+      }
     }
     console.log(
-      `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} for ${customerOrderNo}`,
+      `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} unlinkedLines=${unlinkedCount} for ${customerOrderNo}`,
     );
 
     for (const [idx, li] of breakdownLines.entries()) {
@@ -1382,7 +1395,7 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
         variantId: li.variantId,
       });
 
-      let ops = await prisma.orderLineItemOperationalData.findUnique({
+      let ops = opsByVariant.get(li.variantId) ?? await prisma.orderLineItemOperationalData.findUnique({
         where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
       });
       if (!ops) {
@@ -1410,15 +1423,6 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
       }
 
       if (isLinkedCin7Id(ops.cin7SalesOrderId)) {
-        if (li.company && li.company !== String(ops.carrier ?? "")) {
-          updateCin7SalesOrderCarrier({ salesOrderId: ops.cin7SalesOrderId, logisticsCarrier: li.company }).then((r) => {
-            if (r.updated) console.log(`[Cin7][Webhook][${orderId}] line ${letterSuffix} UPDATED carrier ${ops.carrier}→${li.company} on SO=${ops.cin7SalesOrderId}`);
-          }).catch(() => {});
-        }
-        await prisma.orderLineItemOperationalData.update({
-          where: { id: ops.id },
-          data: { carrier: li.company },
-        }).catch(() => {});
         skipped++;
         continue;
       }
