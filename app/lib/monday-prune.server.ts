@@ -314,6 +314,7 @@ async function applyDeletes(input: {
 
   return {
     ok: true,
+    pruneVersion: 2,
     dryRun: input.dryRun,
     examined: input.examined,
     eligible: input.targets.length,

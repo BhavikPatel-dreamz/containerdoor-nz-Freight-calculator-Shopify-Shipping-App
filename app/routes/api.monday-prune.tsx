@@ -23,8 +23,9 @@ async function run(request: Request) {
   const dropUnmatched = flag(body.dropUnmatched ?? url.searchParams.get("dropUnmatched"), false);
   const cursor = String(body.cursor ?? url.searchParams.get("cursor") ?? "").trim() || null;
   const scanLimit = Number(body.scanLimit || url.searchParams.get("scanLimit") || 400);
-  return Response.json(
-    await pruneClosedMondayItems({
+  return Response.json({
+    pruneVersion: 2,
+    ...(await pruneClosedMondayItems({
       shop,
       dryRun,
       limit,
@@ -32,8 +33,8 @@ async function run(request: Request) {
       dropUnmatched,
       cursor,
       scanLimit,
-    }),
-  );
+    })),
+  });
 }
 
 export async function loader({ request }: LoaderFunctionArgs) {
