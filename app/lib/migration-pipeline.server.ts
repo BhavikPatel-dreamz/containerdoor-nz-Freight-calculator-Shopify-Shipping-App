@@ -308,7 +308,12 @@ export async function runOrderPipeline(input: RunOrderPipelineInput): Promise<Or
       });
       const linked = after.filter((r) => isLinkedCin7Id(r.cin7SalesOrderId)).length;
       const failed = (cin7?.failed || 0) > 0;
-      if (failed) return { ok: false, message: `Cin7 verify failed — ${linked}/${opLines.length} lines linked` };
+      if (failed) {
+        return {
+          ok: false,
+          message: `Cin7 verify failed — sync failed=${cin7?.failed || 0} linked=${linked}/${opLines.length}${cin7?.errors?.length ? ` — ${cin7.errors.join(" | ")}` : ""}`,
+        };
+      }
       return { ok: true, message: `Cin7 verify — ${linked}/${opLines.length} lines linked` };
     }),
   );
