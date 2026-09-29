@@ -41,7 +41,7 @@ async function fetchCin7WithRateLimit(url: string, init: RequestInit): Promise<R
     if (response.status !== 429 || attempt === 2) return response;
 
     const retryAfter = Number(response.headers.get("retry-after") || 0);
-    const waitMs = retryAfter > 0 ? Math.min(retryAfter, 60) * 1000 : 60_000;
+    const waitMs = Math.min(retryAfter > 0 ? retryAfter * 1000 : 2000, 3000);
     debug("Cin7", `Rate limited; waiting ${waitMs}ms before retry ${attempt + 2}/3`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }

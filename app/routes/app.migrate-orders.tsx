@@ -15,6 +15,8 @@ import {
   summarizeSyncSystems,
 } from "../lib/process-shopify-order.server";
 
+export const maxDuration = 60;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const reports = await listMigrateReports(session.shop, 200);

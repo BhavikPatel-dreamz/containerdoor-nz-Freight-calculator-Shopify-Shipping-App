@@ -3,7 +3,7 @@ import prisma from "../db.server";
 import { unauthenticated } from "../shopify.server";
 import type { Prisma } from "@prisma/client";
 import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
-import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems } from "./monday.server";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems, isMondayBoardFullError } from "./monday.server";
 import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, updateCin7SalesOrderCarrier, type Cin7SalesOrderMatch } from "./cin7.server";
 import { getAppSettings } from "../models/freight.server";
 import { reindexOrderById } from "./line-index.server";
@@ -1975,6 +1975,22 @@ export async function createMondayEntriesForOrder(
           createdCount++;
         }
       } catch (err) {
+        if (isMondayBoardFullError(err)) {
+          failedCount++;
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`line ${letterSuffix}: ${msg}`);
+          console.error(
+            `[Monday][Webhook][${orderId}] FAILED board full — prune closed items before retry`,
+            err,
+          );
+          await prisma.orderLineItemOperationalData
+            .update({
+              where: { id: ops.id },
+              data: { mondayItemId: "" },
+            })
+            .catch(() => {});
+          continue;
+        }
         const retry = await findMondayItemForLine({
           orderName: order.name,
           letterSuffix,

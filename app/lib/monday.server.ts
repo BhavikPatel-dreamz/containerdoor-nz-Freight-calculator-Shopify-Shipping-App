@@ -54,8 +54,8 @@ async function mondayRequestNow(
   );
   if (complexityError && retries > 0) {
     const waitSeconds = Math.min(
-      complexityError.extensions?.retry_in_seconds ?? 10,
-      40,
+      complexityError.extensions?.retry_in_seconds ?? 3,
+      8,
     );
     console.log(
       `[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`,
@@ -77,6 +77,11 @@ export async function deleteMondayItem(itemId: string): Promise<boolean> {
     { id },
   );
   return Boolean(data?.delete_item?.id);
+}
+
+export function isMondayBoardFullError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("Board has reached its max size") || msg.includes("RecordInvalidException");
 }
 
 export function isStaleMondayItemError(err: unknown): boolean {
