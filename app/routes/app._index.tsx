@@ -158,7 +158,9 @@ export async function loader({ request }: LoaderFunctionArgs) {
       idx."id" AS line_index_id,
       idx."orderId", idx."variantId", idx."shopifyOrderId", idx."gid", idx."orderName",
       idx."letterSuffix", idx."customerName", idx."email", idx."phone", idx."city", idx."zip",
-      idx."fullAddress", idx."createdAt", idx."currency", idx."totalFreight", idx."carriers",
+      idx."fullAddress",
+      COALESCE(snap."createdAt", idx."createdAt") AS "orderCreatedAt",
+      idx."currency", idx."totalFreight", idx."carriers",
       idx."shippingTitle", idx."productTitle", idx."productId", idx."variantTitle", idx."sku", idx."vendor", idx."company",
       idx."boxes", idx."amount", idx."financialStatus", idx."fulfillmentStatus", idx."quantity",
        ops."customerStatus", ops."customerStatusColor" AS ops_customer_status_color, ops."carrier" AS ops_carrier, ops."carrierColor" AS ops_carrier_color, ops."paymentStatus" AS ops_payment_status, ops."paymentStatusColor" AS ops_payment_status_color, ops."trackingNumber", ops."freightRef", ops."eddDate", ops."originalEddDate",
@@ -180,7 +182,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     LEFT JOIN order_carrier_counts occ
       ON occ."orderId" = idx."orderId"
     WHERE ${rowWhere}
-    ORDER BY idx."createdAt" DESC, idx."orderId" DESC, idx."letterSuffix" ASC
+    ORDER BY COALESCE(snap."createdAt", idx."createdAt") DESC, idx."orderId" DESC, idx."letterSuffix" ASC
     LIMIT ${PAGE_SIZE} OFFSET ${offset}
   `;
 
@@ -257,7 +259,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       totalFreight: Number(r.totalFreight ?? 0),
       city: r.city || null,
       postalCode: r.zip || null,
-      createdAt: (r.createdAt instanceof Date ? r.createdAt : new Date(r.createdAt)).toISOString(),
+      createdAt: (() => {
+        const d = r.orderCreatedAt ?? r.createdAt;
+        return (d instanceof Date ? d : new Date(d)).toISOString();
+      })(),
       carriers: r.carriers || "",
       packageCount: "",
       shippingTitle: r.shippingTitle || "",
