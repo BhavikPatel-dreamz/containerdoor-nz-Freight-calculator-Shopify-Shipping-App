@@ -122,6 +122,55 @@ export function isLinkedCin7Id(id?: string | null): boolean {
   return Boolean(v && v !== "pending" && v !== "duplicate");
 }
 
+const CIN7_SALE_KEY = /cin7\s*sale\s*id|cin7_sale_id|cin7saleid|cin7_sales_order_id|cin7_so_id|cin7salesorderid/i;
+
+function digitsCin7Id(raw: string): string {
+  const v = String(raw || "").trim();
+  if (!v) return "";
+  const m = v.match(/\d{4,12}/);
+  return m ? m[0] : "";
+}
+
+function isCin7SaleIdKey(namespace: string, key: string): boolean {
+  const ns = String(namespace || "").trim().toLowerCase();
+  const k = String(key || "").trim().toLowerCase().replace(/\s+/g, "_");
+  if ((ns === "custom" || ns === "") && (k === "cin7_sale_id" || k === "cin7_saleid")) return true;
+  return CIN7_SALE_KEY.test(key) || CIN7_SALE_KEY.test(`${namespace} ${key}`) || k === "cin7 sale id";
+}
+
+/** Shopify `custom.cin7_sale_id` (and note attribute "Cin7 Sale ID") → Omni Sales Order id. */
+export function extractShopifyCin7SaleId(order: {
+  note_attributes?: Array<{ name?: string; key?: string; value?: string }>;
+  metafields?: Array<{ key?: string; namespace?: string; value?: string }>;
+  cin7SaleIdMetafield?: string | null;
+} | null | undefined): string {
+  if (!order) return "";
+  const fromAlias = digitsCin7Id(String(order.cin7SaleIdMetafield || ""));
+  if (fromAlias && fromAlias.length < 13) return fromAlias;
+
+  const pairs: Array<{ namespace: string; key: string; value: string }> = [];
+  for (const a of order.note_attributes ?? []) {
+    pairs.push({
+      namespace: "",
+      key: String(a?.name || a?.key || ""),
+      value: String(a?.value || ""),
+    });
+  }
+  for (const a of order.metafields ?? []) {
+    pairs.push({
+      namespace: String(a?.namespace || ""),
+      key: String(a?.key || ""),
+      value: String(a?.value || ""),
+    });
+  }
+  for (const row of pairs) {
+    if (!isCin7SaleIdKey(row.namespace, row.key)) continue;
+    const id = digitsCin7Id(row.value);
+    if (id && id.length < 13) return id;
+  }
+  return "";
+}
+
 /** Build a clickable Cin7 Sales Order URL for UI badges. */
 export function buildCin7SalesOrderUrl(salesOrderId?: string | null): string | null {
   const id = String(salesOrderId || "").trim();

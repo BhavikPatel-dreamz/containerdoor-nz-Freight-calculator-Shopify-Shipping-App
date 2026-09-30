@@ -74,6 +74,8 @@ const ORDER_FIELDS = `
   closedAt
   taxesIncluded
   customAttributes { key value }
+  metafields(first: 40) { nodes { namespace key value } }
+  cin7SaleIdMetafield: metafield(namespace: "custom", key: "cin7_sale_id") { value }
   shippingAddress {
     firstName lastName company address1 address2 city province zip country countryCodeV2 phone
   }
@@ -190,6 +192,12 @@ export function mapShopifyOrderNode(node: any): OrderPayload {
       name: a?.key,
       value: a?.value,
     })),
+    metafields: (node?.metafields?.nodes ?? []).map((m: any) => ({
+      namespace: m?.namespace,
+      key: m?.key,
+      value: m?.value,
+    })),
+    cin7SaleIdMetafield: node?.cin7SaleIdMetafield?.value ?? "",
     shipping_address: {
       first_name: ship.firstName,
       last_name: ship.lastName,

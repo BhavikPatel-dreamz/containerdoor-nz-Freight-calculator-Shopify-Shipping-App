@@ -15,6 +15,7 @@ import {
   isLinkedCin7Id,
   saveCin7LineLink,
   resolveCin7SalesOrderId,
+  extractShopifyCin7SaleId,
 } from "./cin7-adapter.server";
 import { isMondayOperationalOrder } from "./monday-scope.server";
 import {
@@ -33,6 +34,8 @@ export type OrderPayload = {
   id?: number;
   name?: string;
   note_attributes?: Array<{ name?: string; value?: string }>;
+  metafields?: Array<{ namespace?: string; key?: string; value?: string }>;
+  cin7SaleIdMetafield?: string;
   created_at?: string;
   currency?: string;
   total_price?: string;
@@ -1362,6 +1365,28 @@ async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Prom
     // lines (historical Cin7 UI OrderId) must not call Cin7 — 429 was failing
     // whole-order sync even when OMS already stored the id.
     let existingCin7: Cin7SalesOrderMatch[] = [];
+    const shopifyCin7Id = extractShopifyCin7SaleId(order);
+    if (shopifyCin7Id && unlinkedCount > 0) {
+      console.log(
+        `[Cin7][Webhook][${orderId}] LINK from Shopify Cin7 Sale ID metafield/attribute id=${shopifyCin7Id}`,
+      );
+      for (const li of breakdownLines) {
+        if (!li.variantId) continue;
+        const existingOps = opsByVariant.get(li.variantId);
+        if (existingOps && isLinkedCin7Id(existingOps.cin7SalesOrderId)) continue;
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: shopifyCin7Id,
+          salesOrderRef: shopifyCin7Id,
+          mirrorToOrder: true,
+        });
+        if (existingOps) existingOps.cin7SalesOrderId = shopifyCin7Id;
+        unlinkedCount = Math.max(0, unlinkedCount - 1);
+      }
+    }
+
     if (unlinkedCount > 0) {
       try {
         existingCin7 = await findCin7SalesOrdersForShopifyOrder({

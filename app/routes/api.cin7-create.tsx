@@ -17,6 +17,7 @@ import {
   buildCin7SalesOrderUrl,
   saveCin7LineLink,
   isLinkedCin7Id,
+  extractShopifyCin7SaleId,
 } from "../lib/cin7-adapter.server";
 import { getAppSettings } from "../models/freight.server";
 import { parseFreightCode } from "../lib/freight";
@@ -190,6 +191,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               rate
             }
             taxesIncluded
+            customAttributes { key value }
+            metafields(first: 40) { nodes { namespace key value } }
+            cin7SaleIdMetafield: metafield(namespace: "custom", key: "cin7_sale_id") { value }
             lineItems(first: 50) {
               nodes {
                 sku
@@ -229,6 +233,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { ok: false, error: "Order not found in Shopify" },
         { status: 404 },
       );
+    }
+
+    const shopifyCin7Id = extractShopifyCin7SaleId({
+      note_attributes: (orderData.customAttributes ?? []).map((a: any) => ({
+        name: a?.key,
+        value: a?.value,
+      })),
+      metafields: (orderData.metafields?.nodes ?? []).map((m: any) => ({
+        namespace: m?.namespace,
+        key: m?.key,
+        value: m?.value,
+      })),
+      cin7SaleIdMetafield: orderData.cin7SaleIdMetafield?.value ?? "",
+    });
+    if (shopifyCin7Id && normalizedVariantId) {
+      await saveCin7LineLink({
+        shop,
+        orderId: orderIdStr,
+        variantId: normalizedVariantId,
+        salesOrderId: shopifyCin7Id,
+        salesOrderRef: shopifyCin7Id,
+        mirrorToOrder: true,
+      });
+      console.log(`[Cin7][API][${orderIdStr}] LINK Shopify Cin7 Sale ID ${shopifyCin7Id}`);
+      return Response.json({
+        ok: true,
+        cin7SalesOrderId: shopifyCin7Id,
+        cin7SalesOrderUrl: buildCin7SalesOrderUrl(shopifyCin7Id) ?? "",
+        linked: true,
+      });
     }
 
     // Build Cin7 line items (filter out items without SKU)
