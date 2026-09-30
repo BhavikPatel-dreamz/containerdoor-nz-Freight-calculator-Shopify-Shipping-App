@@ -23,7 +23,9 @@ const rawArgv = process.argv.slice(2);
 const argv = new Set(rawArgv);
 const dryRun = !argv.has("--apply");
 const dropUnmatched = argv.has("--drop-unmatched");
-const scanAll = argv.has("--all");
+const scanAll = !argv.has("--page");
+const omsOnly = argv.has("--oms-only");
+const API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-10";
 const cursorArg = rawArgv.find((a) => a.startsWith("--cursor="))?.slice("--cursor=".length) || "";
 const shop =
   String(process.env.ORDER_SYNC_SHOP || process.env.SHOPIFY_SHOP || "containerdoor-nz.myshopify.com").trim();
@@ -48,6 +50,58 @@ function shouldPrune({ fulfillmentStatus, financialStatus, customerStatus }) {
   }
   const fulfillment = norm(fulfillmentStatus);
   return fulfillment === "fulfilled" || fulfillment === "restocked";
+}
+
+function normalizeOrderName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^#/, "")
+    .replace(/[A-Za-z]$/, "")
+    .toLowerCase();
+}
+
+async function loadUnfulfilledShopifyNames() {
+  const session = await prisma.session.findFirst({
+    where: { shop, accessToken: { not: "" } },
+    orderBy: { isOnline: "asc" },
+    select: { accessToken: true, shop: true },
+  });
+  if (!session?.accessToken) {
+    console.error("[monday-prune] no Shopify Session token — falling back to OMS fulfillment");
+    return null;
+  }
+  const names = new Set();
+  let cursor = null;
+  const query = "fulfillment_status:unfulfilled AND -status:cancelled";
+  for (let page = 0; page < 40; page++) {
+    const res = await fetch(`https://${session.shop}/admin/api/${API_VERSION}/graphql.json`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Shopify-Access-Token": session.accessToken,
+      },
+      body: JSON.stringify({
+        query: `query Unfulfilled($query: String!, $cursor: String) {
+          orders(first: 250, after: $cursor, query: $query) {
+            pageInfo { hasNextPage endCursor }
+            nodes { name displayFulfillmentStatus }
+          }
+        }`,
+        variables: { query, cursor },
+      }),
+    });
+    const json = await res.json();
+    if (json.errors) throw new Error(JSON.stringify(json.errors));
+    const conn = json.data?.orders;
+    for (const node of conn?.nodes ?? []) {
+      const n = normalizeOrderName(node?.name);
+      if (n) names.add(n);
+    }
+    console.error(`[monday-prune] Shopify unfulfilled page ${page + 1} names=${names.size}`);
+    if (!conn?.pageInfo?.hasNextPage || !conn.pageInfo.endCursor) break;
+    cursor = conn.pageInfo.endCursor;
+  }
+  return names;
 }
 
 function parsePulseOrderName(name) {
@@ -100,17 +154,62 @@ async function mondayRequest(query, variables, retries = 4) {
 }
 
 async function listPage(cursor) {
-  const data = await mondayRequest(
-    `query ($boardId: ID!, $cursor: String) {
+  const variables = { boardId };
+  const cursorArgGql = cursor
+    ? `query ($boardId: ID!, $cursor: String!) {
       boards(ids: [$boardId]) {
+        items_count
         items_page(limit: 100, cursor: $cursor) {
           cursor
           items { id name }
         }
       }
-    }`,
-    { boardId, cursor: cursor || null },
-  );
+    }`
+    : `query ($boardId: ID!) {
+      boards(ids: [$boardId]) {
+        items_count
+        items_page(limit: 100) {
+          cursor
+          items { id name }
+        }
+      }
+    }`;
+  if (cursor) variables.cursor = cursor;
+  const data = await mondayRequest(cursorArgGql, variables);
+  const board = data?.boards?.[0];
+  const page = board?.items_page;
+  return {
+    itemsCount: Number(board?.items_count || 0),
+    cursor: page?.cursor ? String(page.cursor) : null,
+    items: (page?.items ?? []).map((item) => ({
+      id: String(item?.id || ""),
+      name: String(item?.name || ""),
+    })),
+  };
+}
+
+async function listGroupPage(groupId, cursor) {
+  const variables = { boardId, groupId };
+  const gql = cursor
+    ? `query ($boardId: ID!, $groupId: CompareValue!, $cursor: String!) {
+        boards(ids: [$boardId]) {
+          items_page(
+            limit: 100
+            cursor: $cursor
+            query_params: { rules: [{ column_id: "group", compare_value: $groupId, operator: any_of }] }
+          ) { cursor items { id name } }
+        }
+      }`
+    : `query ($boardId: ID!, $groupId: CompareValue!) {
+        boards(ids: [$boardId]) {
+          items_page(
+            limit: 100
+            query_params: { rules: [{ column_id: "group", compare_value: $groupId, operator: any_of }] }
+          ) { cursor items { id name } }
+        }
+      }`;
+  if (cursor) variables.cursor = cursor;
+  const data = await mondayRequest(gql, variables);
   const page = data?.boards?.[0]?.items_page;
   return {
     cursor: page?.cursor ? String(page.cursor) : null,
@@ -119,6 +218,58 @@ async function listPage(cursor) {
       name: String(item?.name || ""),
     })),
   };
+}
+
+async function listAllBoardItems() {
+  const seen = new Set();
+  const items = [];
+  let pages = 0;
+  let cursor = cursorArg || null;
+  let itemsCount = 0;
+  while (items.length < scanLimit) {
+    const page = await listPage(cursor);
+    pages += 1;
+    itemsCount = page.itemsCount || itemsCount;
+    for (const row of page.items.filter((r) => r.id)) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      items.push(row);
+    }
+    cursor = page.cursor;
+    console.error(`[monday-prune] board page ${pages} items=${items.length}/${itemsCount || "?"} cursor=${cursor ? "yes" : "end"}`);
+    if (!page.items.length || !cursor) break;
+  }
+  if (itemsCount > items.length + 50 && items.length < scanLimit) {
+    const data = await mondayRequest(
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { groups { id title archived deleted } } }`,
+      { boardId },
+    );
+    const groups = (data?.boards?.[0]?.groups ?? []).filter((g) => !g.archived && !g.deleted);
+    console.error(`[monday-prune] scanning ${groups.length} groups (board items_count=${itemsCount})`);
+    for (const group of groups) {
+      let gCursor = null;
+      for (let i = 0; i < 120 && items.length < scanLimit; i++) {
+        const page = await listGroupPage(group.id, gCursor);
+        pages += 1;
+        let added = 0;
+        for (const row of page.items.filter((r) => r.id)) {
+          if (seen.has(row.id)) continue;
+          seen.add(row.id);
+          items.push(row);
+          added += 1;
+        }
+        console.error(`[monday-prune] group ${group.title || group.id} +${added} total=${items.length}`);
+        gCursor = page.cursor;
+        if (!page.items.length || !gCursor) break;
+      }
+    }
+  }
+  return { items, pages, itemsCount, cursor };
+}
+
+async function deleteItem(id) {
+  const data = await mondayRequest(`mutation ($id: ID!) { delete_item (item_id: $id) { id } }`, { id });
+  return Boolean(data?.delete_item?.id);
 }
 
 async function archiveItem(id) {
@@ -149,20 +300,13 @@ const prisma = new PrismaClient({
 });
 
 try {
-  const items = [];
-  let cursor = cursorArg || null;
-  let pages = 0;
+  const listed = await listAllBoardItems();
+  const items = listed.items;
+  let cursor = listed.cursor;
+  let pages = listed.pages;
   console.error(
-    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} all=${scanAll} dropUnmatched=${dropUnmatched} startCursor=${cursor ? "yes" : "start"}`,
+    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} all=${scanAll} examined=${items.length} boardCount=${listed.itemsCount}`,
   );
-  while (items.length < scanLimit) {
-    const page = await listPage(cursor);
-    pages += 1;
-    items.push(...page.items.filter((row) => row.id));
-    cursor = page.cursor;
-    console.error(`[monday-prune] page ${pages} items=${items.length} cursor=${cursor ? "yes" : "end"}`);
-    if (!page.items.length || !cursor) break;
-  }
 
   const mondayIds = items.map((row) => row.id);
   const opsByMonday = new Map();
@@ -219,13 +363,44 @@ try {
     }
   }
 
+  const shopifyUnfulfilled = omsOnly ? null : await loadUnfulfilledShopifyNames();
+  if (shopifyUnfulfilled) {
+    console.error(`[monday-prune] Shopify unfulfilled orders=${shopifyUnfulfilled.size} (source of truth for keep)`);
+  }
+
   const targets = [];
   const unmatchedSample = [];
   let keep = 0;
   let unmatched = 0;
 
   for (const item of items) {
+    const pulseName = normalizeOrderName(item.name);
     const linked = opsByMonday.get(item.id);
+    const snap = !linked
+      ? orderNameKeys(parsePulseOrderName(item.name))
+          .map((key) => snapByName.get(key))
+          .find(Boolean)
+      : null;
+
+    if (shopifyUnfulfilled) {
+      if (pulseName && shopifyUnfulfilled.has(pulseName)) {
+        keep += 1;
+        continue;
+      }
+      if (!linked && !snap) {
+        unmatched += 1;
+        if (unmatchedSample.length < 15) unmatchedSample.push({ id: item.id, name: item.name });
+      }
+      targets.push({
+        opsId: linked?.id,
+        orderId: linked?.orderId || snap?.orderId || "",
+        orderName: linked?.orderName || snap?.orderName || item.name,
+        mondayItemId: item.id,
+        reason: "shopify_not_unfulfilled",
+      });
+      continue;
+    }
+
     if (linked) {
       if (
         shouldPrune({
@@ -245,9 +420,6 @@ try {
       continue;
     }
 
-    const snap = orderNameKeys(parsePulseOrderName(item.name))
-      .map((key) => snapByName.get(key))
-      .find(Boolean);
     if (snap) {
       const customerStatus = lineStatusByOrder.get(snap.orderId) || "";
       if (
@@ -328,7 +500,7 @@ try {
         pages,
         nextCursor: cursor,
         sample: targets.slice(0, 20),
-        hint: "keep = unfulfilled (Monday queue). eligible = fulfilled/cancelled/delivered. unmatched = not in OMS — add --drop-unmatched for old pulses. Repeat --all --apply until remaining=0.",
+        hint: "OMS fulfillment is stale — prune uses live Shopify unfulfilled list. keep ≈ 2293. eligible = Monday pulses whose Shopify order is no longer unfulfilled. Repeat --all --apply until remaining=0.",
       },
       null,
       2,
