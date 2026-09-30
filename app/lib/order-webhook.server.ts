@@ -692,6 +692,13 @@ export async function refreshOrderSnapshotForWebhook(shop: string, order: OrderP
   }
 }
 
+function shopifyOrderCreatedAt(order: OrderPayload): Date | undefined {
+  const raw = String(order.created_at || "").trim();
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
 export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   const orderId = String(order.id);
   const shipping = getShippingAddress(order);
@@ -782,9 +789,11 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
   }
 
   try {
+    const shopifyCreatedAt = shopifyOrderCreatedAt(order);
     await prisma.orderSnapshot.upsert({
       where: { shop_orderId: { shop, orderId } },
       update: {
+        ...(shopifyCreatedAt ? { createdAt: shopifyCreatedAt } : {}),
         orderName: order.name ?? "",
         email: order.email ?? "",
         phone: order.phone ?? "",
@@ -810,6 +819,7 @@ export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
       create: {
         shop,
         orderId,
+        ...(shopifyCreatedAt ? { createdAt: shopifyCreatedAt } : {}),
         orderName: order.name ?? "",
         email: order.email ?? "",
         phone: order.phone ?? "",

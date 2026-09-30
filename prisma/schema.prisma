@@ -103,6 +103,7 @@ model OrderSnapshot {
   totalPrice      String   @default("0")
   financialStatus String   @default("")
   fulfillmentStatus String @default("")
+  /** Shopify order created_at (not OMS ingest time). */
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
