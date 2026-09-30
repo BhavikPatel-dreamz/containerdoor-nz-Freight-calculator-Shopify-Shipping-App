@@ -552,6 +552,7 @@ try {
       itemsCount,
       pages,
     });
+    targets = targets.slice(deleteLimit);
   }
 
   console.log(
@@ -566,7 +567,7 @@ try {
         unmatched,
         unmatchedSample,
         eligible: targets.length,
-        remaining: Math.max(0, targets.length - deleteLimit),
+        remaining: targets.length,
         deleted,
         cleared,
         failed,
