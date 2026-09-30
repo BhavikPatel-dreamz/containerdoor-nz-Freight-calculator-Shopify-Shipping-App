@@ -5,7 +5,12 @@
  * On the droplet:
  *   nano scripts/monday-prune.mjs   # paste this file
  *   node scripts/monday-prune.mjs
- *   node scripts/monday-prune.mjs --apply
+ *   node scripts/monday-prune.mjs --all
+ *   node scripts/monday-prune.mjs --all --apply
+ *   node scripts/monday-prune.mjs --all --apply --drop-unmatched
+ *
+ * Keep: unfulfilled / pending (including paid + unfulfilled).
+ * Remove: fulfilled, cancelled, delivered. Unmatched (old pulses) only with --drop-unmatched.
  */
 import { resolve } from "node:path";
 import dotenv from "dotenv";
@@ -18,13 +23,14 @@ const rawArgv = process.argv.slice(2);
 const argv = new Set(rawArgv);
 const dryRun = !argv.has("--apply");
 const dropUnmatched = argv.has("--drop-unmatched");
+const scanAll = argv.has("--all");
 const cursorArg = rawArgv.find((a) => a.startsWith("--cursor="))?.slice("--cursor=".length) || "";
 const shop =
   String(process.env.ORDER_SYNC_SHOP || process.env.SHOPIFY_SHOP || "containerdoor-nz.myshopify.com").trim();
 const boardId = String(process.env.MONDAY_BOARD_ID || "").trim();
 const mondayToken = String(process.env.MONDAY_API_TOKEN || "").trim();
-const scanLimit = 400;
-const deleteLimit = 200;
+const scanLimit = scanAll ? 10000 : 400;
+const deleteLimit = scanAll ? 400 : 200;
 
 function norm(value) {
   return String(value || "")
@@ -115,9 +121,22 @@ async function listPage(cursor) {
   };
 }
 
-async function deleteItem(id) {
-  const data = await mondayRequest(`mutation ($id: ID!) { delete_item (item_id: $id) { id } }`, { id });
-  return Boolean(data?.delete_item?.id);
+async function archiveItem(id) {
+  const data = await mondayRequest(`mutation ($id: ID!) { archive_item (item_id: $id) { id } }`, { id });
+  return Boolean(data?.archive_item?.id);
+}
+
+async function removeItem(id) {
+  try {
+    return await deleteItem(id);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Item not found") || msg.includes("InvalidItemIdException")) return true;
+    if (msg.includes("UserUnauthorized") || msg.includes("unauthorized")) {
+      return archiveItem(id);
+    }
+    throw err;
+  }
 }
 
 if (!boardId || !mondayToken) {
@@ -134,7 +153,7 @@ try {
   let cursor = cursorArg || null;
   let pages = 0;
   console.error(
-    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} dropUnmatched=${dropUnmatched} startCursor=${cursor ? "yes" : "start"}`,
+    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} all=${scanAll} dropUnmatched=${dropUnmatched} startCursor=${cursor ? "yes" : "start"}`,
   );
   while (items.length < scanLimit) {
     const page = await listPage(cursor);
@@ -268,7 +287,7 @@ try {
     console.error(`[monday-prune] deleting ${batch.length} of ${targets.length} eligible`);
     for (const row of batch) {
       try {
-        await deleteItem(row.mondayItemId);
+        await removeItem(row.mondayItemId);
         deleted += 1;
         if (deleted % 10 === 0) console.error(`[monday-prune] deleted ${deleted}/${batch.length}`);
       } catch (err) {
@@ -309,7 +328,7 @@ try {
         pages,
         nextCursor: cursor,
         sample: targets.slice(0, 20),
-        hint: "keep = pending/unfulfilled including paid+unfulfilled. eligible = cancelled/fulfilled/delivered. unmatched pulses stay unless --drop-unmatched",
+        hint: "keep = unfulfilled (Monday queue). eligible = fulfilled/cancelled/delivered. unmatched = not in OMS — add --drop-unmatched for old pulses. Repeat --all --apply until remaining=0.",
       },
       null,
       2,
