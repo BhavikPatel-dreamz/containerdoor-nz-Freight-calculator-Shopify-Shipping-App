@@ -315,6 +315,8 @@ function writeCache(payload) {
   writeFileSync(CACHE_PATH, JSON.stringify(payload));
   console.error(`[monday-prune] wrote cache ${CACHE_PATH} eligible=${payload.targets?.length || 0}`);
 }
+
+if (!boardId || !mondayToken) {
   console.error("Missing MONDAY_BOARD_ID or MONDAY_API_TOKEN in .env");
   process.exit(1);
 }
