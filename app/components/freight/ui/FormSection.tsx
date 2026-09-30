@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode, type InputHTMLAttributes, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 
 export function FormSection({
   label,
@@ -57,11 +57,16 @@ export function SearchableSelect({
 }: SearchableSelectProps) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
   const selected = options.find((o) => o.value === value);
   const filtered = options.filter((o) =>
     o.label.toLowerCase().includes(query.toLowerCase()),
   );
+  const rows: Array<{ value: string; label: string }> = allowClear
+    ? [{ value: "", label: clearLabel }, ...filtered]
+    : filtered;
 
   useEffect(() => {
     if (!open) return;
@@ -72,6 +77,45 @@ export function SearchableSelect({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [open]);
 
+  useEffect(() => {
+    if (open) setHighlight(0);
+  }, [open, query]);
+
+  const pick = (next: string) => {
+    onChange(next);
+    setOpen(false);
+    setQuery("");
+  };
+
+  const onTriggerKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      setOpen(true);
+    }
+  };
+
+  const onSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      return;
+    }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlight((i) => Math.min(i + 1, Math.max(rows.length - 1, 0)));
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlight((i) => Math.max(i - 1, 0));
+      return;
+    }
+    if (e.key === "Enter" && rows[highlight]) {
+      e.preventDefault();
+      pick(rows[highlight].value);
+    }
+  };
+
   return (
     <div className="fo-search-select" ref={rootRef}>
       <button
@@ -79,10 +123,14 @@ export function SearchableSelect({
         id={id}
         className="fo-input fo-search-select-trigger"
         onClick={() => setOpen((v) => !v)}
+        onKeyDown={onTriggerKeyDown}
         aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-controls={listId}
+        aria-label={selected?.label || placeholder}
       >
         <span>{selected?.label || (value === "" && allowClear ? clearLabel : placeholder)}</span>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <polyline points="6 9 12 15 18 9" />
         </svg>
       </button>
@@ -94,31 +142,24 @@ export function SearchableSelect({
             placeholder={placeholder}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+            aria-label={placeholder}
+            aria-controls={listId}
+            aria-activedescendant={rows[highlight] ? `${listId}-opt-${highlight}` : undefined}
+            role="combobox"
+            aria-expanded={open}
+            aria-autocomplete="list"
           />
-          <div className="fo-search-select-list">
-            {allowClear ? (
+          <div className="fo-search-select-list" id={listId} role="listbox">
+            {rows.map((opt, i) => (
               <button
+                key={`${opt.value}-${i}`}
+                id={`${listId}-opt-${i}`}
                 type="button"
-                className={`fo-search-select-option ${value === "" ? "is-active" : ""}`}
-                onClick={() => {
-                  onChange("");
-                  setOpen(false);
-                  setQuery("");
-                }}
-              >
-                {clearLabel}
-              </button>
-            ) : null}
-            {filtered.map((opt) => (
-              <button
-                key={opt.value}
-                type="button"
-                className={`fo-search-select-option ${value === opt.value ? "is-active" : ""}`}
-                onClick={() => {
-                  onChange(opt.value);
-                  setOpen(false);
-                  setQuery("");
-                }}
+                role="option"
+                aria-selected={value === opt.value}
+                className={`fo-search-select-option ${value === opt.value || i === highlight ? "is-active" : ""}`}
+                onClick={() => pick(opt.value)}
               >
                 {opt.label}
               </button>

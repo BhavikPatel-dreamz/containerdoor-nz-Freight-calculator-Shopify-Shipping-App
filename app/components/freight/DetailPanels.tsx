@@ -177,7 +177,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Variant ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.variantId || "—"}</span></div>
         <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Line item ID</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.id}</span></div>
         {item.mondayItemUrl ? (
-          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px" }}><a href={item.mondayItemUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none" }}>{item.mondayItemName || item.mondayItemId} ↗</a></span></div>
+          <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px" }}><a href={item.mondayItemUrl} target="_blank" rel="noopener noreferrer" style={{ color: "#2563eb", textDecoration: "none" }} aria-label={`Open Monday item ${item.mondayItemName || item.mondayItemId}`}>{item.mondayItemName || item.mondayItemId} ↗</a></span></div>
         ) : item.mondayItemId ? (
           <div className="fo-detail-row"><span className="fo-detail-label" style={{ fontSize: "10px", color: "#9ca3af" }}>Monday</span><span className="fo-detail-value" style={{ fontFamily: "monospace", fontSize: "10px", color: "#9ca3af" }}>{item.mondayItemName || item.mondayItemId}</span></div>
         ) : null}
@@ -207,6 +207,7 @@ export function DetailPanels({ order, item, onEditDispatch, onEditOps, onAmendOr
                   rel="noopener noreferrer"
                   style={{ textDecoration: "none" }}
                   title={isCin7 ? "Open Cin7 Sales Order" : "Open Monday item"}
+                  aria-label={isCin7 ? "Open Cin7 Sales Order" : "Open Monday item"}
                 >
                   {badge}
                 </a>

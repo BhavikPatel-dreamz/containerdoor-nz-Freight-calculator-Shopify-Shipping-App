@@ -221,7 +221,7 @@ export function OrderTable({
 
                           if (status === "match") {
                             return cin7Url ? (
-                              <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }} title="Open Cin7 Sales Order">CIN7 ✓</a>
+                              <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }} title="Open Cin7 Sales Order" aria-label="Open Cin7 Sales Order">CIN7 ✓</a>
                             ) : (
                               <span className="fo-sync-pill green">CIN7 ✓</span>
                             );
@@ -261,7 +261,7 @@ export function OrderTable({
                                   CIN7 !
                                 </button>
                                 {cin7Url ? (
-                                  <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Cin7 Sales Order">↗</a>
+                                  <a href={cin7Url} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Cin7 Sales Order" aria-label="Open Cin7 Sales Order">↗</a>
                                 ) : null}
                               </span>
                             );
@@ -285,7 +285,7 @@ export function OrderTable({
                           const cellKey = `${order.id}-${item.variantId}-monday`;
                           if (status === "match") {
                             const mUrl = item.mondayItemUrl || null;
-                            return mUrl ? <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }}>Monday ✓</a> : <span className="fo-sync-pill green">Monday ✓</span>;
+                            return mUrl ? <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill green" style={{ textDecoration: "none" }} aria-label="Open Monday item">Monday ✓</a> : <span className="fo-sync-pill green">Monday ✓</span>;
                           }
                           if (status === "mismatch") {
                             const mUrl = item.mondayItemUrl || null;
@@ -302,7 +302,7 @@ export function OrderTable({
                                   Monday !
                                 </button>
                                 {mUrl ? (
-                                  <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Monday item">↗</a>
+                                  <a href={mUrl} target="_blank" rel="noopener noreferrer" className="fo-sync-pill" style={{ textDecoration: "none", padding: "2px 6px" }} title="Open Monday item" aria-label="Open Monday item">↗</a>
                                 ) : null}
                               </span>
                             );
@@ -325,8 +325,8 @@ export function OrderTable({
                   )}
                   <td className="fo-td" style={{ textAlign: "center", width: "80px" }}>
                     <div className="fo-act-row">
-                      <button className="fo-icon-btn" title="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
-                      <button className="fo-icon-btn" title="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
+                      <button type="button" className="fo-icon-btn" title="View order" aria-label="View order" onClick={() => onOpenDetail(order, item)}><IconEye /></button>
+                      <button type="button" className="fo-icon-btn" title="Notes" aria-label="Notes" onClick={() => onOpenNotes(order, item)}><IconChat /></button>
                     </div>
                   </td>
                 </tr>

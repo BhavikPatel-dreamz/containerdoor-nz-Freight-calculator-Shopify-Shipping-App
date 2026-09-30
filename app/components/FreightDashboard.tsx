@@ -1457,7 +1457,7 @@ export default function FreightDashboard({
             {!isDetailPage && (
               <div className="fo-tabs">
                 {TABS.map((tab) => (
-                  <button key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} onClick={() => setTab(tab.key)}>
+                  <button type="button" key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} aria-current={activeTab === tab.key ? "page" : undefined} onClick={() => setTab(tab.key)}>
                     {tab.label}
                     <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
                       {tab.key === "all" ? totalLineItems : tab.count}
@@ -1476,11 +1476,12 @@ export default function FreightDashboard({
                     {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
                   </label>
                   {selected.size > 0 && (
-                    <button
-                      className="fo-tool-btn"
-                      style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
-                      onClick={() => setBulkActionsOpen(true)}
-                    >
+                  <button
+                    type="button"
+                    className="fo-tool-btn"
+                    style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
+                    onClick={() => setBulkActionsOpen(true)}
+                  >
                       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
                       </svg>
@@ -1490,11 +1491,14 @@ export default function FreightDashboard({
                 </div>
                 <div className="fo-toolbar-right">
                   <button
+                    type="button"
                     className="fo-tool-btn"
                     onClick={() => setShowFilters(!showFilters)}
+                    aria-expanded={showFilters}
+                    aria-controls="fo-oms-filter-panel"
                     style={hasActiveFilters || showFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}
                   >
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
                     {showFilters ? "Hide filters" : "Filters"}
                     {activeFilterChips.length > 0 ? ` (${activeFilterChips.length})` : ""}
                   </button>
@@ -1512,6 +1516,7 @@ export default function FreightDashboard({
                     className="fo-filter-chip"
                     onClick={() => removeFilter(chip.key)}
                     title={`Remove ${chip.label} filter`}
+                    aria-label={`Remove ${chip.label} filter ${chip.value}`}
                   >
                     <span className="fo-filter-chip-label">{chip.label}:</span> {chip.value}
                     <span className="fo-filter-chip-x" aria-hidden>✕</span>
@@ -1521,6 +1526,7 @@ export default function FreightDashboard({
                   type="button"
                   className="fo-filter-chip-clear"
                   onClick={() => { clearAllFilters(); }}
+                  aria-label="Clear all filters"
                 >
                   Clear all
                 </button>
@@ -1529,10 +1535,10 @@ export default function FreightDashboard({
 
             {/* Filter Panel — stays open after apply so staff can tweak */}
             {showFilters && !isDetailPage && (
-              <div className="fo-filter-panel">
+              <div className="fo-filter-panel" id="fo-oms-filter-panel">
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
-                  <select className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
+                  <label htmlFor="fo-filter-customer-status" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
+                  <select id="fo-filter-customer-status" aria-label="Customer status" className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
                     const v = e.target.value;
                     if (!v) setTab("all");
                     else if (v === "confirmed") setTab("awaiting");
@@ -1547,8 +1553,10 @@ export default function FreightDashboard({
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
+                  <label htmlFor="fo-filter-supplier" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
                   <select
+                    id="fo-filter-supplier"
+                    aria-label="Supplier"
                     className="fo-status-select"
                     value={stagedFilters.supplier}
                     onChange={(e) => applyFilters({ supplier: e.target.value })}
@@ -1558,8 +1566,10 @@ export default function FreightDashboard({
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
+                  <label htmlFor="fo-filter-warehouse" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
                   <select
+                    id="fo-filter-warehouse"
+                    aria-label="Warehouse status"
                     className="fo-status-select"
                     value={stagedFilters.warehouseStatus}
                     onChange={(e) => applyFilters({ warehouseStatus: e.target.value })}
@@ -1569,8 +1579,10 @@ export default function FreightDashboard({
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
+                  <label htmlFor="fo-filter-carrier" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
                   <select
+                    id="fo-filter-carrier"
+                    aria-label="Carrier"
                     className="fo-status-select"
                     value={stagedFilters.carrier}
                     onChange={(e) => applyFilters({ carrier: e.target.value })}
@@ -1588,8 +1600,10 @@ export default function FreightDashboard({
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
+                  <label htmlFor="fo-filter-payment" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
                   <select
+                    id="fo-filter-payment"
+                    aria-label="Payment status"
                     className="fo-status-select"
                     value={stagedFilters.paymentStatus}
                     onChange={(e) => applyFilters({ paymentStatus: e.target.value })}
@@ -1602,8 +1616,10 @@ export default function FreightDashboard({
                   </select>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD from</label>
+                  <label htmlFor="fo-filter-edd-from" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD from</label>
                   <input
+                    id="fo-filter-edd-from"
+                    aria-label="EDD from"
                     type="date"
                     className="fo-status-select"
                     value={stagedFilters.eddDate}
@@ -1612,8 +1628,10 @@ export default function FreightDashboard({
                   />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
-                  <label style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD to</label>
+                  <label htmlFor="fo-filter-edd-to" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD to</label>
                   <input
+                    id="fo-filter-edd-to"
+                    aria-label="EDD to"
                     type="date"
                     className="fo-status-select"
                     value={stagedFilters.eddDateEnd}
@@ -1623,14 +1641,17 @@ export default function FreightDashboard({
                 </div>
                 {hasActiveFilters && (
                   <button
+                    type="button"
                     className="fo-tool-btn"
                     onClick={() => { clearAllFilters(); }}
+                    aria-label="Clear all filters"
                     style={{ color: "#dc2626", borderColor: "#fecaca", height: "30px" }}
                   >
                     Clear all
                   </button>
                 )}
                 <button
+                  type="button"
                   className="fo-tool-btn"
                   onClick={() => setShowFilters(false)}
                   style={{ height: "30px" }}
@@ -1654,7 +1675,7 @@ export default function FreightDashboard({
               <div className="fo-detail-wrap">
                 <div className="fo-detail-bar">
                   <div className="fo-detail-bar-left">
-                    <button className="fo-icon-btn" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { navigate("/app"); } }} title="Back">
+                    <button type="button" className="fo-icon-btn" aria-label="Back" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { navigate("/app"); } }} title="Back">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
                     </button>
                     <span style={{ fontWeight: 700, fontSize: "14px", color: "#111827" }}>{detailView.order.shopifyOrderName}</span>
@@ -1738,14 +1759,14 @@ export default function FreightDashboard({
             {/* Pagination */}
             {!isDetailPage && pageCount > 1 && (
               <div className="fo-pagination">
-                <button className="fo-page-btn" disabled={currentPage <= 1}
+                <button type="button" className="fo-page-btn" aria-label="Previous page" disabled={currentPage <= 1}
                   onClick={() => {
                     const newPage = Math.max(1, currentPage - 1);
                     if (!serverDriven && allRows) { setCurrentPage(newPage); setRows(allRows.slice((newPage - 1) * 25, newPage * 25)); return; }
                     const np = new URLSearchParams(Array.from(searchParams.entries())); np.set("page", String(newPage)); setSearchParams(np);
                   }}>← Previous</button>
                 <span className="fo-page-info">Page {currentPage} of {pageCount}</span>
-                <button className="fo-page-btn" disabled={currentPage >= pageCount}
+                <button type="button" className="fo-page-btn" aria-label="Next page" disabled={currentPage >= pageCount}
                   onClick={() => {
                     const newPage = Math.min(pageCount, currentPage + 1);
                     if (!serverDriven && allRows) { setCurrentPage(newPage); setRows(allRows.slice((newPage - 1) * 25, newPage * 25)); return; }
@@ -1773,7 +1794,7 @@ export default function FreightDashboard({
               <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
                 {syncResultModal.title}
               </span>
-              <button className="fo-modal-close" type="button" onClick={() => setSyncResultModal(null)}>✕</button>
+              <button className="fo-modal-close" type="button" aria-label="Close" onClick={() => setSyncResultModal(null)}>✕</button>
             </div>
             <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
               <div style={{ fontSize: "12px", color: "#6b7280" }}>
