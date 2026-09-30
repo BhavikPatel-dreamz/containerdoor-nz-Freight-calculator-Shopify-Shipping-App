@@ -140,6 +140,12 @@ function sleep(ms) {
 }
 
 async function mondayRequest(query, variables, retries = 4) {
+  const json = await mondayPost(query, variables, retries);
+  if (json.errors?.length && !json.data) throw new Error(JSON.stringify(json.errors));
+  return json.data;
+}
+
+async function mondayPost(query, variables, retries = 4) {
   const res = await fetch("https://api.monday.com/v2", {
     method: "POST",
     headers: {
@@ -155,10 +161,47 @@ async function mondayRequest(query, variables, retries = 4) {
     const wait = Math.min(Number(complexity.extensions?.retry_in_seconds || 5), 15);
     console.error(`[monday-prune] complexity wait ${wait}s (${retries} left)`);
     await sleep(wait * 1000);
-    return mondayRequest(query, variables, retries - 1);
+    return mondayPost(query, variables, retries - 1);
   }
-  if (json.errors) throw new Error(JSON.stringify(json.errors));
-  return json.data;
+  return json;
+}
+
+/** One HTTP POST: aliased delete_item for the whole batch (~50). Split only if complexity budget trips. */
+async function deleteItemsOneCall(ids) {
+  const list = ids.map((id) => String(id || "").trim()).filter(Boolean);
+  if (!list.length) return { okIds: [], failed: [] };
+  const fields = list
+    .map((id, i) => `d${i}: delete_item(item_id: "${id}") { id }`)
+    .join("\n");
+  const json = await mondayPost(`mutation { ${fields} }`, {});
+  const complexity = json.errors?.some((e) => e?.extensions?.code === "COMPLEXITY_BUDGET_EXHAUSTED");
+  if (complexity && list.length > 1) {
+    console.error(`[monday-prune] complexity on ${list.length} deletes — splitting batch`);
+    const mid = Math.ceil(list.length / 2);
+    const a = await deleteItemsOneCall(list.slice(0, mid));
+    const b = await deleteItemsOneCall(list.slice(mid));
+    return { okIds: [...a.okIds, ...b.okIds], failed: [...a.failed, ...b.failed] };
+  }
+  const errByAlias = new Map();
+  for (const err of json.errors || []) {
+    const alias = String(err?.path?.[0] || "");
+    if (alias) errByAlias.set(alias, err);
+  }
+  const okIds = [];
+  const failed = [];
+  for (let i = 0; i < list.length; i++) {
+    const id = list[i];
+    const alias = `d${i}`;
+    const node = json.data?.[alias];
+    const err = errByAlias.get(alias);
+    const gone =
+      !err ||
+      String(err.message || "").includes("Item not found") ||
+      err?.extensions?.code === "InvalidItemIdException";
+    if (node?.id || (err && gone)) okIds.push(id);
+    else failed.push(id);
+  }
+  return { okIds, failed };
 }
 
 async function listPage(cursor) {
@@ -518,16 +561,14 @@ try {
   let failed = 0;
   if (!dryRun) {
     const batch = targets.slice(0, deleteLimit);
-    console.error(`[monday-prune] deleting ${batch.length} of ${targets.length} eligible`);
+    console.error(`[monday-prune] deleting ${batch.length} of ${targets.length} eligible in 1 Monday HTTP call`);
+    const { okIds, failed: failIds } = await deleteItemsOneCall(batch.map((row) => row.mondayItemId));
+    const okSet = new Set(okIds);
+    deleted = okSet.size;
+    failed = failIds.length;
+    if (failIds.length) console.error(`[monday-prune] batch failed ids=${failIds.slice(0, 8).join(",")}`);
     for (const row of batch) {
-      try {
-        await removeItem(row.mondayItemId);
-        deleted += 1;
-        if (deleted % 10 === 0) console.error(`[monday-prune] deleted ${deleted}/${batch.length}`);
-      } catch (err) {
-        failed += 1;
-        console.error("delete failed", row.mondayItemId, err);
-      }
+      if (!okSet.has(String(row.mondayItemId))) continue;
       if (row.opsId) {
         await prisma.orderLineItemOperationalData.update({
           where: { id: row.opsId },
