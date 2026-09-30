@@ -909,6 +909,12 @@ export type Cin7PaymentInput = {
  * Create a Payment against a Cin7 Sales Order so Cin7's Total Paid / Total
  * Owing reflects what was actually paid on the Shopify order (0–100% range).
  * Best-effort: caller should treat failure as non-fatal (SO already exists).
+ *
+ * Uses the shared fetchCin7WithRateLimit() wrapper so a transient 429 during
+ * the per-line creation burst is retried (up to 3 attempts) like SO creation.
+ * Only 429 is retried: POST /Payments is NOT idempotent (no Cin7-side dedup
+ * key), so retrying an ambiguous 5xx/response-lost could create a duplicate
+ * payment. A 429 is guaranteed to be rejected before processing, so it is safe.
  */
 export async function createCin7Payment(
   input: Cin7PaymentInput,
@@ -933,7 +939,7 @@ export async function createCin7Payment(
   debug("Cin7", "POST Payment", body);
 
   try {
-    const res = await fetch(getCin7PaymentsUrl(), {
+    const res = await fetchCin7WithRateLimit(getCin7PaymentsUrl(), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
