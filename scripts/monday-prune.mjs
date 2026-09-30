@@ -9,10 +9,13 @@
  *   node scripts/monday-prune.mjs --all --apply
  *   node scripts/monday-prune.mjs --all --apply --drop-unmatched
  *
- * Keep: unfulfilled / pending (including paid + unfulfilled).
- * Remove: fulfilled, cancelled, delivered. Unmatched (old pulses) only with --drop-unmatched.
+ * Low Monday API use:
+ *   node scripts/monday-prune.mjs              # 1 board scan (500/page) + Shopify unfulfilled; writes cache
+ *   node scripts/monday-prune.mjs --apply      # deletes 50 from cache — no extra board scan
+ *   node scripts/monday-prune.mjs --apply --refresh   # rescan board (only if cache is stale)
  */
 import { resolve } from "node:path";
+import { readFileSync, writeFileSync } from "node:fs";
 import dotenv from "dotenv";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -25,14 +28,20 @@ const dryRun = !argv.has("--apply");
 const dropUnmatched = argv.has("--drop-unmatched");
 const scanAll = !argv.has("--page");
 const omsOnly = argv.has("--oms-only");
+const refresh = argv.has("--refresh");
+const useGroups = argv.has("--groups");
+const archiveFallback = argv.has("--archive-fallback");
 const API_VERSION = process.env.SHOPIFY_API_VERSION || "2025-10";
 const cursorArg = rawArgv.find((a) => a.startsWith("--cursor="))?.slice("--cursor=".length) || "";
 const shop =
   String(process.env.ORDER_SYNC_SHOP || process.env.SHOPIFY_SHOP || "containerdoor-nz.myshopify.com").trim();
 const boardId = String(process.env.MONDAY_BOARD_ID || "").trim();
 const mondayToken = String(process.env.MONDAY_API_TOKEN || "").trim();
+const PAGE_SIZE = 500;
 const scanLimit = scanAll ? 10000 : 400;
-const deleteLimit = scanAll ? 400 : 200;
+const deleteLimit = Math.min(Math.max(Number(rawArgv.find((a) => a.startsWith("--limit="))?.slice(8) || 50), 1), 80);
+const CACHE_PATH = resolve(process.cwd(), ".monday-prune-cache.json");
+const CACHE_MAX_MS = 6 * 60 * 60 * 1000;
 
 function norm(value) {
   return String(value || "")
@@ -149,7 +158,6 @@ async function mondayRequest(query, variables, retries = 4) {
     return mondayRequest(query, variables, retries - 1);
   }
   if (json.errors) throw new Error(JSON.stringify(json.errors));
-  await sleep(200);
   return json.data;
 }
 
@@ -159,7 +167,7 @@ async function listPage(cursor) {
     ? `query ($boardId: ID!, $cursor: String!) {
       boards(ids: [$boardId]) {
         items_count
-        items_page(limit: 100, cursor: $cursor) {
+        items_page(limit: ${PAGE_SIZE}, cursor: $cursor) {
           cursor
           items { id name }
         }
@@ -168,7 +176,7 @@ async function listPage(cursor) {
     : `query ($boardId: ID!) {
       boards(ids: [$boardId]) {
         items_count
-        items_page(limit: 100) {
+        items_page(limit: ${PAGE_SIZE}) {
           cursor
           items { id name }
         }
@@ -239,7 +247,7 @@ async function listAllBoardItems() {
     console.error(`[monday-prune] board page ${pages} items=${items.length}/${itemsCount || "?"} cursor=${cursor ? "yes" : "end"}`);
     if (!page.items.length || !cursor) break;
   }
-  if (itemsCount > items.length + 50 && items.length < scanLimit) {
+  if (useGroups && itemsCount > items.length + 50 && items.length < scanLimit) {
     const data = await mondayRequest(
       `query ($boardId: ID!) { boards(ids: [$boardId]) { groups { id title archived deleted } } }`,
       { boardId },
@@ -284,13 +292,29 @@ async function removeItem(id) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes("Item not found") || msg.includes("InvalidItemIdException")) return true;
     if (msg.includes("UserUnauthorized") || msg.includes("unauthorized")) {
+      if (!archiveFallback) throw err;
       return archiveItem(id);
     }
     throw err;
   }
 }
 
-if (!boardId || !mondayToken) {
+function readCache() {
+  try {
+    const raw = JSON.parse(readFileSync(CACHE_PATH, "utf8"));
+    if (raw.shop !== shop) return null;
+    if (Date.now() - Number(raw.at || 0) > CACHE_MAX_MS) return null;
+    if (!Array.isArray(raw.targets)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(payload) {
+  writeFileSync(CACHE_PATH, JSON.stringify(payload));
+  console.error(`[monday-prune] wrote cache ${CACHE_PATH} eligible=${payload.targets?.length || 0}`);
+}
   console.error("Missing MONDAY_BOARD_ID or MONDAY_API_TOKEN in .env");
   process.exit(1);
 }
@@ -300,12 +324,35 @@ const prisma = new PrismaClient({
 });
 
 try {
+  let items = [];
+  let pages = 0;
+  let cursor = null;
+  let keep = 0;
+  let unmatched = 0;
+  let unmatchedSample = [];
+  let targets = [];
+  let itemsCount = 0;
+  const cache = !refresh ? readCache() : null;
+  const applyFromCache = !dryRun && Number(cache?.targets?.length || 0) > 0;
+
+  if (applyFromCache) {
+    items = cache.items || [];
+    targets = cache.targets;
+    keep = cache.keep || 0;
+    unmatched = cache.unmatched || 0;
+    unmatchedSample = cache.unmatchedSample || [];
+    itemsCount = cache.itemsCount || items.length;
+    console.error(
+      `[monday-prune] APPLY from cache eligible=${targets.length} keep=${keep} (0 Monday list calls)`,
+    );
+  } else {
   const listed = await listAllBoardItems();
-  const items = listed.items;
-  let cursor = listed.cursor;
-  let pages = listed.pages;
+  items = listed.items;
+  cursor = listed.cursor;
+  pages = listed.pages;
+  itemsCount = listed.itemsCount;
   console.error(
-    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} all=${scanAll} examined=${items.length} boardCount=${listed.itemsCount}`,
+    `[monday-prune] ${dryRun ? "dry-run" : "APPLY"} shop=${shop} board=${boardId} examined=${items.length} boardCount=${itemsCount} mondayListPages=${pages}`,
   );
 
   const mondayIds = items.map((row) => row.id);
@@ -368,10 +415,10 @@ try {
     console.error(`[monday-prune] Shopify unfulfilled orders=${shopifyUnfulfilled.size} (source of truth for keep)`);
   }
 
-  const targets = [];
-  const unmatchedSample = [];
-  let keep = 0;
-  let unmatched = 0;
+  targets = [];
+  unmatchedSample = [];
+  keep = 0;
+  unmatched = 0;
 
   for (const item of items) {
     const pulseName = normalizeOrderName(item.name);
@@ -451,6 +498,19 @@ try {
     }
   }
 
+  writeCache({
+    at: Date.now(),
+    shop,
+    items,
+    targets,
+    keep,
+    unmatched,
+    unmatchedSample,
+    itemsCount,
+    pages,
+  });
+  }
+
   let deleted = 0;
   let cleared = 0;
   let failed = 0;
@@ -479,6 +539,17 @@ try {
         });
       }
     }
+    writeCache({
+      at: Date.now(),
+      shop,
+      items,
+      targets: targets.slice(deleteLimit),
+      keep,
+      unmatched,
+      unmatchedSample,
+      itemsCount,
+      pages,
+    });
   }
 
   console.log(
@@ -498,9 +569,11 @@ try {
         cleared,
         failed,
         pages,
-        nextCursor: cursor,
-        sample: targets.slice(0, 20),
-        hint: "OMS fulfillment is stale — prune uses live Shopify unfulfilled list. keep ≈ 2293. eligible = Monday pulses whose Shopify order is no longer unfulfilled. Repeat --all --apply until remaining=0.",
+        mondayListPages: pages,
+        boardCount: itemsCount,
+        fromCache: applyFromCache,
+        deleteLimit,
+        hint: "Dry-run once (lists Monday 500/page). Then --apply uses cache and only deletes 50/run. No extra board scan. --refresh to list again.",
       },
       null,
       2,
