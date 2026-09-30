@@ -75,3 +75,20 @@ export function shouldPruneMondayPulse(input: {
  */
 export const SHOPIFY_OPEN_OPS_QUERY =
   "-status:cancelled AND (fulfillment_status:unfulfilled OR fulfillment_status:partial OR (financial_status:paid AND -fulfillment_status:fulfilled))";
+
+/** All non-cancelled Shopify orders — Cin7 catch-up (~214k). Monday is gated separately. */
+export const SHOPIFY_ALL_NON_CANCELLED_QUERY = "-status:cancelled";
+
+/** Shopify Admin search: unfulfilled only (~2293). */
+export const SHOPIFY_UNFULFILLED_QUERY = "fulfillment_status:unfulfilled AND -status:cancelled";
+
+export function shopifyOrderSyncQuery(): string {
+  const fromEnv = String(process.env.ORDER_SYNC_SHOPIFY_QUERY || "").trim();
+  if (fromEnv) return fromEnv;
+  return SHOPIFY_ALL_NON_CANCELLED_QUERY;
+}
+
+export function orderSyncSkipCin7(): boolean {
+  const v = String(process.env.ORDER_SYNC_SKIP_CIN7 || "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes";
+}

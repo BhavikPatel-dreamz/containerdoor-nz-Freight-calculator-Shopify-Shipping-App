@@ -11,7 +11,9 @@
  *   ORDER_SYNC_SHOP or SHOPIFY_SHOP     — e.g. store.myshopify.com
  *   ORDER_SYNC_CRON_INTERVAL_MS         — pause after an order (default 500 ≈ 20–30/min)
  *   ORDER_SYNC_CRON_IDLE_MS             — pause when caught up (default 300000)
- *   ORDER_SYNC_MODE                     — full | dry_run (default full)
+ *   ORDER_SYNC_SKIP_CIN7=1              — Monday only (do not use for Cin7 catch-up)
+ *   ORDER_SYNC_SHOPIFY_QUERY            — default: all non-cancelled (Cin7 all orders).
+ *     Monday still only creates pulses for unfulfilled/partial (10k board cap).
  */
 import dotenv from "dotenv";
 import { resolve } from "path";
@@ -80,6 +82,7 @@ async function step() {
       mode: MODE,
       newestFirst: true,
       persist: true,
+      skipCin7: String(process.env.ORDER_SYNC_SKIP_CIN7 || "").trim() === "1",
     }),
   });
   const label = json.order

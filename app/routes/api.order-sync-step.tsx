@@ -9,6 +9,7 @@ import {
   summarizeSyncSystems,
 } from "../lib/migrate-shopify-oms.server";
 import { loadOrderSyncCursor, saveOrderSyncCursor } from "../lib/order-sync-cursor.server";
+import { orderSyncSkipCin7 } from "../lib/monday-scope.server";
 
 export const maxDuration = 60;
 
@@ -68,6 +69,7 @@ type StepBody = {
   persist?: boolean;
   resetCursor?: boolean;
   statusOnly?: boolean;
+  skipCin7?: boolean;
 };
 
 async function runStep(request: Request, body: StepBody) {
@@ -79,6 +81,7 @@ async function runStep(request: Request, body: StepBody) {
     return Response.json({ ok: false, error: "Unauthorized", done: true }, { status: 401 });
   }
   const { shop, admin, sentBy } = ctx;
+  const skipCin7 = body.skipCin7 === true || orderSyncSkipCin7();
 
   if (body.resetCursor && persist) {
     await saveOrderSyncCursor({ shop, reset: true });
@@ -140,6 +143,7 @@ async function runStep(request: Request, body: StepBody) {
       shopifyOrderId: retry.orderId,
       sentBy,
       mode,
+      skipCin7,
     });
     const systems = summarizeSyncSystems(one);
     if (persist) {
@@ -213,6 +217,7 @@ async function runStep(request: Request, body: StepBody) {
       shopifyOrderId: next.orderId,
       sentBy,
       mode,
+      skipCin7,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

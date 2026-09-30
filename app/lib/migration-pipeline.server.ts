@@ -98,6 +98,7 @@ export type RunOrderPipelineInput = {
   stopOnDownstreamFailure?: boolean;
   /** Persist step logs onto MigrationOrder when set. */
   trackingOrderId?: string;
+  skipCin7?: boolean;
 };
 
 function nowIso() {
@@ -161,6 +162,7 @@ export async function runOrderPipeline(input: RunOrderPipelineInput): Promise<Or
   const order = input.order;
   const mode: MigrationMode = input.mode || "full";
   const stopOnDownstreamFailure = Boolean(input.stopOnDownstreamFailure);
+  const skipCin7 = Boolean(input.skipCin7);
   const steps: PipelineStepResult[] = [];
 
   const orderId = String(order?.id || "");
@@ -280,6 +282,10 @@ export async function runOrderPipeline(input: RunOrderPipelineInput): Promise<Or
 
   push(
     await step("cin7_sync", async () => {
+      if (skipCin7) {
+        cin7 = { created: 0, linked: 0, skipped: 1, failed: 0 };
+        return { ok: true, skip: true, message: "Cin7 skipped (Monday catch-up)" };
+      }
       cin7 = await createCin7EntryForOrder(shop, order);
       return {
         ok: (cin7.failed || 0) === 0,
@@ -301,6 +307,9 @@ export async function runOrderPipeline(input: RunOrderPipelineInput): Promise<Or
 
   push(
     await step("cin7_verify", async () => {
+      if (skipCin7) {
+        return { ok: true, skip: true, message: "Cin7 verify skipped" };
+      }
       const opLines = getOperationalLines(order);
       const after = await prisma.orderLineItemOperationalData.findMany({
         where: { shop, orderId },

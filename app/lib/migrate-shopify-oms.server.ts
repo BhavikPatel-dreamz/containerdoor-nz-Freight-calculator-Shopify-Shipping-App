@@ -9,7 +9,7 @@ import { unauthenticated } from "../shopify.server";
 import { type OrderPayload } from "./order-webhook.server";
 import { runOrderPipeline } from "./migration-pipeline.server";
 import { isLinkedCin7Id } from "./cin7-adapter.server";
-import { SHOPIFY_OPEN_OPS_QUERY, isClosedFulfillmentStatus, isMondayOperationalOrder } from "./monday-scope.server";
+import { SHOPIFY_OPEN_OPS_QUERY, isClosedFulfillmentStatus, isMondayOperationalOrder, shopifyOrderSyncQuery, orderSyncSkipCin7 } from "./monday-scope.server";
 import {
   bumpMigrationRunCounters,
   createMigrationRun,
@@ -402,21 +402,34 @@ export async function searchShopifyOrders(
   };
 }
 
-async function whichOrdersAlreadySynced(shop: string, orderIds: string[]): Promise<Set<string>> {
+async function whichOrdersAlreadySynced(
+  shop: string,
+  orderIds: string[],
+  mondayOnly = false,
+): Promise<Set<string>> {
   const ids = orderIds.filter(Boolean);
   const synced = new Set<string>();
   if (!ids.length) return synced;
-  const reports = await prisma.orderMigrateReport.findMany({
-    where: { shop, orderId: { in: ids }, status: "success" },
-    select: { orderId: true },
-  }).catch(() => []);
-  for (const row of reports) synced.add(row.orderId);
+  if (mondayOnly) {
+    const reports = await prisma.orderMigrateReport.findMany({
+      where: { shop, orderId: { in: ids }, status: "success" },
+      select: { orderId: true },
+    }).catch(() => []);
+    for (const row of reports) synced.add(row.orderId);
+  }
   const remaining = ids.filter((id) => !synced.has(id));
   if (!remaining.length) return synced;
-  const ops = await prisma.orderLineItemOperationalData.findMany({
-    where: { shop, orderId: { in: remaining } },
-    select: { orderId: true, mondayItemId: true, cin7SalesOrderId: true },
-  });
+  const [ops, snaps] = await Promise.all([
+    prisma.orderLineItemOperationalData.findMany({
+      where: { shop, orderId: { in: remaining } },
+      select: { orderId: true, mondayItemId: true, cin7SalesOrderId: true },
+    }),
+    prisma.orderSnapshot.findMany({
+      where: { shop, orderId: { in: remaining } },
+      select: { orderId: true, fulfillmentStatus: true, financialStatus: true },
+    }),
+  ]);
+  const snapByOrder = new Map(snaps.map((row) => [row.orderId, row]));
   const byOrder = new Map<string, typeof ops>();
   for (const row of ops) {
     const list = byOrder.get(row.orderId) || [];
@@ -425,9 +438,19 @@ async function whichOrdersAlreadySynced(shop: string, orderIds: string[]): Promi
   }
   for (const [orderId, rows] of byOrder) {
     if (!rows.length) continue;
+    const snap = snapByOrder.get(orderId);
+    const needsMonday = isMondayOperationalOrder({
+      fulfillment_status: snap?.fulfillmentStatus,
+      financial_status: snap?.financialStatus,
+    });
     const allLinked = rows.every((row) => {
       const monday = String(row.mondayItemId || "").trim();
-      return isLinkedCin7Id(row.cin7SalesOrderId) && Boolean(monday && monday !== "pending");
+      const mondayOk = Boolean(monday && monday !== "pending");
+      if (mondayOnly) return mondayOk;
+      const cin7Ok = isLinkedCin7Id(row.cin7SalesOrderId);
+      if (!cin7Ok) return false;
+      if (!needsMonday) return true;
+      return mondayOk;
     });
     if (allLinked) synced.add(orderId);
   }
@@ -478,7 +501,7 @@ export async function findNextEligibleShopifyOrder(
   for (let page = 0; page < maxPages; page++) {
     const pageAfter = after;
     const res = await admin.graphql(ORDER_SCAN_QUERY, {
-      variables: { first: SCAN_PAGE_SIZE, after, query: SHOPIFY_OPEN_OPS_QUERY, reverse },
+      variables: { first: SCAN_PAGE_SIZE, after, query: shopifyOrderSyncQuery(), reverse },
     });
     const json = await res.json();
     if (json?.errors?.length) {
@@ -497,7 +520,7 @@ export async function findNextEligibleShopifyOrder(
       break;
     }
     const pageIds = nodes.map((node: { id?: string }) => String(gidNum(node?.id) || "")).filter(Boolean);
-    const synced = await whichOrdersAlreadySynced(shop, pageIds);
+    const synced = await whichOrdersAlreadySynced(shop, pageIds, orderSyncSkipCin7());
     for (const node of nodes) {
       const orderId = String(gidNum(node?.id) || "");
       if (!orderId) continue;
@@ -545,10 +568,10 @@ export async function findNextEligibleShopifyOrder(
 export async function countShopifyOrders(admin: AdminGraphql): Promise<number | null> {
   try {
     const res = await admin.graphql(`#graphql
-      query SyncAllOrdersCount {
-        ordersCount(query: SHOPIFY_OPEN_OPS_QUERY) { count }
+      query SyncAllOrdersCount($query: String!) {
+        ordersCount(query: $query) { count }
       }
-    `);
+    `, { variables: { query: shopifyOrderSyncQuery() } });
     const json = await res.json();
     const count = json?.data?.ordersCount?.count;
     return typeof count === "number" ? count : null;
@@ -570,7 +593,7 @@ function shopifyCreatedAtRangeQuery(fromDate: string, toDate: string): string {
   const from = String(fromDate || "").trim();
   const to = String(toDate || "").trim();
   const toExclusive = addUtcDays(to, 1);
-  return `(created_at:>='${from}' AND created_at:<'${toExclusive}') AND ${SHOPIFY_OPEN_OPS_QUERY}`;
+  return `(created_at:>='${from}' AND created_at:<'${toExclusive}') AND ${shopifyOrderSyncQuery()}`;
 }
 
 /** List Shopify orders in a created-at date range (inclusive). Oldest first. Does not sync. */
@@ -1009,6 +1032,7 @@ export async function processShopifyOrder(args: {
   mode?: "dry_run" | "full";
   sentBy?: string;
   persistReport?: boolean;
+  skipCin7?: boolean;
 }): Promise<MigrateOrderResult> {
   const token = String(args.token || args.shopifyOrderId || args.order?.id || "").trim();
   const sentBy = args.sentBy || "system";
@@ -1100,6 +1124,7 @@ export async function processShopifyOrder(args: {
       admin,
       mode: mode || "full",
       trackingOrderId: args.trackingOrderId,
+      skipCin7: args.skipCin7 ?? orderSyncSkipCin7(),
     });
     pipelineCritical = Boolean(pipeline.critical);
     for (const s of pipeline.steps) {
