@@ -16,6 +16,8 @@ import {
 } from "../lib/communication-log.server";
 import type { SyncResultMap, SyncTarget } from "../lib/communication-log.server";
 import { enqueueLineItemCustomerNotify } from "../lib/email-queue.server";
+import { fetchShopifyOrderPayloadById } from "../lib/migrate-shopify-oms.server";
+import { ingestShopifyOrderIntoOms } from "../lib/order-webhook.server";
 
 // Debug logging helper
 const debug = (namespace: string, message: string, data?: any) => {
@@ -170,7 +172,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
   try {
     const shop = await resolveShopDomain(request, shopFromParam, orderId);
 
-    const records = await prisma.orderLineItemOperationalData.findMany({
+    let records = await prisma.orderLineItemOperationalData.findMany({
       where: {
         orderId,
         ...(shop ? { shop } : {}),
@@ -267,6 +269,62 @@ export async function loader({ request }: LoaderFunctionArgs) {
               li.variant.product?.featuredImage?.url ??
               "";
             if (imgUrl) imageMap.set(numId, imgUrl);
+          }
+        }
+
+        // The normal Shopify order-sync path creates operational rows for all
+        // line items, even when Shopify has no freight shipping line/code. Some
+        // historical orders were never ingested, so recover OMS data here only
+        // when the order currently has no operational rows. This deliberately
+        // runs OMS ingestion only (not Cin7/Monday integration creation).
+        if (records.length === 0 && canonicalVariantIds.size > 0) {
+          try {
+            const order = await fetchShopifyOrderPayloadById(admin, orderId);
+            if (order) {
+              await ingestShopifyOrderIntoOms(shop, order, admin);
+              records = await prisma.orderLineItemOperationalData.findMany({
+                where: { shop, orderId },
+                select: {
+                  variantId: true,
+                  productTitle: true,
+                  carrier: true,
+                  carrierColor: true,
+                  carrierColorLabel: true,
+                  customerStatus: true,
+                  customerStatusColor: true,
+                  paymentStatus: true,
+                  paymentStatusColor: true,
+                  warehouseStatusColor: true,
+                  warehouseStatus: true,
+                  deliveryStatus: true,
+                  dispatchStatus: true,
+                  trackingNumber: true,
+                  freightRef: true,
+                  eddDate: true,
+                  originalEddDate: true,
+                  supplierContainer: true,
+                  receivedDate: true,
+                  portArrivalDate: true,
+                  inTransitDate: true,
+                  depositPaid: true,
+                  balanceDue: true,
+                  notes: true,
+                  mondayItemId: true,
+                  mondayItemName: true,
+                },
+              });
+              lineItems = records.map((r) => ({
+                ...r,
+                productTitle: r.productTitle ?? "",
+                imageUrl: "",
+                mondayItemUrl: buildMondayItemUrl(r.mondayItemId) ?? "",
+              }));
+              console.info(
+                `[api.order-status] recovered OMS rows from Shopify for order ${orderId}: ${records.length} line(s)`,
+              );
+            }
+          } catch (e) {
+            console.error(`[api.order-status] Shopify-to-OMS recovery failed for order ${orderId}`, e);
           }
         }
 
@@ -875,7 +933,7 @@ export async function action({ request }: ActionFunctionArgs) {
           data: {
             mondayItemId: newMondayId,
             mondayItemName: itemName,
-            ...(carrierColor ? { carrierColor, carrierColorLabel: carrierLabelUsed } : {}),
+            ...(carrierColor ? { carrierColor, carrierColorLabel: carrierLabelUsed || "" } : {}),
             ...(customerStatusColor ? { customerStatusColor } : {}),
             ...(paymentStatusColor ? { paymentStatusColor } : {}),
             ...(warehouseStatusColor ? { warehouseStatusColor } : {}),

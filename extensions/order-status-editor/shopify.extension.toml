@@ -2,9 +2,9 @@ api_version = "2025-10"
 
 [[extensions]]
 type = "ui_extension"
-name = "Freight Order Status"
-handle = "freight-order-status"
-uid = "926fe996-d672-5d27-702a-33d5161c3c53e3a891da"
+name = "Freight Order Status Editor"
+handle = "freight-order-status-editor"
+uid = "fba7c74f-f382-45a7-bf25-3e6370cb6cdb"
 
   [extensions.capabilities]
   api_access = true

@@ -726,6 +726,14 @@ async function fetchShopifyOrderById(
   return mapShopifyOrderNode(node);
 }
 
+/** Load and map one Shopify order for OMS-only recovery paths. */
+export async function fetchShopifyOrderPayloadById(
+  admin: { graphql: (q: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
+  orderId: string,
+): Promise<OrderPayload | null> {
+  return fetchShopifyOrderById(admin, orderId);
+}
+
 function summarizeAction(stats: { created: number; linked: number; skipped: number; failed: number } | undefined) {
   if (!stats) return "skipped";
   if (stats.failed && !stats.created && !stats.linked) return "failed";

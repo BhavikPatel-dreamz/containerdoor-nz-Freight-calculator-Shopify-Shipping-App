@@ -3,17 +3,11 @@ import { useEffect, useState } from "react";
 import {
   reactExtension,
   useApi,
-  AdminBlock,
   BlockStack,
   InlineStack,
   Text,
   Badge,
-  Divider,
-  ProgressIndicator,
   Box,
-  Button,
-  TextField,
-  Select,
 } from "@shopify/ui-extensions-react/admin";
 
 type LineItemRecord = {
@@ -43,771 +37,21 @@ type ApiResponse = {
 
 const TARGET = "admin.order-details.block.render";
 
-/**
- * Admin UI extensions: relative fetch paths resolve against the app's
- * configured `application_url` (shopify.app.toml / Partner Dashboard / SHOPIFY_APP_URL).
- * CLI also injects APP_URL / SHOPIFY_APP_URL at build time during `shopify app dev`.
- */
+function stripGid(raw: string, resource: "Order") {
+  return String(raw || "").replace(`gid://shopify/${resource}/`, "").trim();
+}
+
 function resolveAppBaseUrl(api: any): string {
-  const fromApi =
-    api?.extension?.appUrl ||
-    api?.appUrl ||
-    "";
+  const fromApi = api?.extension?.appUrl || api?.appUrl || "";
   const fromEnv =
-    (typeof process !== "undefined" &&
-      (process.env.SHOPIFY_APP_URL || process.env.APP_URL)) ||
-    "";
-  const raw = String(fromApi || fromEnv || "").trim().replace(/\/+$/, "");
-  // Empty = use relative `/api/...` (Shopify resolves to application_url)
-  return raw;
+    (typeof process !== "undefined" && (process.env.SHOPIFY_APP_URL || process.env.APP_URL)) || "";
+  return String(fromApi || fromEnv || "").trim().replace(/\/+$/, "");
 }
 
-function apiUrl(appBase: string, path: string): string {
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return appBase ? `${appBase}${p}` : p;
-}
+function resolveBadge(customerStatus: string, deliveryStatus: string) {
+  const d = (deliveryStatus || "").toLowerCase();
+  const c = (customerStatus || "").toLowerCase();
 
-const CUSTOMER_STATUS_OPTIONS = [
-  // Keep exact values in sync with app/lib/status-options.ts (OMS modals).
-  { value: "", label: "— Select —" },
-  { value: "Pending", label: "Pending" },
-  { value: "Confirmed", label: "Confirmed" },
-  { value: "Dispatched", label: "Dispatched" },
-  { value: "Delivered", label: "Delivered" },
-  { value: "Cancelled", label: "Cancelled" },
-];
-
-const WAREHOUSE_STATUS_OPTIONS = [
-  { value: "", label: "— Select —" },
-  { value: "Not received", label: "Not received" },
-  { value: "Received", label: "Received" },
-  { value: "Processing", label: "Processing" },
-  { value: "Ready to dispatch", label: "Ready to dispatch" },
-  { value: "Dispatched", label: "Dispatched" },
-];
-
-const DISPATCH_STATUS_OPTIONS = [
-  { value: "", label: "— Select —" },
-  { value: "Not dispatched", label: "Not dispatched" },
-  { value: "Booked", label: "Booked" },
-  { value: "Dispatched", label: "Dispatched" },
-  { value: "Failed", label: "Failed" },
-];
-
-const DELIVERY_STATUS_OPTIONS = [
-  { value: "", label: "— Select —" },
-  { value: "Pending", label: "Pending" },
-  { value: "In transit", label: "In transit" },
-  { value: "Out for delivery", label: "Out for delivery" },
-  { value: "Delivered", label: "Delivered" },
-  { value: "Failed", label: "Failed" },
-];
-
-const EMPTY_LINE: Omit<LineItemRecord, "variantId" | "productTitle"> = {
-  carrier: "",
-  customerStatus: "",
-  deliveryStatus: "",
-  trackingNumber: "",
-  freightRef: "",
-  eddDate: "",
-  dispatchStatus: "",
-  warehouseStatus: "",
-  supplierContainer: "",
-  portArrivalDate: "",
-  inTransitDate: "",
-  depositPaid: "",
-  balanceDue: "",
-  notes: "",
-};
-
-export default reactExtension(TARGET, () => <FreightStatusBlock />);
-
-function stripGid(id: string, resource: "Order" | "ProductVariant" | "LineItem"): string {
-  return String(id || "").replace(`gid://shopify/${resource}/`, "").trim();
-}
-
-function pullLineNodes(order: any): any[] {
-  const li = order?.lineItems ?? order?.line_items;
-  if (!li) return [];
-  if (Array.isArray(li)) return li.filter(Boolean);
-  if (Array.isArray(li.nodes)) return li.nodes.filter(Boolean);
-  if (Array.isArray(li.edges)) return li.edges.map((e: any) => e?.node).filter(Boolean);
-  return [];
-}
-
-function unwrapGraphqlOrder(json: any): any {
-  return json?.data?.order || json?.data?.node || json?.order || json?.node || null;
-}
-
-function graphqlErrorText(json: any): string {
-  const errs = json?.errors || json?.data?.errors;
-  if (!Array.isArray(errs) || !errs.length) return "";
-  return errs.map((e: any) => e?.message || String(e)).join("; ");
-}
-
-async function adminGraphql(api: any, query: string, variables: Record<string, unknown>): Promise<any> {
-  try {
-    const res = await fetch("shopify:admin/api/graphql.json", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables }),
-    });
-    const json = await res.json().catch(() => null);
-    if (json) return json;
-  } catch (e) {
-    console.error("[FreightStatusBlock] shopify:admin graphql failed", e);
-  }
-  try {
-    return await api.query(query, { variables });
-  } catch (e) {
-    console.error("[FreightStatusBlock] api.query failed", e);
-    return { errors: [{ message: String(e) }] };
-  }
-}
-
-const ORDER_QUERY = `#graphql
-  query FreightSyncOrder($id: ID!) {
-    order(id: $id) {
-      id
-      name
-      email
-      createdAt
-      lineItems(first: 50) {
-        nodes {
-          id
-          title
-          sku
-          quantity
-          variant { id sku }
-        }
-      }
-    }
-  }
-`;
-
-const ORDER_QUERY_MIN = `#graphql
-  query FreightSyncOrderMin($id: ID!) {
-    order(id: $id) {
-      id
-      name
-      lineItems(first: 50) {
-        nodes { id title quantity sku }
-      }
-    }
-  }
-`;
-
-async function fetchAdminOrder(api: any, gid: string): Promise<{ order: any; error: string }> {
-  let lastError = "";
-  for (const query of [ORDER_QUERY, ORDER_QUERY_MIN]) {
-    const json = await adminGraphql(api, query, { id: gid });
-    lastError = graphqlErrorText(json) || lastError;
-    const order = unwrapGraphqlOrder(json);
-    if (order?.id && pullLineNodes(order).length) return { order, error: lastError };
-    if (order?.id && !pullLineNodes(order).length) {
-      lastError = lastError || "Shopify returned the order but lineItems was empty";
-    }
-  }
-  return { order: null, error: lastError || "Admin GraphQL did not return this order" };
-}
-
-async function queryAdminOrderLines(api: any, gid: string): Promise<any[]> {
-  const { order } = await fetchAdminOrder(api, gid);
-  return pullLineNodes(order);
-}
-
-function FreightStatusBlock() {
-  const api = useApi(TARGET);
-
-  const rawOrderId: string =
-    (api as any)?.data?.selected?.[0]?.id ??
-    (api as any)?.data?.orderId ??
-    (api as any)?.orderId ??
-    "";
-
-  const numericOrderId = stripGid(rawOrderId, "Order");
-  const appUrl = resolveAppBaseUrl(api);
-
-  const [shopDomain, setShopDomain] = useState<string>("");
-  const [records, setRecords] = useState<LineItemRecord[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [adminLineNodes, setAdminLineNodes] = useState<any[]>([]);
-
-  useEffect(() => {
-    if (!numericOrderId) {
-      setLoading(false);
-      setError("No order selected");
-      return;
-    }
-
-    let cancelled = false;
-
-    (async () => {
-      try {
-        // Admin block API does not expose shop on data — resolve via GraphQL.
-        let shop = "";
-        try {
-          const shopRes = await (api as any).query(`query { shop { myshopifyDomain } }`);
-          shop = shopRes?.data?.shop?.myshopifyDomain ?? "";
-        } catch (e) {
-          console.error("[FreightStatusBlock] shop query failed", e);
-        }
-        if (cancelled) return;
-        if (!shop) {
-          setError("Unable to resolve shop domain — cannot load OMS data");
-          setLoading(false);
-          return;
-        }
-        setShopDomain(shop);
-
-        const qs = new URLSearchParams({
-          orderId: numericOrderId,
-          shop,
-        });
-
-        const res = await fetch(apiUrl(appUrl, `/api/order-status?${qs}`));
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        const data: ApiResponse = await res.json();
-
-        if (cancelled) return;
-
-        if (!data.ok) {
-          setError(data.error ?? "Failed to load");
-          return;
-        }
-
-        // If OMS has no rows yet, seed editable cards from live Shopify line items
-        // so Save can create OrderLineItemOperationalData rows.
-        let lineItems = data.lineItems ?? [];
-        const nodes = await queryAdminOrderLines(api, `gid://shopify/Order/${numericOrderId}`);
-        if (!cancelled && nodes.length) setAdminLineNodes(nodes);
-        if (lineItems.length === 0 && nodes.length) {
-          lineItems = nodes
-            .map((n: any) => {
-              const variantId =
-                stripGid(n.variant?.id ?? "", "ProductVariant") || stripGid(n.id ?? "", "LineItem");
-              if (!variantId) return null;
-              return {
-                variantId,
-                productTitle: n.title ?? "",
-                ...EMPTY_LINE,
-              } as LineItemRecord;
-            })
-            .filter(Boolean) as LineItemRecord[];
-        }
-
-        setRecords(lineItems);
-      } catch (e) {
-        if (!cancelled) setError("Unable to load: " + String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [numericOrderId, appUrl, api]);
-
-  const handleSaved = (variantId: string, updated: Partial<LineItemRecord>) => {
-    setRecords((prev) =>
-      prev.map((r) => (r.variantId === variantId ? { ...r, ...updated } : r)),
-    );
-  };
-
-  const handleSyncToOms = async () => {
-    if (!shopDomain || !numericOrderId) {
-      setSyncOk(false);
-      setSyncMsg("Missing shop or order id");
-      return;
-    }
-    setSyncing(true);
-    setSyncMsg(null);
-    setSyncOk(null);
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-      try {
-        const token = await (api as any).sessionToken?.get?.();
-        if (token) headers.Authorization = `Bearer ${token}`;
-      } catch {
-        /* relative fetch may still attach a session token */
-      }
-      const gid = `gid://shopify/Order/${numericOrderId}`;
-      const fetched = await fetchAdminOrder(api, gid);
-      let shopifyOrder = fetched.order;
-      let lineNodes = pullLineNodes(shopifyOrder);
-      if (!lineNodes.length && adminLineNodes.length) lineNodes = adminLineNodes;
-      if (!lineNodes.length && records.length) {
-        lineNodes = records.map((r) => ({
-          id: `gid://shopify/LineItem/${r.variantId}`,
-          title: r.productTitle,
-          quantity: 1,
-          sku: "",
-          variant: { id: `gid://shopify/ProductVariant/${r.variantId}` },
-        }));
-      }
-      if (!lineNodes.length) {
-        setSyncOk(false);
-        setSyncMsg(fetched.error || "Shopify Admin GraphQL returned no line items for this order");
-        return;
-      }
-      shopifyOrder = {
-        ...(shopifyOrder || {}),
-        id: shopifyOrder?.id || gid,
-        name: shopifyOrder?.name || "",
-        lineItems: { nodes: lineNodes },
-      };
-
-      const res = await fetch(apiUrl(appUrl, "/api/migrate-shopify-orders"), {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          shop: shopDomain,
-          order: numericOrderId,
-          shopifyOrder,
-          lineItems: lineNodes,
-          performedBy: "Shopify Admin",
-        }),
-      });
-      const json = await res.json().catch(() => ({}));
-      const row = json?.results?.[0];
-      if (!res.ok || json?.ok === false || row?.ok === false) {
-        const detail =
-          row?.error ||
-          json?.error ||
-          row?.steps?.filter((s: { ok?: boolean }) => s?.ok === false).map((s: { message?: string }) => s.message).join("; ") ||
-          `HTTP ${res.status}`;
-        setSyncOk(false);
-        setSyncMsg(detail);
-        return;
-      }
-      const monday = row?.monday
-        ? `Monday linked ${row.monday.linked}/created ${row.monday.created}/failed ${row.monday.failed}`
-        : "";
-      const cin7 = row?.cin7
-        ? `Cin7 linked ${row.cin7.linked}/created ${row.cin7.created}/skipped ${row.cin7.skipped}`
-        : "";
-      setSyncOk(true);
-      setSyncMsg(
-        `Synced ${row?.orderName || numericOrderId} to OMS. ${monday}${monday && cin7 ? ". " : ""}${cin7}`,
-      );
-    } catch (e) {
-      setSyncOk(false);
-      setSyncMsg(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  return (
-    <AdminBlock title="Freight Status">
-      <BlockStack gap="base">
-        <InlineStack gap="base" blockAlignment="center">
-          <Button onPress={handleSyncToOms} disabled={syncing || !numericOrderId || !shopDomain}>
-            {syncing ? "Syncing…" : "Sync to OMS"}
-          </Button>
-        </InlineStack>
-        {syncMsg ? (
-          <Text tone={syncOk ? "success" : "critical"}>{syncMsg}</Text>
-        ) : (
-          <Text tone="subdued">Push this Shopify order into OMS, then link or create Cin7 and Monday.</Text>
-        )}
-        {loading ? (
-          <Box padding="base">
-            <ProgressIndicator size="small-200" />
-          </Box>
-        ) : error ? (
-          <Text tone="critical">{error}</Text>
-        ) : records.length === 0 ? (
-          <Text tone="subdued">No OMS line items yet — use Sync to OMS.</Text>
-        ) : (
-          records.map((r, index) => (
-            <ItemCard
-              key={r.variantId}
-              record={r}
-              isLast={index === records.length - 1}
-              shop={shopDomain}
-              orderId={numericOrderId}
-              appUrl={appUrl}
-              onSaved={(updated) => handleSaved(r.variantId, updated)}
-            />
-          ))
-        )}
-      </BlockStack>
-    </AdminBlock>
-  );
-}
-
-// ─── Read-only table rows ────────────────────────────────────────────────────
-
-function TableRow({ label, value, isLast }: { label: string; value: string; isLast: boolean }) {
-  return (
-    <Box
-      borderColor="border"
-      borderInlineStartWidth="025"
-      borderInlineEndWidth="025"
-      borderBlockStartWidth="025"
-      borderBlockEndWidth={isLast ? "025" : "0"}
-    >
-      <InlineStack blockAlignment="stretch">
-        <Box padding="base" minInlineSize="half" borderColor="border" borderInlineEndWidth="025" background="bg-surface-secondary">
-          <Text tone="subdued">{label}</Text>
-        </Box>
-        <Box padding="base" minInlineSize="half">
-          <Text>{value || "—"}</Text>
-        </Box>
-      </InlineStack>
-    </Box>
-  );
-}
-
-function TableHeader() {
-  return (
-    <Box background="bg-surface-secondary" borderColor="border" borderWidth="025">
-      <InlineStack blockAlignment="stretch">
-        <Box padding="base" minInlineSize="half" borderColor="border" borderInlineEndWidth="025">
-          <Text fontWeight="bold">Field</Text>
-        </Box>
-        <Box padding="base" minInlineSize="half">
-          <Text fontWeight="bold">Value</Text>
-        </Box>
-      </InlineStack>
-    </Box>
-  );
-}
-
-// ─── Item card with collapse + edit mode ─────────────────────────────────────
-
-type EditableState = {
-  customerStatus: string;
-  warehouseStatus: string;
-  dispatchStatus: string;
-  deliveryStatus: string;
-  trackingNumber: string;
-  freightRef: string;
-  eddDate: string;
-  portArrivalDate: string;
-  inTransitDate: string;
-  supplierContainer: string;
-  depositPaid: string;
-  balanceDue: string;
-  notes: string;
-};
-
-function recordToFormState(r: LineItemRecord): EditableState {
-  return {
-    customerStatus: r.customerStatus ?? "",
-    warehouseStatus: r.warehouseStatus ?? "",
-    dispatchStatus: r.dispatchStatus ?? "",
-    deliveryStatus: r.deliveryStatus ?? "",
-    trackingNumber: r.trackingNumber ?? "",
-    freightRef: r.freightRef ?? "",
-    eddDate: r.eddDate ?? "",
-    portArrivalDate: r.portArrivalDate ?? "",
-    inTransitDate: r.inTransitDate ?? "",
-    supplierContainer: r.supplierContainer ?? "",
-    depositPaid: r.depositPaid ?? "",
-    balanceDue: r.balanceDue ?? "",
-    notes: r.notes ?? "",
-  };
-}
-
-function ItemCard({
-  record,
-  isLast,
-  shop,
-  orderId,
-  appUrl,
-  onSaved,
-}: {
-  record: LineItemRecord;
-  isLast: boolean;
-  shop: string;
-  orderId: string;
-  appUrl: string;
-  onSaved: (updated: Partial<LineItemRecord>) => void;
-}) {
-  const productName = record.productTitle || `Variant #${record.variantId}`;
-  const badge = resolveBadge(record.customerStatus, record.deliveryStatus);
-
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [isEditing, setIsEditing] = useState(false);
-  const [form, setForm] = useState<EditableState>(() => recordToFormState(record));
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
-
-  const startEdit = () => {
-    setForm(recordToFormState(record));
-    setSaveError(null);
-    setIsExpanded(true);
-    setIsEditing(true);
-  };
-
-  const cancelEdit = () => {
-    setIsEditing(false);
-    setSaveError(null);
-  };
-
-  const updateField = (field: keyof EditableState) => (value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleSave = async () => {
-    if (!shop) {
-      setSaveError("Shop domain missing — cannot save to OMS");
-      return;
-    }
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const nextData = { ...form };
-      const trackingChanged =
-        form.trackingNumber.trim() !== "" &&
-        form.trackingNumber.trim() !== (record.trackingNumber ?? "").trim();
-      const eddChanged =
-        form.eddDate.trim() !== "" &&
-        form.eddDate.trim() !== (record.eddDate ?? "").trim();
-      // Only one notify kind per save — EDD takes priority if both changed at once.
-      const notifyKind = eddChanged ? "edd" : trackingChanged ? "tracking" : undefined;
-
-      const res = await fetch(apiUrl(appUrl, "/api/order-status"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shop,
-          orderId,
-          variantId: record.variantId,
-          data: {
-            ...nextData,
-            productTitle: record.productTitle || "",
-          },
-          performedBy: "Shopify Admin",
-          source: "shopify_admin_block",
-          // Match OMS modal behavior: tracking # / EDD change auto-notifies customer.
-          notifyCustomer: eddChanged || trackingChanged,
-          notifyKind,
-        }),
-      });
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error ?? "Save failed");
-      onSaved(nextData);
-      setIsEditing(false);
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const dispatchDateLabel =
-    record.dispatchStatus === "Dispatched" ? "Dispatched Date" : "Est. Dispatch Date";
-  const dispatchDateValue =
-    record.dispatchStatus === "Dispatched"
-      ? record.inTransitDate || record.eddDate
-      : record.eddDate;
-
-  const rows: [string, string][] = ([
-    ["Carrier", record.carrier],
-    ["Customer Status", record.customerStatus],
-    ["Warehouse Status", record.warehouseStatus],
-    ["Dispatch Status", record.dispatchStatus],
-    ["Delivery Status", record.deliveryStatus],
-    ["Tracking #", record.trackingNumber],
-    ["Freight ref", record.freightRef],
-    [dispatchDateLabel, dispatchDateValue ? formatDate(dispatchDateValue) : ""],
-    ["Port Arrival", record.portArrivalDate ? formatDate(record.portArrivalDate) : ""],
-    ["In Transit Date", record.inTransitDate ? formatDate(record.inTransitDate) : ""],
-    ["Supplier / Container", record.supplierContainer],
-    ["Deposit Paid", record.depositPaid ? `$${record.depositPaid}` : ""],
-    ["Balance Due", record.balanceDue ? `$${record.balanceDue}` : ""],
-    ["Notes", record.notes],
-  ] as [string, string][]).filter(([, v]) => v);
-
-  return (
-    <BlockStack gap="tight">
-      <InlineStack gap="small" blockAlignment="center" inlineAlignment="space-between">
-        <InlineStack gap="small" blockAlignment="center">
-          <Text fontWeight="bold">{productName}</Text>
-          <Badge tone={badge.tone}>{badge.label}</Badge>
-        </InlineStack>
-
-        <InlineStack gap="small">
-          {isEditing ? (
-            <>
-              <Button onClick={cancelEdit}>Cancel</Button>
-              <Button onClick={handleSave} variant="primary" loading={saving}>
-                Save
-              </Button>
-            </>
-          ) : (
-            <>
-              <Button onClick={startEdit}>Edit</Button>
-              <Button onClick={() => setIsExpanded((v) => !v)}>
-                {isExpanded ? "Hide" : "View"}
-              </Button>
-            </>
-          )}
-        </InlineStack>
-      </InlineStack>
-
-      {saveError ? <Text tone="critical">{saveError}</Text> : null}
-
-      {isExpanded && (
-        isEditing ? (
-          <BlockStack gap="base">
-            {record.carrier ? (
-              <Text tone="subdued">Carrier: {record.carrier} (set at checkout — not editable)</Text>
-            ) : null}
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <Select
-                  label="Customer Status"
-                  value={form.customerStatus}
-                  onChange={updateField("customerStatus")}
-                  options={CUSTOMER_STATUS_OPTIONS}
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <Select
-                  label="Warehouse Status"
-                  value={form.warehouseStatus}
-                  onChange={updateField("warehouseStatus")}
-                  options={WAREHOUSE_STATUS_OPTIONS}
-                />
-              </Box>
-            </InlineStack>
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <Select
-                  label="Dispatch Status"
-                  value={form.dispatchStatus}
-                  onChange={updateField("dispatchStatus")}
-                  options={DISPATCH_STATUS_OPTIONS}
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <Select
-                  label="Delivery Status"
-                  value={form.deliveryStatus}
-                  onChange={updateField("deliveryStatus")}
-                  options={DELIVERY_STATUS_OPTIONS}
-                />
-              </Box>
-            </InlineStack>
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <TextField
-                  label="Tracking #"
-                  value={form.trackingNumber}
-                  onChange={updateField("trackingNumber")}
-                  placeholder="e.g. NZ123456789"
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <TextField
-                  label="Freight ref"
-                  value={form.freightRef}
-                  onChange={updateField("freightRef")}
-                  placeholder="Optional consignment reference"
-                />
-              </Box>
-            </InlineStack>
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <TextField
-                  label="EDD (YYYY-MM-DD)"
-                  value={form.eddDate}
-                  onChange={updateField("eddDate")}
-                  placeholder="2026-12-31"
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <TextField
-                  label="Port Arrival (YYYY-MM-DD)"
-                  value={form.portArrivalDate}
-                  onChange={updateField("portArrivalDate")}
-                  placeholder="2026-12-31"
-                />
-              </Box>
-            </InlineStack>
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <TextField
-                  label="In Transit Date (YYYY-MM-DD)"
-                  value={form.inTransitDate}
-                  onChange={updateField("inTransitDate")}
-                  placeholder="2026-12-31"
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <TextField
-                  label="Supplier / Container"
-                  value={form.supplierContainer}
-                  onChange={updateField("supplierContainer")}
-                  placeholder="e.g. Supplier / CONT123"
-                />
-              </Box>
-            </InlineStack>
-
-            <InlineStack gap="base" blockAlignment="end">
-              <Box minInlineSize="half">
-                <TextField
-                  label="Deposit Paid ($)"
-                  value={form.depositPaid}
-                  onChange={updateField("depositPaid")}
-                  placeholder="0.00"
-                />
-              </Box>
-              <Box minInlineSize="half">
-                <TextField
-                  label="Balance Due ($)"
-                  value={form.balanceDue}
-                  onChange={updateField("balanceDue")}
-                  placeholder="0.00"
-                />
-              </Box>
-            </InlineStack>
-
-            <TextField
-              label="Notes / internal info"
-              value={form.notes}
-              onChange={updateField("notes")}
-              multiline={3}
-              placeholder="Internal notes for this line item..."
-            />
-          </BlockStack>
-        ) : (
-          <BlockStack gap="tight">
-            <TableHeader />
-            {rows.map(([label, value], i) => (
-              <TableRow key={label} label={label} value={value} isLast={i === rows.length - 1} />
-            ))}
-          </BlockStack>
-        )
-      )}
-
-      {!isLast && (
-        <Box paddingBlockStart="tight">
-          <Divider />
-        </Box>
-      )}
-    </BlockStack>
-  );
-}
-
-type Tone = "info" | "success" | "warning" | "critical" | "attention";
-
-function resolveBadge(cs: string, ds: string): { label: string; tone: Tone } {
-  const d = ds.toLowerCase();
-  const c = cs.toLowerCase();
   if (d === "delivered") return { label: "Delivered", tone: "success" };
   if (d === "out for delivery") return { label: "Out for Delivery", tone: "info" };
   if (d === "in transit") return { label: "In Transit", tone: "info" };
@@ -816,15 +60,123 @@ function resolveBadge(cs: string, ds: string): { label: string; tone: Tone } {
   if (c === "delivered") return { label: "Delivered", tone: "success" };
   if (c === "cancelled") return { label: "Cancelled", tone: "critical" };
   if (c === "confirmed") return { label: "Confirmed", tone: "attention" };
+
   return { label: "Pre-Order", tone: "warning" };
 }
 
-function formatDate(d: string): string {
-  try {
-    return new Date(d).toLocaleDateString("en-NZ", {
-      day: "numeric", month: "short", year: "numeric",
-    });
-  } catch {
-    return d;
+export default reactExtension(TARGET, () => <FreightStatusBlock />);
+
+function FreightStatusBlock() {
+  const api = useApi(TARGET);
+  const rawOrderId =
+    (api as any)?.data?.selected?.[0]?.id ??
+    (api as any)?.data?.orderId ??
+    (api as any)?.orderId ??
+    "";
+
+  const orderId = stripGid(rawOrderId, "Order");
+  const appUrl = resolveAppBaseUrl(api);
+
+  const [shop, setShop] = useState("");
+  const [records, setRecords] = useState<LineItemRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      if (!orderId) {
+        setLoading(false);
+        setError("No order selected");
+        return;
+      }
+
+      try {
+        let resolvedShop = "";
+        try {
+          const shopRes = await (api as any).query(`query { shop { myshopifyDomain } }`);
+          resolvedShop = shopRes?.data?.shop?.myshopifyDomain ?? "";
+        } catch (e) {
+          console.error("[FreightStatusBlock] shop query failed", e);
+        }
+
+        if (cancelled) return;
+
+        const qs = new URLSearchParams({
+          orderId,
+          ...(resolvedShop ? { shop: resolvedShop } : {}),
+        });
+
+        const res = await fetch(`${appUrl}/api/order-status?${qs.toString()}`, {
+          cache: "no-store",
+        });
+
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+
+        const json: ApiResponse = await res.json();
+        if (!json.ok) {
+          throw new Error(json.error || "Failed to load freight records");
+        }
+
+        if (!cancelled) {
+          setShop(resolvedShop);
+          setRecords(json.lineItems ?? []);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load freight data");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [appUrl, orderId]);
+
+  if (loading) {
+    return <Text>Loading freight…</Text>;
   }
+
+  if (error) {
+    return <Text>{error}</Text>;
+  }
+
+  if (!records.length) {
+    return <Text>No freight data for this order.</Text>;
+  }
+
+  return (
+    <BlockStack gap="base">
+      {records.map((record) => {
+        const badge = resolveBadge(record.customerStatus, record.deliveryStatus);
+        const title = record.productTitle || `Variant ${record.variantId}`;
+        const tracking = record.trackingNumber ? ` • ${record.trackingNumber}` : "";
+        const carrier = record.carrier ? `${record.carrier}` : "Freight";
+
+        return (
+          <Box key={`${record.variantId}-${title}`} padding="base">
+            <InlineStack gap="base" blockAlignment="center">
+              <Text fontWeight="bold">{title}</Text>
+              <Badge tone={badge.tone as any}>{badge.label}</Badge>
+            </InlineStack>
+
+            <Text>{carrier}{tracking}</Text>
+
+            {record.deliveryStatus ? (
+              <Text>Delivery: {record.deliveryStatus}</Text>
+            ) : null}
+          </Box>
+        );
+      })}
+    </BlockStack>
+  );
 }
