@@ -1,0 +1,980 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import type {
+  AppSetting,
+  CarrierCompany,
+  CarrierMode,
+  CostType,
+  ServiceType,
+  ShippingRate,
+} from "@prisma/client";
+import prisma from "../db.server";
+import {
+  carrierCompanies,
+  carrierModes,
+  freightFormula,
+  parseBoolean,
+  parseDecimalString,
+  parseDecimalStringFull,
+  parseOptionalInt,
+  serviceTypes,
+} from "../lib/freight";
+
+export type RateFormResult = {
+  ok: boolean;
+  message: string;
+};
+
+export type RateCandidate = Pick<
+  ShippingRate,
+  | "id"
+  | "company"
+  | "serviceType"
+  | "city"
+  | "postalCode"
+  | "useWeightRange"
+  | "minWeightGrams"
+  | "maxWeightGrams"
+  | "useVolumeRange"
+  | "minVolumeCm3"
+  | "maxVolumeCm3"
+  | "rate"
+  | "zoneSurcharge"
+  | "minimumCharge"
+  | "homeDeliveryFee"
+  | "signatureSurcharge"
+  | "ruralSurcharge"
+  | "ageRestrictedSurcharge"
+  | "residentialFee"  
+  | "mode"
+  | "baseFee"
+>;
+
+ 
+export type FreightPackage = {
+  variantId?: string;
+  quantity: number;
+  company: CarrierCompany;
+  weightGrams: number;
+  volumeCm3: number;
+  boxes: number;
+  hiabRequired: boolean;
+  homeDelivery: boolean;
+  nzpSignature: boolean;
+  nzpRural: boolean;
+  nzpAgeRestricted: boolean;
+  castleSignature: boolean;
+  castleRural: boolean;
+  castleWaiheke: boolean;
+};
+
+export type CalculatedServiceRate = {
+  serviceType: ServiceType;
+  total: number;
+  currency: string;
+  packageCount: number;
+  companies: CarrierCompany[];
+  // NEW: per-variant breakdown for internal visibility
+  lineItemBreakdown: Array<{
+    variantId: string;
+    company: CarrierCompany;
+    amount: number;
+    boxes: number;
+  }>;
+};
+
+export async function getAppSettings(shop: string) {
+  return prisma.appSetting.upsert({
+    where: { shop },
+    update: {},
+    create: { shop },
+  });
+}
+
+export async function updateAppSettings(shop: string, formData: FormData) {
+  const data = {
+    fuelSurchargePercent: parseDecimalString(formData.get("fuelSurchargePercent")),
+    additionalCostType: String(formData.get("additionalCostType") || "FIXED") as CostType,
+    additionalCostValue: parseDecimalString(formData.get("additionalCostValue")),
+    defaultCurrency: String(formData.get("defaultCurrency") || "NZD").toUpperCase(),
+    defaultServiceType: String(formData.get("defaultServiceType") || "STANDARD_DELIVERY") as ServiceType,
+    // ADD THESE:
+    fafFliway: parseDecimalString(formData.get("fafFliway")),
+    fafFliwayMidsize: parseDecimalString(formData.get("fafFliwayMidsize")),
+    fafMainfreight: parseDecimalString(formData.get("fafMainfreight")),
+    fafTge: parseDecimalString(formData.get("fafTge")),
+    fafM2h: parseDecimalString(formData.get("fafM2h")),
+    tgeAdminFee: parseDecimalString(formData.get("tgeAdminFee")),
+    homeDeliveryFeeFliway: parseDecimalString(formData.get("homeDeliveryFeeFliway")),
+    homeDeliveryFeeFliwayMidsize: parseDecimalString(formData.get("homeDeliveryFeeFliwayMidsize")),
+    homeDeliveryFeeTge: parseDecimalString(formData.get("homeDeliveryFeeTge")),
+    mainfreightDepotFee: parseDecimalString(formData.get("mainfreightDepotFee")),
+    marginRate: parseDecimalString(formData.get("marginRate")),
+    gstRate: parseDecimalString(formData.get("gstRate")),  
+  };
+
+  return prisma.appSetting.upsert({
+    where: { shop },
+    update: data,
+    create: { shop, ...data },
+  });
+}
+
+export async function listRates(
+  shop: string,
+  page: number,
+  filters?: {
+    query?: string;
+    company?: CarrierCompany | "";
+    serviceType?: ServiceType | "";
+    active?: "true" | "false" | "";
+  },
+) {
+  const take = 100;
+  const skip = Math.max(page - 1, 0) * take;
+  const query = filters?.query?.trim();
+  const company = filters?.company || "";
+  const serviceType = filters?.serviceType || "";
+  const activeFilter = filters?.active ?? "";
+  const where = {
+    shop,
+    ...(company ? { company } : {}),
+    ...(serviceType ? { serviceType } : {}),
+    ...(activeFilter === "true" ? { active: true } : {}),
+    ...(activeFilter === "false" ? { active: false } : {}),
+    ...(query
+      ? {
+          OR: [
+            { city: { contains: query, mode: "insensitive" as const } },
+            { postalCode: { contains: query, mode: "insensitive" as const } },
+          ],
+        }
+      : {}),
+  };
+
+  const [rates, total] = await Promise.all([
+    prisma.shippingRate.findMany({
+      where,
+      orderBy: [{ company: "asc" }, { serviceType: "asc" }, { city: "asc" }],
+      take,
+      skip,
+    }),
+    prisma.shippingRate.count({ where }),
+  ]);
+
+
+  console.log(`[DEBUG] listRates ${rates.length} shop:${shop} page:${page} query:${query} company:${company} serviceType:${serviceType} total:${total}`);
+
+   return {
+     rates: rates.map((rate) => ({
+       ...rate,
+       rate: rate.rate.toString(),
+       baseFee: (rate as any).baseFee?.toString() ?? "0",
+       zoneSurcharge: rate.zoneSurcharge.toString(),
+       minimumCharge: rate.minimumCharge.toString(),
+       homeDeliveryFee: rate.homeDeliveryFee?.toString() ?? null,
+       signatureSurcharge: rate.signatureSurcharge.toString(),
+       ruralSurcharge: rate.ruralSurcharge.toString(),
+       ageRestrictedSurcharge: rate.ageRestrictedSurcharge.toString(),
+       residentialFee: rate.residentialFee?.toString() ?? "0",
+       createdAt: rate.createdAt.toISOString(),
+       updatedAt: rate.updatedAt.toISOString(),
+     })),
+     total,
+     page,
+     pageCount: Math.max(Math.ceil(total / take), 1),
+   };
+}
+
+export async function upsertRate(shop: string, formData: FormData) {
+  const id = String(formData.get("id") || "");
+  const data = readRateForm(shop, formData);
+
+  if (!isServiceSupportedByCompany(data.company, data.serviceType)) {
+    return {
+      ok: false,
+      message: "Depot delivery is only available for Fliway, Mainfreight, and Team Global Express.",
+    };
+  }
+
+  if (id) {
+    await prisma.shippingRate.update({ where: { id, shop }, data });
+    return { ok: true, message: "Rate updated" };
+  }
+
+  await prisma.shippingRate.create({ data });
+  return { ok: true, message: "Rate added" };
+}
+
+export async function deleteRate(shop: string, id: string) {
+  await prisma.shippingRate.deleteMany({ where: { id, shop } });
+  return { ok: true, message: "Rate deleted" };
+}
+//for bulk delete
+export async function bulkDeleteRates(shop: string, ids: string[]) {
+  if (ids.length === 0) return { ok: true, message: "0 rates deleted" };
+  const result = await prisma.shippingRate.deleteMany({
+    where: { id: { in: ids }, shop },
+  });
+  return { ok: true, message: `${result.count} rates deleted` };
+}
+
+export async function bulkToggleActive(shop: string, ids: string[], active: boolean) {
+  if (ids.length === 0) return { ok: true, message: "0 rates updated" };
+  const result = await prisma.shippingRate.updateMany({
+    where: { id: { in: ids }, shop },
+    data: { active },
+  });
+  return { ok: true, message: `${result.count} rates ${active ? "activated" : "deactivated"}` };
+}
+
+export async function exportRatesCsv(shop: string) {
+  const rates = await prisma.shippingRate.findMany({
+    where: { shop },
+    orderBy: [{ company: "asc" }, { serviceType: "asc" }, { city: "asc" }],
+  });
+
+  const rows = [
+  [
+    "company",
+    "serviceType",
+    "city",
+    "sector",
+    "postalCode",
+    "useWeightRange",
+    "minWeightGrams",
+    "maxWeightGrams",
+    "useVolumeRange",
+    "minVolumeCm3",
+    "maxVolumeCm3",
+    "rate",
+    "baseFee",
+    "zoneSurcharge",
+    "minimumCharge",
+    "signatureSurcharge",   
+    "ruralSurcharge",       
+    "ageRestrictedSurcharge", 
+    "homeDeliveryFee",      
+    "residentialFee",       
+    "mode",
+    "active",
+    "rural",
+    "id",
+  ],
+  ...rates.map((rate) => [
+    rate.company,
+    rate.serviceType,
+    rate.city,
+    rate.sector ?? "",
+    rate.postalCode,
+    String(rate.useWeightRange),
+    rate.minWeightGrams ?? "",
+    rate.maxWeightGrams ?? "",
+    String(rate.useVolumeRange),
+    rate.minVolumeCm3 ?? "",
+    rate.maxVolumeCm3 ?? "",
+    rate.rate.toString(),
+    ((rate as any).baseFee ?? 0).toString(),
+    rate.zoneSurcharge.toString(),
+    rate.minimumCharge.toString(),
+    rate.signatureSurcharge.toString(),        
+    rate.ruralSurcharge.toString(),            
+    rate.ageRestrictedSurcharge.toString(),    
+    rate.homeDeliveryFee?.toString() ?? "",    
+    ((rate as any).residentialFee ?? 0).toString(), 
+    rate.mode ?? "",
+    String(rate.active),
+    Number(rate.ruralSurcharge) > 0 ? "1" : "0",
+    rate.id,
+  ]),
+];
+
+  return rows.map((row) => row.map(escapeCsvCell).join(",")).join("\n");
+}
+
+async function upsertWithRetry(id: string, data: any, retries: number): Promise<void> {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      await prisma.shippingRate.upsert({
+        where: { id },
+        update: data,
+        create: { ...data, id },
+      });
+      return;
+    } catch (err: any) {
+      const msg = err?.message ?? "";
+      const retriable = msg.includes("cache lookup failed") || msg.includes("Can't reach database") || msg.includes("P1001");
+      if (attempt < retries && retriable) {
+        await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+const RATE_INSERT_COLUMNS = [
+  "id",
+  "shop",
+  "company",
+  "serviceType",
+  "city",
+  "sector",
+  "postalCode",
+  "useWeightRange",
+  "minWeightGrams",
+  "maxWeightGrams",
+  "useVolumeRange",
+  "minVolumeCm3",
+  "maxVolumeCm3",
+  "rate",
+  "baseFee",
+  "zoneSurcharge",
+  "minimumCharge",
+  "signatureSurcharge",
+  "ruralSurcharge",
+  "ageRestrictedSurcharge",
+  "homeDeliveryFee",
+  "residentialFee",
+  "mode",
+  "active",
+  "createdAt",
+  "updatedAt",
+]
+  .map((c) => `"${c}"`)
+  .join(",");
+
+function buildRateInsertSql(chunk: Array<{ data: any }>): string {
+  const now = new Date().toISOString();
+  const rows = chunk
+    .map((r) => {
+      const d = r.data;
+      const cells = [
+        crypto.randomUUID(),
+        d.shop,
+        d.company,
+        d.serviceType,
+        d.city,
+        d.sector,
+        d.postalCode,
+        d.useWeightRange,
+        d.minWeightGrams,
+        d.maxWeightGrams,
+        d.useVolumeRange,
+        d.minVolumeCm3,
+        d.maxVolumeCm3,
+        d.rate,
+        d.baseFee,
+        d.zoneSurcharge,
+        d.minimumCharge,
+        d.signatureSurcharge,
+        d.ruralSurcharge,
+        d.ageRestrictedSurcharge,
+        d.homeDeliveryFee,
+        d.residentialFee,
+        d.mode,
+        d.active,
+        now,
+        now,
+      ];
+      return `(${cells.map(sqlLiteral).join(",")})`;
+    })
+    .join(",");
+  return `INSERT INTO "ShippingRate" (${RATE_INSERT_COLUMNS}) VALUES ${rows}`;
+}
+
+function rateRowSignature(data: any) {
+  return [
+    data.company,
+    data.serviceType,
+    data.city,
+    data.sector ?? "",
+    data.postalCode,
+    data.useWeightRange ? 1 : 0,
+    data.minWeightGrams ?? "",
+    data.maxWeightGrams ?? "",
+    data.useVolumeRange ? 1 : 0,
+    data.minVolumeCm3 ?? "",
+    data.maxVolumeCm3 ?? "",
+    String(data.rate),
+    data.mode ?? "",
+    data.active ? 1 : 0,
+  ].join("|");
+}
+
+export async function importRatesCsv(shop: string, csv: string) {
+  await prisma.$queryRaw`SELECT 1`;
+
+  let headers: string[] | null = null;
+  const seenRows = new Set<string>();
+  const insertBuffer: Array<{ data: any }> = [];
+  const upsertBuffer: Array<{ id: string; data: any }> = [];
+  let created = 0;
+  let updated = 0;
+  const insertChunkSize = 1500;
+
+  const flushInserts = async () => {
+    if (insertBuffer.length === 0) return;
+    for (let i = 0; i < insertBuffer.length; i += insertChunkSize) {
+      const chunk = insertBuffer.slice(i, i + insertChunkSize);
+      try {
+        const result = await prisma.$executeRawUnsafe(buildRateInsertSql(chunk));
+        created += Number(result) || chunk.length;
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        const retriable = msg.includes("cache lookup failed") || msg.includes("Can't reach database") || msg.includes("P1001");
+        if (retriable) {
+          await new Promise((r) => setTimeout(r, 1500));
+          const result = await prisma.$executeRawUnsafe(buildRateInsertSql(chunk));
+          created += Number(result) || chunk.length;
+        } else {
+          console.error(`[importRatesCsv] insert failed at offset ${i}:`, error);
+          throw error;
+        }
+      }
+    }
+    insertBuffer.length = 0;
+  };
+
+  for (const rawLine of csv.split(/\r?\n/)) {
+    if (!rawLine) continue;
+    if (!headers) {
+      headers = parseCsvLine(rawLine);
+      continue;
+    }
+
+    const cells = parseCsvLine(rawLine);
+    const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+
+    const data = {
+      shop,
+      company: normaliseEnum(row.company, carrierCompanies, "FLIWAYLINEHAUL"),
+      serviceType: normaliseEnum(row.serviceType, serviceTypes, "STANDARD_DELIVERY"),
+      city: row.city || "All",
+      sector: row.sector || null,
+      postalCode: row.postalCode || "*",
+      useWeightRange: row.useWeightRange ? normaliseBoolean(row.useWeightRange) : false,
+      minWeightGrams: toNullableInt(row.minWeightGrams),
+      maxWeightGrams: toNullableInt(row.maxWeightGrams),
+      useVolumeRange: row.useVolumeRange ? normaliseBoolean(row.useVolumeRange) : false,
+      minVolumeCm3: toNullableInt(row.minVolumeCm3),
+      maxVolumeCm3: toNullableInt(row.maxVolumeCm3),
+      rate: parseDecimalStringFull(row.rate),
+      baseFee: parseDecimalStringFull(row.baseFee ?? "0"),
+      zoneSurcharge: parseDecimalStringFull(row.zoneSurcharge),
+      minimumCharge: parseDecimalStringFull(row.minimumCharge ?? "0"),
+      signatureSurcharge: parseDecimalStringFull(row.signatureSurcharge ?? "0"),
+      ruralSurcharge: parseDecimalStringFull(row.ruralSurcharge ?? "0"),
+      ageRestrictedSurcharge: parseDecimalStringFull(row.ageRestrictedSurcharge ?? "0"),
+      homeDeliveryFee: row.homeDeliveryFee ? parseDecimalStringFull(row.homeDeliveryFee) : null,
+      residentialFee: parseDecimalStringFull(row.residentialFee ?? "0"),
+      mode: row.mode ? normaliseEnum(row.mode, carrierModes, "ROAD") : null,
+      active: row.active == null || row.active === "" ? true : normaliseBoolean(row.active),
+    };
+
+    if (!isServiceSupportedByCompany(data.company, data.serviceType)) continue;
+
+    const signature = rateRowSignature(data);
+    if (seenRows.has(signature)) continue;
+    seenRows.add(signature);
+
+    if (row.id) {
+      upsertBuffer.push({ id: row.id, data });
+    } else {
+      insertBuffer.push({ data });
+      if (insertBuffer.length >= insertChunkSize) {
+        await flushInserts();
+      }
+    }
+  }
+
+  if (!headers) return { ok: false, message: "CSV is empty" };
+
+  await flushInserts();
+
+  if (upsertBuffer.length > 0) {
+    const BATCH = 5;
+    for (let i = 0; i < upsertBuffer.length; i += BATCH) {
+      const batch = upsertBuffer.slice(i, i + BATCH);
+      await Promise.all(batch.map((r) => upsertWithRetry(r.id, r.data, 3)));
+    }
+    updated = upsertBuffer.length;
+  }
+
+  return { ok: true, created, updated, message: `${created} rates created, ${updated} rates updated` };
+}
+export type ServiceRatesResult = {
+  rates: CalculatedServiceRate[];
+  issue: "QUOTE_REQUIRED_VARIANTS" | "SEPARATE_ORDERS" | null;
+  quoteRequiredVariantIds: string[];
+};
+
+// Overloads so TS knows exactly which shape comes back at each call site
+export async function calculateServiceRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  packages: FreightPackage[],
+): Promise<CalculatedServiceRate[]>;
+export async function calculateServiceRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  packages: FreightPackage[],
+  includeDiagnostics: true,
+): Promise<ServiceRatesResult>;
+export async function calculateServiceRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  packages: FreightPackage[],
+  includeDiagnostics?: boolean,
+): Promise<CalculatedServiceRate[] | ServiceRatesResult> {
+  const settings = await getAppSettings(shop);
+
+  const packagesByVariant = new Map<string, FreightPackage[]>();
+  for (const pkg of packages) {
+    const key = pkg.variantId ?? "";
+    const group = packagesByVariant.get(key) ?? [];
+    group.push(pkg);
+    packagesByVariant.set(key, group);
+  }
+
+  // For each service type, accumulate cheapest-per-variant totals
+  // serviceType -> { total, packageCount, lineItems, coveredVariants }
+  const serviceAccum = new Map<string, {
+    serviceType: ServiceType;
+    total: number;
+    packageCount: number;
+    coveredVariants: number;
+    lineItemBreakdown: Array<{
+      variantId: string;
+      company: CarrierCompany;
+      amount: number;
+      boxes: number;
+    }>;
+  }
+>();
+
+  const quoteRequiredVariantIds: string[] = []; // NEW — variants with zero valid options
+
+  for (const [variantId, variantPackages] of packagesByVariant) {
+    
+    // For each serviceType, find the cheapest company across all packages for this variant
+    // Each package in variantPackages has its own allowed company
+    // serviceType -> best per company (depot keeps all companies, others keep cheapest)
+const bestByService = new Map<string, { serviceType: ServiceType; company: CarrierCompany; amount: number; boxes: number }>();
+
+for (const freightPackage of variantPackages) {
+  const matchedRates = await findMatchingRates(shop, destination, freightPackage);
+  console.log(`[DEBUG] matched rate serviceTypes: ${matchedRates.map(r => r.serviceType).join(", ")}`);
+
+  for (const matchedRate of matchedRates) {
+    const amount = calculateFreightRate(freightPackage, matchedRate, settings);
+    if (amount === null) continue;
+
+    // Depot: separate key per company so each depot appears as its own option
+    // Others: one key per serviceType, keep cheapest only
+    const key = matchedRate.serviceType === "DEPOT_DELIVERY"
+      ? `DEPOT_DELIVERY::${matchedRate.company}`
+      : matchedRate.serviceType;
+
+    const current = bestByService.get(key);
+    // NZ Post charges the HIGHER of weight-based vs CBM-based rate (not cheapest).
+    const isNzp = freightPackage.company === "NZP" || freightPackage.company === "NZP_AGE_RESTRICTED";
+    const isBetter = isNzp
+      ? !current || amount > current.amount
+      : !current || amount < current.amount;
+    if (isBetter) {
+      bestByService.set(key, {
+        serviceType: matchedRate.serviceType,
+        company: matchedRate.company,
+        amount,
+        boxes: freightPackage.boxes,
+      });
+    }
+  }
+}
+
+// NEW: this product has no deliverable option at all for this destination
+if (bestByService.size === 0) {
+  quoteRequiredVariantIds.push(variantId);
+  continue;
+}
+
+// Accumulate into serviceAccum
+for (const [key, best] of bestByService) {
+  const existing = serviceAccum.get(key) ?? {
+    serviceType: best.serviceType,
+    total: 0,
+    packageCount: 0,
+    coveredVariants: 0,
+    lineItemBreakdown: [],
+  };
+  existing.total += best.amount;
+  existing.packageCount += best.boxes;
+  existing.coveredVariants += 1;
+  existing.lineItemBreakdown.push({
+    variantId,
+    company: best.company,
+    amount: best.amount,
+    boxes: best.boxes,
+  });
+  serviceAccum.set(key, existing);
+}
+  }
+
+  const completeServiceRates: CalculatedServiceRate[] = [];
+
+  for (const [, accum] of serviceAccum) {
+  if (accum.coveredVariants !== packagesByVariant.size) continue;
+  const companies = [...new Set(accum.lineItemBreakdown.map((l) => l.company))];
+  completeServiceRates.push({
+    serviceType: accum.serviceType,
+    total: applySettings(accum.total, settings),
+    currency: settings.defaultCurrency,
+    packageCount: accum.packageCount,
+    companies,
+    lineItemBreakdown: accum.lineItemBreakdown,
+  });
+}
+
+  completeServiceRates.sort((a, b) => a.serviceType.localeCompare(b.serviceType));
+
+  // NEW: skipped unless a caller opts in — existing callers get the same array as before
+  if (!includeDiagnostics) {
+    return completeServiceRates;
+  }
+
+  if (quoteRequiredVariantIds.length > 0) {
+    return { rates: [] as CalculatedServiceRate[], issue: "QUOTE_REQUIRED_VARIANTS" as const, quoteRequiredVariantIds };
+  }
+
+  if (completeServiceRates.length === 0 && packagesByVariant.size > 1) {
+    return { rates: [] as CalculatedServiceRate[], issue: "SEPARATE_ORDERS" as const, quoteRequiredVariantIds: [] as string[] };
+  }
+
+  return { rates: completeServiceRates, issue: null, quoteRequiredVariantIds: [] as string[] };
+}
+
+export async function findMatchingRates(
+  shop: string,
+  destination: { city?: string; postalCode?: string },
+  freightPackage: FreightPackage,
+) {
+  const city = destination.city?.trim();
+  const postalCode = destination.postalCode?.trim();
+
+  const rates = await prisma.shippingRate.findMany({
+    where: {
+      shop,
+      active: true,
+      company: freightPackage.company,
+    },
+  });
+
+
+  console.log(`[DEBUG] findMatchingRates company:${freightPackage.company} volumeCm3:${freightPackage.volumeCm3} weightGrams:${freightPackage.weightGrams} postalCode:${postalCode} city:${city}`);
+console.log(`[DEBUG] DB rates found for company: ${rates.length}`);
+
+  return rates.filter((rate) => {
+    const matchesWeight =
+      !rate.useWeightRange ||
+      ((rate.minWeightGrams === null || freightPackage.weightGrams >= rate.minWeightGrams) &&
+        (rate.maxWeightGrams === null || freightPackage.weightGrams <= rate.maxWeightGrams));
+    const matchesVolume =
+      !rate.useVolumeRange ||
+      ((rate.minVolumeCm3 === null || freightPackage.volumeCm3 >= rate.minVolumeCm3) &&
+        (rate.maxVolumeCm3 === null || freightPackage.volumeCm3 <= rate.maxVolumeCm3));
+    const matchesPostalCode =
+      !postalCode || rate.postalCode === "*" || postalCodeInRange(postalCode, rate.postalCode);
+    const matchesCity = !city || cityMatches(city, rate.city);
+     console.log(`[DEBUG] rate id:${rate.id} matchesWeight:${matchesWeight} matchesVolume:${matchesVolume} matchesPostalCode:${matchesPostalCode} matchesCity:${matchesCity}`);
+
+    return matchesWeight && matchesVolume && matchesPostalCode && matchesCity;
+  });
+}
+
+function readRateForm(shop: string, formData: FormData) {
+  const minWeightGrams = parseOptionalInt(formData.get("minWeightGrams"));
+  const maxWeightGrams = parseOptionalInt(formData.get("maxWeightGrams"));
+  const minVolumeCm3 = parseOptionalInt(formData.get("minVolumeCm3"));
+  const maxVolumeCm3 = parseOptionalInt(formData.get("maxVolumeCm3"));
+
+  // FIX: Only use the checkbox value — do NOT auto-force true based on min/max presence
+  const useWeightRange = parseBoolean(formData.get("useWeightRange"));
+  const useVolumeRange = parseBoolean(formData.get("useVolumeRange"));
+
+  return {
+    shop,
+    company: String(formData.get("company") || "FLIWAY") as CarrierCompany,
+    serviceType: String(
+      formData.get("serviceType") || "STANDARD_DELIVERY",
+    ) as ServiceType,
+    city: String(formData.get("city") || "").trim(),
+    sector: formData.get("sector") ? String(formData.get("sector")).trim() : null,
+    postalCode: String(formData.get("postalCode") || "*").trim(),
+    useWeightRange,
+    minWeightGrams,
+    maxWeightGrams,
+    useVolumeRange,
+    minVolumeCm3,
+    maxVolumeCm3,
+    rate: parseDecimalString(formData.get("rate")),
+    zoneSurcharge: parseDecimalString(formData.get("zoneSurcharge")),
+    minimumCharge: parseDecimalString(formData.get("minimumCharge")),
+    homeDeliveryFee:
+      formData.get("homeDeliveryFee") !== "" &&
+      formData.get("homeDeliveryFee") !== null
+        ? parseDecimalString(formData.get("homeDeliveryFee"))
+        : null,
+    signatureSurcharge: parseDecimalString(formData.get("signatureSurcharge")),
+    ruralSurcharge: parseDecimalString(formData.get("ruralSurcharge")),
+    ageRestrictedSurcharge: parseDecimalString(
+      formData.get("ageRestrictedSurcharge"),
+    ),
+    baseFee: parseDecimalString(formData.get("baseFee")),
+    residentialFee: parseDecimalString(formData.get("residentialFee")),
+    mode: formData.get("mode")
+      ? (String(formData.get("mode")) as CarrierMode)
+      : null,
+    active: parseBoolean(formData.get("active")),
+  };
+}
+
+function calculateFreightRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
+  if (
+    rate.serviceType === "DEPOT_DELIVERY" &&
+    !freightFormula.depotCollectionCompanies.includes(rate.company)
+  ) {
+    return null;
+  }
+
+  if (rate.serviceType === "CUSTOMER_PICKUP") {
+    return 0;
+  }
+
+  // NEW: NZP uses weight/CBM lookup table pricing
+  if (rate.company === "NZP" || rate.company === "NZP_AGE_RESTRICTED") {
+    return calculateNzpRate(freightPackage, rate, settings);
+  }
+
+  // NEW: Castle Parcels uses CBM lookup table pricing
+  if (rate.company === "CASTLE") {
+    return calculateCastleRate(freightPackage, rate, settings);
+  }
+
+  // NEW: pick base value depending on which range the rate uses
+  const baseValue = rate.useWeightRange
+    ? freightPackage.weightGrams / 1000        // kg
+    : freightPackage.volumeCm3 / 1_000_000;    // CBM
+
+  // Fliway Midsize: minimum 0.3 CBM chargeable volume for zone rate
+  const effectiveBaseValue =
+    rate.company === "FLIWAYMIDSIZE" && !rate.useWeightRange
+      ? Math.max(baseValue, 0.3)
+      : baseValue;
+
+  const baseFee = (rate.company === "MAINFREIGHT" || rate.company === "TGE" || rate.company === "FLIWAYMIDSIZE")
+  ? Number((rate as any).baseFee ?? 0)
+  : 0;
+
+  const depotFee = rate.company === "MAINFREIGHT" && rate.serviceType === "DEPOT_DELIVERY"
+    ? Number((settings as any).mainfreightDepotFee ?? 25)
+    : 0;
+
+  const rawBaseFreight = (effectiveBaseValue * Number(rate.rate)) + baseFee + depotFee;
+  const rawTransportCost = rawBaseFreight + (rate.company === "TGE" ? 0 : Number(rate.zoneSurcharge));
+  const minimumCharge = Number(rate.minimumCharge ?? 0);
+  const baseFreight = minimumCharge > 0 ? Math.max(rawTransportCost, minimumCharge) : rawTransportCost;
+  const tgeMinCharge = rate.company === "TGE" ? Number(rate.zoneSurcharge) : 0;
+  const baseFreightTge = tgeMinCharge > 0 ? Math.max(rawBaseFreight, tgeMinCharge) : rawBaseFreight;
+  const adminFee = rate.company === "TGE" ? Number(settings.tgeAdminFee ?? 12.69) : 0;
+  const resolvedHomeDeliveryFee =
+    rate.homeDeliveryFee !== null && rate.homeDeliveryFee !== undefined
+      ? Number(rate.homeDeliveryFee)
+      : resolveHomeDeliveryFee(rate.company, settings);
+  const homeDeliveryFee =
+    rate.serviceType === "STANDARD_DELIVERY" &&
+    rate.company !== "TGE" &&
+    rate.company !== "FLIWAYMIDSIZE" &&
+    resolvedHomeDeliveryFee > 0
+      ? resolvedHomeDeliveryFee
+      : 0;
+  const fafRate = resolveFafRate(rate.company, settings);
+  const effectiveBase = rate.company === "TGE" ? baseFreightTge : baseFreight;
+  const withFaf = (effectiveBase + adminFee) * (1 + fafRate);
+  const subtotal = withFaf + homeDeliveryFee;
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  const final = withMargin * (1 + gstRate);
+
+  console.log(`[CALC] rateId:${rate.id} serviceType:${rate.serviceType} company:${rate.company}`);
+  console.log(`[CALC] baseValue:${baseValue} × rate:${rate.rate} = rawBaseFreight:${rawBaseFreight} rawTransport:${rawTransportCost} minCharge:${minimumCharge} → effectiveBase:${effectiveBase}`);
+  console.log(`[CALC] adminFee:${adminFee} homeDeliveryFee:${homeDeliveryFee} fafRate:${fafRate}`);
+  console.log(`[CALC] (${effectiveBase} + ${adminFee}) × ${1 + fafRate} = withFaf:${withFaf}`);
+  console.log(`[CALC] withFaf:${withFaf} + homeDelivery:${homeDeliveryFee} = subtotal:${subtotal}`);
+  console.log(`[CALC] subtotal:${subtotal} × margin:${1 + marginRate} = withMargin:${withMargin}`);
+  console.log(`[CALC] withMargin:${withMargin} × gst:${1 + gstRate} = FINAL:${final}`);
+
+  return final;
+}
+
+// NEW: NZP rate calculation
+// rate.rate = base charge (max of kg-bracket and CBM-bracket rate, pre-stored)
+// rate.zoneSurcharge = additional surcharges (rural, signature etc) pre-stored per zone row
+function calculateNzpRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
+  const baseCharge = Number(rate.rate);
+  // If the matched rate row has a non-zero surcharge for this postal code,
+  // that surcharge applies automatically — no per-product metafield needed.
+  const signatureFee = Number(rate.signatureSurcharge) > 0 ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = Number(rate.ruralSurcharge) > 0 ? Number(rate.ruralSurcharge) : 0;
+  const ageRestrictedFee = Number(rate.ageRestrictedSurcharge) > 0 ? Number(rate.ageRestrictedSurcharge) : 0;
+  const additionalCharges = signatureFee + ruralFee + ageRestrictedFee;
+  console.log(`[NZP] base:${baseCharge} signature:${signatureFee} rural:${ruralFee} ageRestricted:${ageRestrictedFee}`);
+  const subtotal = (baseCharge + additionalCharges) * (1 + freightFormula.nzp.totalVariableRate);
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  return withMargin * (1 + gstRate);
+}
+
+// NEW: Castle Parcels rate calculation
+function calculateCastleRate(freightPackage: FreightPackage, rate: RateCandidate, settings: AppSetting) {
+  const baseCharge = Number(rate.rate);
+  const residentialFee = Number(rate.residentialFee);
+  // Applied automatically when the matched rate row has a non-zero surcharge
+  const signatureFee = Number(rate.signatureSurcharge) > 0 ? Number(rate.signatureSurcharge) : 0;
+  const ruralFee = Number(rate.ruralSurcharge) > 0 ? Number(rate.ruralSurcharge) : 0;
+  // Castle re-uses ageRestrictedSurcharge column to store Waiheke surcharge
+  const waihekeFee = Number(rate.ageRestrictedSurcharge) > 0 ? Number(rate.ageRestrictedSurcharge) : 0;
+  const subtotal = (baseCharge + residentialFee + signatureFee + ruralFee + waihekeFee)
+    * (1 + freightFormula.castle.totalVariableRate);
+  const marginRate = Number(settings.marginRate ?? 10) / 100;
+  const gstRate = Number(settings.gstRate ?? 15) / 100;
+  const withMargin = subtotal * (1 + marginRate);
+  return withMargin * (1 + gstRate);
+}
+
+function applySettings(baseRate: number, settings: AppSetting) {
+  // FAF is now applied per-carrier in calculateFreightRate via resolveFafRate.
+  // fuelSurchargePercent is the fallback for NZP/CASTLE and is already applied there.
+  // This function only applies the shop-level additional cost markup.
+  if (settings.additionalCostType === "PERCENTAGE") {
+    return baseRate + baseRate * (Number(settings.additionalCostValue) / 100);
+  }
+  return baseRate + Number(settings.additionalCostValue);
+}
+
+//resolve FAF rate for a carrier from DB settings, fall back to fuelSurchargePercent
+export function resolveFafRate(company: CarrierCompany, settings: AppSetting): number {
+  const carrierFafMap: Partial<Record<CarrierCompany, string>> = {
+    FLIWAYLINEHAUL: "fafFliway",
+    FLIWAYMIDSIZE:  "fafFliwayMidsize",
+    MAINFREIGHT:    "fafMainfreight",
+    TGE:            "fafTge",
+    M2H:            "fafM2h",
+  };
+  const field = carrierFafMap[company];
+  if (field && field in settings) {
+    return Number((settings as unknown as Record<string, unknown>)[field]) / 100;
+  }
+  // NZP, CASTLE, and any future carriers fall back to fuelSurchargePercent
+  return Number(settings.fuelSurchargePercent) / 100;
+}
+
+// Resolve global home delivery fee for a carrier from DB settings
+export function resolveHomeDeliveryFee(company: CarrierCompany, settings: AppSetting): number {
+  const map: Partial<Record<CarrierCompany, string>> = {
+    FLIWAYLINEHAUL: "homeDeliveryFeeFliway",
+    FLIWAYMIDSIZE:  "homeDeliveryFeeFliwayMidsize",
+    TGE:            "homeDeliveryFeeTge",
+  };
+  const field = map[company];
+  if (field && field in settings) {
+    return Number((settings as unknown as Record<string, unknown>)[field]);
+  }
+  return 0;
+}
+
+function postalCodeInRange(postalCode: string, range: string) {
+  if (range === "*" || range === postalCode) return true;
+  const [start, end] = range.split("-").map((part) => Number.parseInt(part.trim(), 10));
+  const numericPostalCode = Number.parseInt(postalCode.trim(), 10);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(numericPostalCode)) {
+    return false;
+  }
+  return numericPostalCode >= start && numericPostalCode <= end;
+}
+
+function cityMatches(destinationCity: string, rateCity: string) {
+  const normalisedRateCity = rateCity.trim().toLowerCase();
+  if (!normalisedRateCity || normalisedRateCity === "*" || normalisedRateCity === "all") {
+    return true;
+  }
+  return destinationCity.trim().toLowerCase() === normalisedRateCity;
+}
+
+function escapeCsvCell(value: unknown) {
+  const cell = String(value ?? "");
+  if (!/[",\n]/.test(cell)) return cell;
+  return `"${cell.replace(/"/g, '""')}"`;
+}
+
+// SQL literal for use in the bulk multi-row INSERT. Strings are single-quote
+// escaped (standard_conforming_strings=on → only ' needs doubling); numbers,
+// booleans and enums come from normalised CSV data so they are emitted as-is
+// or quoted. Nulls become NULL.
+function sqlLiteral(value: unknown) {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "number") return String(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function parseCsvLine(line: string) {
+  const cells: string[] = [];
+  let current = "";
+  let quoted = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const next = line[index + 1];
+    if (character === '"' && quoted && next === '"') {
+      current += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === "," && !quoted) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += character;
+    }
+  }
+
+  cells.push(current);
+  return cells;
+}
+
+function normaliseEnum<T extends string>(value: string | undefined, values: readonly T[], fallback: T) {
+  const normalised = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .replace(/[\s-]+/g, "_");
+  return values.includes(normalised as T) ? (normalised as T) : fallback;
+}
+
+function toNullableInt(value: string | undefined) {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normaliseBoolean(value: string | undefined) {
+  return ["1", "true", "yes", "on"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function isServiceSupportedByCompany(company: CarrierCompany, serviceType: ServiceType) {
+  return (
+    serviceType !== "DEPOT_DELIVERY" ||
+    freightFormula.depotCollectionCompanies.includes(company)
+  );
+}

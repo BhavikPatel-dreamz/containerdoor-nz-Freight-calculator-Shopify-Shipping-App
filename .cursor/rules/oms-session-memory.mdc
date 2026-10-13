@@ -1,0 +1,119 @@
+---
+description: OMS product decisions memory — notes, email, status fields, amendments, UI UX
+alwaysApply: true
+---
+
+# OMS session memory (ContainerDoor)
+
+Read these rules before changing OMS freight dashboard / email / sync:
+
+| Topic | Rule file |
+|-------|-----------|
+| Activity Log + email queue/cron | `.cursor/rules/oms-activity-log.mdc` |
+| Nav avatar + queue chip | `.cursor/rules/oms-nav-user.mdc` |
+| EDD → Shopify sync | `.cursor/rules/oms-edd-shopify-sync.mdc` |
+| Order amendments | `.cursor/rules/oms-order-amendments.mdc` |
+| Cin7 architecture (per-line SO) | `.cursor/rules/oms-cin7-architecture.mdc` |
+| Shopify refunds → Cin7 Credit Notes (launch) | `.cursor/rules/oms-shopify-refunds-cin7.mdc` |
+
+---
+
+## Status fields — no generic “Status”
+- Primary customer-facing status = **`customerStatus`** (Pending / Confirmed / Dispatched / Delivered / Cancelled).
+- **Purpose:** fulfilment lifecycle shown to / about the customer (order progress). Not money, not warehouse floor state.
+- Also: `warehouseStatus` (inbound/ready), `paymentStatus` (Paid/Partial/Pending/Overdue), `dispatchStatus`, `deliveryStatus`.
+- There is **no** separate generic `status` DB column.
+- OMS list column label = **Customer status** (not bare “Status”) so it isn’t confused with Payment / Warehouse.
+- Monday maps `customerStatus` → board column titled **"Status"** in code (`monday.server.ts`); prefer renaming that Monday title to **Customer Status** when touching Monday sync — do not invent a second OMS status field.
+
+## Notes & Monday / Cin7 / Shopify
+- Internal notes: OMS `CommunicationLog` only unless staff ticks sync checkboxes.
+- ☐ **Send to Monday.com** — only checked notes create Monday Updates.
+- ☐ **Send to Cin7** — UI “Coming Soon” (API path exists); keep disabled until ready.
+- ☐ **Add to Shopify order timeline** — opt-in only (Note modal + Bulk).
+- Routine field updates (EDD, payment, tracking, supplier) **must not** create Monday/Shopify notes.
+- Bulk Actions Monday checkbox defaults **unchecked** (opt-in).
+
+## Activity Log UI
+- Source of truth: `CommunicationLog` only (`NotesPanel`).
+- Field-change types (`*_update`, `system_event`) are **stored in DB** but **hidden** in UI via `SHOW_FIELD_CHANGE_LOGS = false` in `NotesPanel.tsx`. Flip to `true` later for full audit UI.
+- Visible now: internal notes, emails, monday/shopify/cin7 note sync rows.
+
+## Customer email (operational, not marketing)
+- OMS is central place for ops emails; enqueue → cron sends (Resend/SMTP). Not Shopify marketing.
+- NoteModal **Customer email**: subject + body → `BulkEmailJob` + `BulkEmailRecipient` + pending log.
+- EDD/Tracking notify: opt-in checkbox → enqueue only.
+- **Vercel Hobby:** no minutely cron — `vercel.json` crons disabled.
+- **AWS / PM2 (future):** `ecosystem.config.cjs`
+  - `oms-web` — `react-router-serve ./build/server/index.js` (PORT 3000)
+  - `oms-email-queue-cron` — `scripts/email-queue-cron.mjs`
+  - After build: `pm2 start ecosystem.config.cjs` (or `--only oms-web`)
+- Auto-email on every EDD/status change: **No** — opt-in only (client direction).
+
+## Bulk updates
+- Core launch requirement (container/pre-order ops): bulk EDD, payment, supplier, notes, notify.
+- Keep improving bulk; do not defer basic bulk field updates.
+
+## EDD → customer account
+- OMS `eddDate` must sync to Shopify metafield `containerdoor_ops.edd_{variantId}` (awaited).
+- Customer Account freight block also reads live OMS via `GET /api/order-status`.
+- Internal notes do not sync to Shopify automatically.
+
+## Monday sync guardrails
+- Monday `change_multiple_column_values` fails the whole mutation if one status label is invalid; normalize labels before push.
+- Always map incoming status casing to exact Monday labels for `warehouseStatus`, `dispatchStatus`, `deliveryStatus`, `customerStatus`, and `paymentStatus`.
+- Payment status: OMS UI often shows Shopify financial status when `ops.paymentStatus` is empty. Monday sync must send display payment (`Paid`/`Partial`/`Pending`/`Overdue`) and persist it if DB empty. Never push labels Monday board lacks (e.g. Refunded) — omit instead of failing whole mutation.
+- OMS `/api/order-status` Monday push must load Customer/Email/SKU/Qty from `OrderLineItemIndex` / `OrderSnapshot` — never hardcode empty strings.
+- Prefer `buildMondayRowFromOms()` for all Monday pushes so Dispatch/Freight + Operational + Customer + Order Details columns stay filled (EDD, carrier, tracking, freight ref, warehouse/dispatch/delivery, dates, supplier, PO, deposit/balance, payment, address/phone, product/variant/SKU/qty).
+- Order-create webhook: `createOrderLineItemRecords` runs before Monday — Monday step must UPDATE existing ops rows (not require a fresh create). Otherwise unique conflict skips Monday entirely. Pulse name = `#OrderNameA` at create time.
+- OMS detail/list should expose `mondayItemId` and open direct Monday item links from sync UI when available.
+- Monday item URL: `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{mondayItemId}` via `buildMondayItemUrl()` in `monday.server.ts`.
+- Monday pulse **name** = Shopify order name + line letter (`#CDL215347A`) via `buildMondayPulseName()` — never product title. Rename on sync if old name was product title.
+- Store both: `mondayItemId` (Monday numeric pulse id) + `mondayItemName` (`#CDL215347A`) on `OrderLineItemOperationalData` for OMS ↔ Shopify ↔ Monday matching.
+- If EDD updates do not appear in Monday, check `syncTrace.monday.error` first; a different status-column label error can block EDD in the same mutation.
+
+## Order amendments (CS)
+- Detail → Customer → **Amend** (full-screen panel).
+- Done: contact, address, delivery instructions, soft cancel line/order + audit + Shopify/Monday where applicable.
+- Not yet: variant swap (`orderEdit`), hard `orderCancel`, Cin7 address/void.
+- Migration: `prisma/migrations/20260725140000_order_amendment_fields/` (`shippingAddress2`, `deliveryInstructions`).
+
+## Carrier + tracking (launch phase)
+- **Carrier source of truth (display):** `ops.carrier` if set, else freight-code `company` from `OrderLineItemIndex` / shipping line. Same on list (`app._index.tsx`) and detail (`freight-orders.server.ts` / `order-api.ts`).
+- **At order create:** webhook writes per-variant carrier from shipping code into ops + index. Human labels via `companyLabels` (`app/lib/freight.ts`).
+- **Carrier is NOT editable** in OMS Tracking modal, Dispatch edit, or Shopify `order-status-block` for now — show read-only (“set at checkout”). Re-enable carrier edit later when product decides.
+- **Lock rule:** after create, do **not** update carrier from Monday/Cin7/Shopify sync callbacks. Carrier remains checkout-set unless product explicitly reopens carrier editing.
+- **Launch editable fields:** Tracking # + Freight ref (header **Tracking** modal); Current EDD (Dispatch panel **Edit EDD** / header Update EDD); full **Operational** panel Edit.
+ - Dispatch & Freight panel: only Current EDD editable — carrier / tracking / freight ref / delivery method stay read-only in that panel (tracking/ref via header Tracking).
+ - Shopify admin block: Edit form = Tracking # + Freight ref only; API strips other fields when `source: shopify_admin_block`.
+- **Shopify sync:** Tracking → metafield `containerdoor_ops.tracking_{variantId}` (per line). **Carrier does not sync to Shopify.** Freight ref = OMS + Monday only (not Shopify metafield yet).
+- **Monday:** carrier / tracking / freight ref still push via `buildMondayRowFromOms()`.
+- Future: re-enable carrier + EDD + delivery method + full ops edits in Modals / BlockExtension (commented / gated).
+
+## Cin7 (per-line Sales Orders)
+- Full architecture: `.cursor/rules/oms-cin7-architecture.mdc`.
+- **Preferred:** one Cin7 SO per operational line (A/B/C), same as Monday pulses — Cin7 allows only one `trackingCode` per SO.
+- Adapter: `app/lib/cin7-adapter.server.ts`; env `CIN7_SO_STRATEGY=per_line` (default) | `grouped` (legacy).
+- Canonical id: `OrderLineItemOperationalData.cin7SalesOrderId` (+ `cin7SalesOrderCode` / `cin7SalesOrderRef`). Order-level id = legacy / mirror only.
+- Resolve: `resolveCin7SalesOrderId` (line first → order legacy fallback). Used by sync-middleware + `api.order-status`.
+- Webhook create: per freight line when `per_line`; shared `customerOrderNo` = Shopify order name; unique `reference` = `#OrderLetter` (≤30 chars).
+- Still TODO: `/api/cin7-create` + status/update APIs fully per-line UI; notes/bulk Cin7 enable; freight-ref field mapping.
+
+## Detail page UX (`/app/order/:orderId`)
+- **Separate route** — `app.order_.$orderId.tsx` + `FreightOrderDetail` with `viewMode="detail"`.
+- Never flash list: detail resolves on first paint (`resolveDetailTarget`); list chrome gated by `isDetailPage`.
+- Shared client API: `app/components/freight/order-api.ts`; row builder: `freight-orders.server.ts`.
+- Hide nav **search** on detail.
+- One note entry: Activity panel **Note / email**.
+- Detail actions: Update EDD · Tracking · Sync.
+
+## Dashboard filters UX
+- Filters apply **on change** (no hide-on-apply).
+- Active filter **chips** always visible when applied; chip ✕ removes one.
+- Toggle: Filters / Hide filters; Done closes panel.
+
+## Amend UI
+- Full-screen panel (`.fo-amend-overlay` / `.fo-amend-screen`), 3-column desktop, no scroll on desktop.
+
+## Launch refunds / amendments (confirmed 13 Oct 2026)
+Shopify → OMS for refunds and address. Cin7 **Credit Notes only** (per line order, open, idempotent). Do **not** auto-edit Cin7 SO stage/value or Monday for cancel/SKU/qty. Full spec: `.cursor/rules/oms-shopify-refunds-cin7.mdc`.

@@ -1,0 +1,1971 @@
+/* eslint-disable jsx-a11y/click-events-have-key-events */
+/* eslint-disable jsx-a11y/no-static-element-interactions */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useEffect, useState } from "react";
+import { useSearchParams, useNavigate } from "react-router";
+import "../styles/freight-orders.css";
+
+// Re-export types for backward compat
+export type { FreightLineItem, FreightOrderRow, NoteItem, DashboardCounts, FreightDashboardProps } from "./freight/types";
+import type { FreightLineItem, FreightOrderRow, NoteItem, FreightDashboardProps } from "./freight/types";
+
+import { dedupeOrders, getCustomerStatusStyle, parseNotesString, serializeNotes, formatNoteDateTime, getRefPrefix, resolveDetailTarget } from "./freight/helpers";
+import { getCarrierStatusStyle } from "./freight/helpers";
+import { getCarrierLabel } from "../lib/freight";
+import {
+  CUSTOMER_STATUS_OPTIONS,
+  WAREHOUSE_STATUS_OPTIONS,
+  DISPATCH_STATUS_OPTIONS,
+  DELIVERY_STATUS_OPTIONS,
+  PAYMENT_STATUS_OPTIONS,
+  normalizeStatusValue,
+} from "../lib/status-options";
+import { fetchOrderStatus, findStatusLine, mergeStatusLineIntoItem, fetchOrderAmendments, postOrderAmendments } from "./freight/order-api";
+import { IconCalendar } from "./freight/icons";
+import { DetailPanels } from "./freight/DetailPanels";
+import { NotesPanel } from "./freight/NotesPanel";
+import { OrderTable } from "./freight/OrderTable";
+import { TrackingModal, EddModal, NoteModal, DispatchEditModal, OpsEditModal, AmendOrderModal, type AmendDraft } from "./freight/Modals";
+import { BulkActionsWorkspace } from "./freight/BulkActionsWorkspace";
+import { NavQueueJobs } from "./freight/NavQueueJobs";
+import type { BulkActionsPayload, BulkActionsResult } from "./freight/BulkActionsWorkspace";
+
+const orderLetterColors = ["#3b82f6", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4"];
+
+export default function FreightDashboard({
+  orders,
+  allOrders,
+  counts,
+  suppliers = [],
+  warehouseStatuses = [],
+  carriers = [],
+  activeFilters = {},
+  page,
+  pageCount,
+  shop,
+  navbarRight,
+  noteAuthor = "SP",
+  viewMode = "list",
+  initialDetailOrderId,
+  initialDetailVariantId,
+  detailBackHref,
+}: FreightDashboardProps) {
+  const [rows, setRows] = useState<FreightOrderRow[]>(orders);
+  const [allRows, setAllRows] = useState<FreightOrderRow[] | null>(allOrders ?? null);
+  useEffect(() => setRows(orders), [orders]);
+  useEffect(() => { if (allOrders) setAllRows(allOrders); }, [allOrders]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [currentPage, setCurrentPage] = useState<number>(page ?? 1);
+  useEffect(() => { setCurrentPage(page ?? 1); }, [page]);
+
+  // Detail route: resolve on first paint so list never flashes.
+  const isDetailPage = viewMode === "detail" || Boolean(initialDetailOrderId);
+  const [detailView, setDetailView] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(() =>
+    resolveDetailTarget(allOrders ?? orders, initialDetailOrderId, initialDetailVariantId),
+  );
+  const [trackingModal, setTrackingModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
+  const [eddModal, setEddModal] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
+  const [noteModalTarget, setNoteModalTarget] = useState<{ order: FreightOrderRow; item: FreightLineItem } | null>(null);
+  const [notes, setNotes] = useState<NoteItem[]>([]);
+  const [communications, setCommunications] = useState<any[]>([]);
+  const [noteModal, setNoteModal] = useState(false);
+  const [noteTab, setNoteTab] = useState("internal");
+  const [noteText, setNoteText] = useState("");
+  const [noteSubject, setNoteSubject] = useState("");
+  const [sendToMonday, setSendToMonday] = useState(false);
+  const [sendToCin7, setSendToCin7] = useState(false);
+  const [sendToShopify, setSendToShopify] = useState(false);
+  const [isSavingNote, setIsSavingNote] = useState(false);
+  const [isSavingEdd, setIsSavingEdd] = useState(false);
+  const [notesFetching, setNotesFetching] = useState(false);
+  const [isSavingTracking, setIsSavingTracking] = useState(false);
+
+  const [editDispatchModal, setEditDispatchModal] = useState(false);
+  const [editOpsModal, setEditOpsModal] = useState(false);
+  const [editDispatchForm, setEditDispatchForm] = useState({ eddDate: "", carrier: "", trackingNumber: "", freightRef: "" });
+  const [editOpsForm, setEditOpsForm] = useState({ customerStatus: "", warehouseStatus: "", dispatchStatus: "", deliveryStatus: "", poNumber: "", depositPaid: "", balanceDue: "", paymentStatus: "", supplierContainer: "", receivedDate: "", portArrivalDate: "", inTransitDate: "" });
+  const [isSavingDispatch, setIsSavingDispatch] = useState(false);
+  const [isSavingOps, setIsSavingOps] = useState(false);
+  const [editDispatchError, setEditDispatchError] = useState("");
+  const [editOpsError, setEditOpsError] = useState("");
+  const [amendModalOpen, setAmendModalOpen] = useState(false);
+  const [amendForm, setAmendForm] = useState<AmendDraft>({
+    firstName: "", lastName: "", email: "", phone: "",
+    address1: "", address2: "", city: "", province: "", zip: "", country: "",
+    deliveryInstructions: "",
+  });
+  const [amendError, setAmendError] = useState("");
+  const [isSavingAmend, setIsSavingAmend] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncNotification, setSyncNotification] = useState<string | null>(null);
+  /** Detail Sync button result popup — Monday + Cin7 actions */
+  const [syncResultModal, setSyncResultModal] = useState<{
+    title: string;
+    lines: Array<{ system: string; ok: boolean; summary: string; details?: string[] }>;
+  } | null>(null);
+  const logSyncTrace = (source: string, payload: any) => {
+    if (!payload?.syncTrace) return;
+    console.log(`[SYNC TRACE][${source}]`, payload.syncTrace);
+  };
+  const [creatingCin7OrderId, setCreatingCin7OrderId] = useState<string | null>(null);
+  const [cin7FixingId, setCin7FixingId] = useState<string | null>(null);
+  const [mondayFixingId, setMondayFixingId] = useState<string | null>(null);
+  const [isRefreshingCin7, setIsRefreshingCin7] = useState(false);
+  const [isRefreshingMonday, setIsRefreshingMonday] = useState(false);
+  const [allowStatusPoll] = useState(false);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [showColumnsMenu, setShowColumnsMenu] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  const toggleColumn = (key: string) => setHiddenColumns((prev) => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+
+  useEffect(() => {
+    if (!initialDetailOrderId) return;
+    const next = resolveDetailTarget(allRows ?? rows, initialDetailOrderId, initialDetailVariantId);
+    if (!next) return;
+    setDetailView((prev) => {
+      if (!prev) return next;
+      // Switch line/order only — keep local patches for same target
+      if (
+        prev.order.shopifyOrderId !== next.order.shopifyOrderId ||
+        prev.item.variantId !== next.item.variantId
+      ) {
+        return next;
+      }
+      return prev;
+    });
+  }, [initialDetailOrderId, initialDetailVariantId, rows, allRows]);
+
+  const [eddError, setEddError] = useState("");
+  const [trackingError, setTrackingError] = useState("");
+  const [trackingForm, setTrackingForm] = useState({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
+  const [eddForm, setEddForm] = useState({ newEdd: "", reason: "", notifyCustomer: true });
+  const serverDriven = Boolean(counts);
+  const [search, setSearch] = useState(searchParams.get("q") ?? "");
+  const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  // Keep input in sync when URL `q` changes (back/forward, clear button).
+  // Depend on urlQ only — other params (tab/page) must not wipe in-progress typing.
+  const urlQ = searchParams.get("q") ?? "";
+  useEffect(() => {
+    setSearch((prev) => (prev === urlQ ? prev : urlQ));
+  }, [urlQ]);
+
+  // Push search → URL. Empty clears immediately so loader returns full list.
+  useEffect(() => {
+    if (!serverDriven) return;
+    const trimmed = search.trim();
+    const current = urlQ.trim();
+    if (trimmed === current) return;
+    const delay = trimmed ? 350 : 0;
+    const t = setTimeout(() => {
+      setSearchParams((prev) => {
+        const np = new URLSearchParams(prev);
+        const before = (prev.get("q") ?? "").trim();
+        if (trimmed === before) return prev;
+        if (trimmed) np.set("q", trimmed);
+        else np.delete("q");
+        np.set("page", "1");
+        return np;
+      }, { replace: true });
+    }, delay);
+    return () => clearTimeout(t);
+  }, [search, serverDriven, urlQ, setSearchParams]);
+
+  const clearSearch = () => {
+    setSearch("");
+    if (!serverDriven) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("q");
+      np.set("page", "1");
+      return np;
+    }, { replace: true });
+  };
+
+  const setTab = (key: string) => {
+    setActiveTab(key);
+    if (!serverDriven) return;
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      if (key === "all") np.delete("tab"); else np.set("tab", key);
+      np.set("page", "1");
+      return np;
+    });
+  };
+
+  const clearAllFilters = () =>
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      np.delete("supplier");
+      np.delete("warehouseStatus");
+      np.delete("carrier");
+      np.delete("paymentStatus");
+      np.delete("eddDate");
+      np.delete("eddDateEnd");
+      np.set("page", "1");
+      return np;
+    });
+
+  const hasActiveFilters = Boolean(
+    searchParams.get("supplier") || searchParams.get("warehouseStatus") ||
+    searchParams.get("carrier") ||
+    searchParams.get("paymentStatus") ||
+    searchParams.get("eddDate") ||
+    searchParams.get("eddDateEnd")
+  );
+
+  // Open filter panel by default when URL already has filters (e.g. return from detail).
+  const [showFilters, setShowFilters] = useState(hasActiveFilters);
+
+  // Staging state: dropdowns write here, Apply commits to URL params.
+  const [stagedFilters, setStagedFilters] = useState({
+    supplier: searchParams.get("supplier") ?? "",
+    warehouseStatus: searchParams.get("warehouseStatus") ?? "",
+    carrier: searchParams.get("carrier") ?? "",
+    paymentStatus: searchParams.get("paymentStatus") ?? "",
+    eddDate: searchParams.get("eddDate") ?? "",
+    eddDateEnd: searchParams.get("eddDateEnd") ?? "",
+  });
+  // Keep staging state in sync when URL params change externally (e.g. back/forward).
+  useEffect(() => {
+    setStagedFilters({
+      supplier: searchParams.get("supplier") ?? "",
+      warehouseStatus: searchParams.get("warehouseStatus") ?? "",
+      carrier: searchParams.get("carrier") ?? "",
+      paymentStatus: searchParams.get("paymentStatus") ?? "",
+      eddDate: searchParams.get("eddDate") ?? "",
+      eddDateEnd: searchParams.get("eddDateEnd") ?? "",
+    });
+  }, [searchParams]);
+
+  const applyFilters = (next?: Partial<typeof stagedFilters>, { closePanel = false }: { closePanel?: boolean } = {}) => {
+    const merged = { ...stagedFilters, ...next };
+    if (next) setStagedFilters(merged);
+    setSearchParams((prev) => {
+      const np = new URLSearchParams(prev);
+      const set = (k: string, v: string) => { if (v) np.set(k, v); else np.delete(k); };
+      set("supplier", merged.supplier);
+      set("warehouseStatus", merged.warehouseStatus);
+      set("carrier", merged.carrier);
+      set("paymentStatus", merged.paymentStatus);
+      set("eddDate", merged.eddDate);
+      set("eddDateEnd", merged.eddDateEnd);
+      np.set("page", "1");
+      return np;
+    });
+    if (closePanel) setShowFilters(false);
+  };
+
+  const removeFilter = (key: keyof typeof stagedFilters) => {
+    if (key === "eddDate") {
+      applyFilters({ eddDate: "", eddDateEnd: "" });
+    } else {
+      applyFilters({ [key]: "" });
+    }
+  };
+
+  const formatDisplayDate = (iso: string) => {
+    const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    return match ? `${match[3]}/${match[2]}/${match[1]}` : iso;
+  };
+
+  const activeFilterChips: Array<{ key: keyof typeof stagedFilters; label: string; value: string }> = [
+    stagedFilters.supplier ? { key: "supplier" as const, label: "Supplier", value: stagedFilters.supplier } : null,
+    stagedFilters.warehouseStatus ? { key: "warehouseStatus" as const, label: "Warehouse", value: stagedFilters.warehouseStatus } : null,
+    stagedFilters.carrier ? { key: "carrier" as const, label: "Carrier", value: stagedFilters.carrier } : null,
+    stagedFilters.paymentStatus ? { key: "paymentStatus" as const, label: "Payment", value: stagedFilters.paymentStatus } : null,
+    stagedFilters.eddDate || stagedFilters.eddDateEnd ? { key: "eddDate" as const, label: "EDD Range", value: [stagedFilters.eddDate, stagedFilters.eddDateEnd].filter(Boolean).map(formatDisplayDate).join(" → ") } : null,
+  ].filter(Boolean) as Array<{ key: keyof typeof stagedFilters; label: string; value: string }>;
+
+  const [bulkActionsOpen, setBulkActionsOpen] = useState(false);
+  const [backgroundJobId, setBackgroundJobId] = useState<string | null>(null);
+  const [queueJob, setQueueJob] = useState<{ jobId: string; status: string; sent: number; failed: number; total: number } | null>(null);
+
+  const activeNoteTarget = detailView ?? noteModalTarget;
+
+  // ── Fetch notes + live ops whenever detail / note-related modal opens ──
+  useEffect(() => {
+    const target = detailView ?? noteModalTarget ?? eddModal ?? trackingModal;
+    if (!target) return;
+    let cancelled = false;
+    const load = async () => {
+      setNotesFetching(true);
+      try {
+        const json = await fetchOrderStatus(
+          shop,
+          target.order.shopifyOrderId,
+          target.item.variantId,
+          target.item.lineIndexId,
+        );
+        if (!json || cancelled) return;
+        const line = findStatusLine(json, target.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
+        setCommunications(json.communications ?? []);
+
+        // Apply ops fields to detail/list so Operational panel isn't blank
+        if (line) {
+          const vid = target.item.variantId;
+          const oid = target.order.id;
+          setDetailView((prev) => {
+            if (!prev || prev.item.variantId !== vid) return prev;
+            return { ...prev, item: mergeStatusLineIntoItem(prev.item, line) };
+          });
+          setRows((prev) =>
+            prev.map((o) =>
+              o.id !== oid
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) =>
+                      li.variantId !== vid ? li : mergeStatusLineIntoItem(li, line),
+                    ),
+                  },
+            ),
+          );
+          if (allRows) {
+            setAllRows((prev) =>
+              prev
+                ? prev.map((o) =>
+                    o.id !== oid
+                      ? o
+                      : {
+                          ...o,
+                          lineItems: o.lineItems.map((li) =>
+                            li.variantId !== vid ? li : mergeStatusLineIntoItem(li, line),
+                          ),
+                        },
+                  )
+                : prev,
+            );
+          }
+        }
+      } catch (e) { console.error("Failed to load notes", e); } finally {
+        if (!cancelled) setNotesFetching(false);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, [detailView?.order.shopifyOrderId, detailView?.item.variantId, detailView?.item.lineIndexId, noteModalTarget, eddModal, trackingModal, shop]);
+
+  useEffect(() => {
+    if (!allowStatusPoll) return;
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/cin7-status", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shop, orders: dedupeOrders(rows).map((order) => ({ orderId: order.shopifyOrderId, lineItems: order.lineItems.map((li) => ({ variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company })) })) }),
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+        setRows((prev) => prev.map((o) => {
+          const result = ordersResult[o.shopifyOrderId]?.results;
+          if (!result) return o;
+          return { ...o, lineItems: o.lineItems.map((li) => { const m = result.find((r: any) => r.variantId === li.variantId); return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li; }) };
+        }));
+      } catch (e) { console.error("Failed to fetch Cin7 status", e); }
+    })();
+    return () => { cancelled = true; };
+  }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
+
+  useEffect(() => {
+    if (!allowStatusPoll) return;
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/monday-status", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shop, orders: dedupeOrders(rows).map((order) => ({ orderId: order.shopifyOrderId, lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })) })) }),
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (cancelled) return;
+        const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+        setRows((prev) => prev.map((o) => {
+          const result = ordersResult[o.shopifyOrderId]?.results;
+          if (!result) return o;
+          return { ...o, lineItems: o.lineItems.map((li) => { const m = result.find((r: any) => r.variantId === li.variantId); return m ? { ...li, mondayStatus: m.status, mondayMismatches: m.mismatches } : li; }) };
+        }));
+      } catch (e) { console.error("Failed to fetch Monday status", e); }
+    })();
+    return () => { cancelled = true; };
+  }, [allowStatusPoll, rows.map((o) => o.id).join(","), shop]);
+
+  // ── Polling for field changes pushed via webhook ──
+  // Skip on detail page — detail uses one lineIndexId fetch (avoids wrong-line race).
+  useEffect(() => {
+    if (isDetailPage) return;
+    if (!rows || rows.length === 0) return;
+    let cancelled = false;
+    const pollFieldUpdates = async () => {
+      try {
+        const results = await Promise.all(dedupeOrders(rows).map(async (order) => {
+          try {
+            const res = await fetch(`/api/order-status?orderId=${encodeURIComponent(order.shopifyOrderId)}&shop=${encodeURIComponent(shop)}`);
+            if (!res.ok) return null;
+            const json = await res.json();
+            return { orderId: order.shopifyOrderId, lineItems: json.lineItems ?? [] };
+          } catch { return null; }
+        }));
+        if (cancelled) return;
+        const byOrder: Record<string, any[]> = {};
+        for (const r of results) { if (r) byOrder[r.orderId] = r.lineItems; }
+        if (Object.keys(byOrder).length === 0) return;
+        const applyLatest = (o: FreightOrderRow): FreightOrderRow => {
+          const updates = byOrder[o.shopifyOrderId];
+          if (!updates) return o;
+          return { ...o, lineItems: o.lineItems.map((li) => {
+            const match = updates.find((u: any) => u.variantId === li.variantId);
+            if (!match) return li;
+            return {
+              ...li,
+              eddDate: match.eddDate || li.eddDate,
+              originalEddDate: match.originalEddDate || li.originalEddDate,
+              trackingNumber: match.trackingNumber || li.trackingNumber,
+              freightRef: match.freightRef || li.freightRef,
+              customerStatus: match.customerStatus || li.customerStatus,
+              company: match.carrier || li.company,
+              carrierColor: match.carrierColor || li.carrierColor,
+              customerStatusColor: match.customerStatusColor || li.customerStatusColor,
+              paymentStatusColor: match.paymentStatusColor || li.paymentStatusColor,
+              // Update warehouse text AND color so badge updates immediately
+              warehouseStatus: match.warehouseStatus || li.warehouseStatus,
+              warehouseStatusColor: match.warehouseStatusColor || li.warehouseStatusColor,
+            };
+          }) };
+        };
+        setRows((prev) => prev.map(applyLatest));
+        if (allRows) setAllRows((prev) => (prev ? prev.map(applyLatest) : prev));
+        // Also update open detail view (if any) so the detail badge text updates live
+        setDetailView((prev) => {
+          if (!prev) return prev;
+          const updatedOrder = applyLatest(prev.order);
+          const updatedItem = updatedOrder.lineItems.find((li) => li.variantId === prev.item.variantId) ?? prev.item;
+          return { ...prev, order: updatedOrder, item: updatedItem };
+        });
+      } catch (e) { console.error("Failed to poll line item field updates", e); }
+    };
+    const interval = setInterval(pollFieldUpdates, 15000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isDetailPage, rows.map((o) => o.id).join(","), shop]);
+
+  // Server-driven list already filtered by loader `q` — do not re-filter client-side
+  // (re-filtering kept stale rows when search box was cleared before URL refreshed).
+  const baseFilteredOrders = serverDriven
+    ? (rows || [])
+    : (rows || []).filter((o) => {
+        if (activeTab !== "all") {
+          const hasMatch = o.lineItems.some((li) => {
+            const s = (li.customerStatus || "").toLowerCase();
+            if (activeTab === "awaiting") return s === "confirmed";
+            if (activeTab === "dispatch") return s === "dispatched";
+            if (activeTab === "complete") return s === "delivered";
+            return true;
+          });
+          if (!hasMatch) return false;
+        }
+        if (!search.trim()) return true;
+        const q = search.toLowerCase();
+        return (
+          o.shopifyOrderName.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          o.email.toLowerCase().includes(q) ||
+          (o.city ?? "").toLowerCase().includes(q) ||
+          o.carriers.toLowerCase().includes(q)
+        );
+      });
+
+  const filteredOrders = statusFilter
+    ? baseFilteredOrders
+        .map((o) => ({ ...o, lineItems: o.lineItems.filter((li) => (li.customerStatus || "").toLowerCase() === statusFilter) }))
+        .filter((o) => o.lineItems.length > 0)
+    : baseFilteredOrders;
+
+  const selectableIds = filteredOrders.flatMap((o) => o.lineItems.map((li) => li.id));
+  const toggleSelectAll = () => setSelected(selected.size === selectableIds.length && selectableIds.length > 0 ? new Set() : new Set(selectableIds));
+  const toggleSelect = (id: string) => setSelected((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const allLineItems = (rows || []).flatMap((o) => o.lineItems);
+  const totalLineItems = counts?.totalLineItems ?? allLineItems.length;
+  const awaitingCount = counts?.awaitingCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "confirmed").length;
+  const dispatchedCount = counts?.dispatchedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const pendingNotifyCount = counts?.pendingNotifyCount ?? allLineItems.filter((li) => !li.trackingNumber && (li.customerStatus || "").toLowerCase() === "dispatched").length;
+  const completedCount = counts?.completedCount ?? allLineItems.filter((li) => (li.customerStatus || "").toLowerCase() === "delivered").length;
+
+  const TABS = [
+    { key: "all", label: "All orders", count: null, color: "#2563eb" },
+    { key: "awaiting", label: "Awaiting dispatch", count: awaitingCount, color: "#d97706" },
+    { key: "dispatch", label: "Dispatched", count: dispatchedCount, color: "#2563eb" },
+    { key: "complete", label: "Completed", count: completedCount, color: "#6b7280" },
+  ];
+
+  // ── EDD save ──
+  // Writes eddDate to ops + CommunicationLog (edd_update) via /api/order-status.
+  // Does NOT create Monday/Shopify notes. Field logs hidden in Activity UI for now.
+  const handleEddSave = async () => {
+    if (!eddModal || !eddForm.newEdd) { setEddError("Please select a date before saving"); return; }
+    setEddError(""); setIsSavingEdd(true);
+    const oldEdd = eddModal.item.eddDate;
+    const newEdd = eddForm.newEdd;
+    try {
+      const response = await fetch("/api/order-status", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: eddModal.order.shopifyOrderId,
+          variantId: eddModal.item.variantId,
+          data: { eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd },
+          notifyCustomer: Boolean(eddForm.notifyCustomer),
+          notifyKind: "edd",
+          performedBy: noteAuthor,
+        }),
+      });
+      if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
+      const payload = await response.json();
+      logSyncTrace("EDD modal", payload);
+      const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0 && oldEdd !== newEdd) {
+        console.warn("[EDD] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists } } : prev);
+      const applyEdd = (o: FreightOrderRow): FreightOrderRow => o.id !== eddModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== eddModal.item.variantId ? li : { ...li, eddDate: newEdd, originalEddDate: eddModal.item.originalEddDate || oldEdd || newEdd, cin7Exists }) };
+      setRows((prevRows = []) => prevRows.map(applyEdd));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyEdd) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
+      setEddModal(null); setEddForm({ newEdd: "", reason: "", notifyCustomer: true });
+      if (detailView) {
+        const j = await fetchOrderStatus(
+          shop,
+          detailView.order.shopifyOrderId,
+          detailView.item.variantId,
+          detailView.item.lineIndexId,
+        );
+        if (j) setCommunications(j.communications ?? []);
+      }
+    } catch (e) { setEddError(e instanceof Error ? e.message : "Failed to save EDD"); } finally { setIsSavingEdd(false); }
+  };
+
+  const selectedTargets = (rows || []).flatMap((o) => o.lineItems.filter((li) => selected.has(li.id)).map((li) => ({ order: o, item: li })));
+
+  // Poll job status only — never send from the browser.
+  // Cron (/api/bulk-notify/process) is the only email sender.
+  const startBackgroundPoll = (jobId: string) => {
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/bulk-notify/process?jobId=${jobId}`);
+        const data = await res.json().catch(() => (null));
+        if (data?.ok && data.job) {
+          const j = data.job;
+          setQueueJob({
+            jobId: j.id,
+            status: j.status,
+            sent: j.sentCount,
+            failed: j.failedCount,
+            total: j.totalRecipients,
+          });
+          if (j.status === "PROCESSING" || j.status === "PENDING") {
+            window.setTimeout(poll, 3000);
+          } else {
+            setBackgroundJobId(null);
+            window.localStorage.removeItem("bulkNotifyJobId");
+            window.setTimeout(() => setQueueJob(null), 4000);
+            if (j.status === "FAILED") {
+              setSyncNotification(`❌ Bulk email failed: ${j.sentCount} sent, ${j.failedCount} failed`);
+            } else if (j.status === "CANCELLED") {
+              setSyncNotification(`🚫 Bulk email cancelled: ${j.sentCount} sent before cancellation`);
+            } else {
+              setSyncNotification(`📧 Bulk emails: ${j.sentCount} sent${j.failedCount ? `, ${j.failedCount} failed` : ""}`);
+            }
+            window.setTimeout(() => setSyncNotification(null), 8000);
+            if (detailView) {
+              fetchOrderStatus(
+                shop,
+                detailView.order.shopifyOrderId,
+                detailView.item.variantId,
+                detailView.item.lineIndexId,
+              )
+                .then((json) => {
+                  if (json?.communications) setCommunications(json.communications);
+                })
+                .catch(() => null);
+            }
+          }
+        }
+      } catch { window.setTimeout(poll, 5000); }
+    };
+    poll();
+  };
+
+  const watchQueuedEmail = (jobId: string, recipientCount = 1) => {
+    setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: recipientCount });
+    window.localStorage.setItem("bulkNotifyJobId", jobId);
+    startBackgroundPoll(jobId);
+    setSyncNotification(`📧 Email queued — cron will send (${recipientCount})`);
+    window.setTimeout(() => setSyncNotification(null), 6000);
+  };
+
+  useEffect(() => {
+    const jobId = window.localStorage.getItem("bulkNotifyJobId");
+    if (!jobId || backgroundJobId) return;
+    setBackgroundJobId(jobId);
+    setQueueJob({ jobId, status: "PENDING", sent: 0, failed: 0, total: 0 });
+    startBackgroundPoll(jobId);
+  }, []);
+
+  // ── Unified bulk actions workspace ──
+  const handleBulkActionsRun = async (payload: BulkActionsPayload): Promise<BulkActionsResult> => {
+    if (selectedTargets.length === 0) throw new Error("No line items selected");
+    const items = selectedTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+    const res = await fetch("/api/bulk-actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, actions: payload, performedBy: noteAuthor, filters: activeFilters }),
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || `API error: ${res.status}`);
+
+    if (Array.isArray(result.results)) {
+      const succeededSet = new Set(
+        result.results.filter((r: any) => r.success).map((r: any) => `${r.orderId}:${r.variantId}`),
+      );
+      const applyUpdates = (o: FreightOrderRow): FreightOrderRow => ({
+        ...o,
+        lineItems: o.lineItems.map((li) => {
+          if (!succeededSet.has(`${o.shopifyOrderId}:${li.variantId}`)) return li;
+          return {
+            ...li,
+            paymentStatus: payload.paymentStatus !== undefined ? payload.paymentStatus : li.paymentStatus,
+            customerStatus: payload.customerStatus !== undefined ? payload.customerStatus : li.customerStatus,
+            supplierContainer: payload.supplier !== undefined ? payload.supplier : li.supplierContainer,
+            eddDate: payload.eddDate !== undefined ? payload.eddDate : li.eddDate,
+            originalEddDate:
+              payload.eddDate !== undefined
+                ? li.originalEddDate || li.eddDate || payload.eddDate
+                : li.originalEddDate,
+          };
+        }),
+      });
+      setRows((prev = []) => prev.map(applyUpdates));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyUpdates) : prev));
+    }
+
+    setSelected(new Set());
+
+    // Refresh Activity & History if the open detail row was part of this bulk run
+    if (detailView && Array.isArray(result.results)) {
+      const touched = result.results.some(
+        (r: any) =>
+          r.success &&
+          r.orderId === detailView.order.shopifyOrderId &&
+          r.variantId === detailView.item.variantId,
+      );
+      if (touched) {
+        try {
+          const logJson = await fetchOrderStatus(
+            shop,
+            detailView.order.shopifyOrderId,
+            detailView.item.variantId,
+            detailView.item.lineIndexId,
+          );
+          if (logJson) {
+            const line = findStatusLine(logJson, detailView.item.variantId);
+            setNotes(parseNotesString(line?.notes ?? ""));
+            setCommunications(logJson.communications ?? []);
+          }
+        } catch (e) {
+          console.error("Failed to refresh activity log after bulk", e);
+        }
+      }
+    }
+
+    return {
+      summary: result.summary,
+      notifyJobId: result.notifyJobId,
+      notifyRecipients: result.notifyRecipients,
+      results: result.results,
+    };
+  };
+
+  const handleBulkActionsClose = () => {
+    setBulkActionsOpen(false);
+  };
+
+  const handleFreightCsvExport = async (carrier: string) => {
+    if (!selectedTargets.length) {
+      throw new Error("Select at least one operational line item for the export");
+    }
+
+    const exportCarrierLabels: Record<string, string> = {
+      FLIWAYLINEHAUL: "Fliway Linehaul",
+      FLIWAYMIDSIZE: "Fliway Midsize",
+      FLIWAYDEPOT: "Fliway Depot",
+      M2H: "Mainfreight 2Home",
+      NZP: "NZ Post",
+      NZP_AGE_RESTRICTED: "NZ Post Age Restricted",
+      CASTLE: "Castle Parcels",
+    };
+
+    const normalizeCarrierValue = (value: string) => String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const matchesSelectedCarrier = (target: { item: FreightLineItem }, exportType: string) => {
+      const lineCompany = String(target.item.company || "").trim();
+      const lineLabel = getCarrierLabel(lineCompany, Boolean(target.item.isDepot)) || lineCompany;
+      const normalizedLineCompany = normalizeCarrierValue(lineCompany);
+      const normalizedLineLabel = normalizeCarrierValue(lineLabel);
+      const normalizedExportType = normalizeCarrierValue(exportType);
+
+      switch (exportType) {
+        case "FLIWAYLINEHAUL":
+          // Only lines the OMS displays as "Fliway - Linehaul" (non-depot
+          // FLIWAYLINEHAUL carrier). Depot-collection Fliway lines display as
+          // "Depot - Fliway" and must go through the Fliway Depot export.
+          return (
+            !Boolean(target.item.isDepot) &&
+            (normalizedLineCompany === "fliwaylinehaul" || normalizedLineLabel === "fliwaylinehaul")
+          );
+        case "FLIWAYMIDSIZE":
+          return normalizedLineCompany === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsize" || normalizedLineLabel === "fliwaymidsizedepot";
+        case "FLIWAYDEPOT":
+          // Only Fliway depot lines go in the Fliway Depot CSV. A depot line
+          // from another carrier (e.g. MAINFREIGHT -> "MF Depot", TGE) must
+          // NOT match here — gate on the canonical Fliway company first, not
+          // just the generic isDepot delivery method.
+          return Boolean(target.item.isDepot) && (
+            normalizedLineCompany === "fliwaylinehaul" ||
+            normalizedLineCompany === "fliwaymidsize" ||
+            normalizedLineCompany === "fliwaydepot" ||
+            normalizedLineCompany === "fliway" ||
+            normalizedLineLabel === "depotfliway" ||
+            normalizedLineLabel === "fliwaydepot" ||
+            normalizedLineLabel === "fliwaylinehauldepot" ||
+            normalizedLineLabel === "fliwaymidsizedepot"
+          );
+        case "M2H": {
+          const isHomeDeliveryMainfreight = !Boolean(target.item.isDepot) && (normalizedLineCompany === "mainfreight" || normalizedLineLabel === "mainfreight");
+          return (
+            normalizedLineCompany === "m2h" ||
+            normalizedLineLabel === "m2h" ||
+            normalizedLineLabel === "mainfreight2home" ||
+            normalizedLineLabel === "mainfreightdelivery" ||
+            normalizedLineLabel === "m2hdelivery" ||
+            isHomeDeliveryMainfreight
+          );
+        }
+        case "NZP":
+          return normalizedLineCompany === "nzp" || normalizedLineLabel === "nzp";
+        case "NZP_AGE_RESTRICTED":
+          return normalizedLineCompany === "nzpagerestricted" || normalizedLineLabel === "nzpagerestricted" || normalizedLineLabel === "nzpostagerestricted";
+        case "CASTLE":
+          return normalizedLineCompany === "castle" || normalizedLineLabel === "castle" || normalizedLineLabel === "castleparcels";
+        default:
+          return normalizedLineCompany === normalizedExportType || normalizedLineLabel === normalizedExportType;
+      }
+    };
+
+    const matchingTargets = selectedTargets.filter((target) => matchesSelectedCarrier(target, carrier));
+    if (!matchingTargets.length) {
+      const label = exportCarrierLabels[carrier] || carrier;
+      throw new Error(`No selected line items match the selected ${label} export type.`);
+    }
+
+    const items = matchingTargets.map((t) => ({ orderId: t.order.shopifyOrderId, variantId: t.item.variantId }));
+    const res = await fetch("/api/freight-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "export", carrier, items }),
+    });
+    const payload = await res.json();
+    if (!res.ok) throw new Error(payload.error || `API error: ${res.status}`);
+    const skipped: Array<{ orderId: string; variantId: string; error?: string }> = Array.isArray(payload.skipped) ? payload.skipped : [];
+    const blob = new Blob([payload.csv], { type: "text/csv;charset=utf-8" });
+    const link = document.createElement("a");
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const d = new Date();
+    const date = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const time = `${pad(d.getHours())}-${pad(d.getMinutes())}-${pad(d.getSeconds())}`;
+    const fileBase = String(carrier || "export").toLowerCase();
+    const fileName = `${fileBase}_${date}_${time}.csv`;
+    link.href = URL.createObjectURL(blob);
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    return {
+      summary: { total: items.length, succeeded: items.length - skipped.length, failed: skipped.length },
+      results: skipped.map((s) => ({ orderId: s.orderId, variantId: s.variantId, success: false, error: s.error })),
+    } as BulkActionsResult;
+  };
+
+  // ── Tracking save ──
+  // Writes tracking/freightRef + CommunicationLog (tracking_update) via API.
+  // Carrier is read-only (set at checkout per line item). Does NOT sync to Shopify.
+  const handleTrackingSave = async () => {
+    if (!trackingModal || !trackingForm.trackingNumber) { setTrackingError("Please enter a tracking number before saving"); return; }
+    setTrackingError(""); setIsSavingTracking(true);
+    const newFreightRef = trackingForm.freightRef.trim();
+    try {
+      const response = await fetch("/api/order-status", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: trackingModal.order.shopifyOrderId,
+          variantId: trackingModal.item.variantId,
+          data: {
+            trackingNumber: trackingForm.trackingNumber,
+            freightRef: newFreightRef,
+          },
+          notifyCustomer: Boolean(trackingForm.notifyCustomer),
+          notifyKind: "tracking",
+          performedBy: noteAuthor,
+        }),
+      });
+      if (!response.ok) { const e = await response.json(); throw new Error(e.error || `API error: ${response.status}`); }
+      const payload = await response.json();
+      logSyncTrace("Tracking modal", payload);
+      const cin7Exists = Boolean(payload.cin7Exists);
+      if (payload.activityLogged === 0) {
+        console.warn("[Tracking] Saved but no CommunicationLog row — check api.order-status field logging");
+      }
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: trackingForm.trackingNumber, freightRef: newFreightRef, cin7Exists } } : prev);
+      const applyTrack = (o: FreightOrderRow): FreightOrderRow => o.id !== trackingModal.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== trackingModal.item.variantId ? li : { ...li, trackingNumber: trackingForm.trackingNumber, freightRef: newFreightRef, cin7Exists }) };
+      setRows((prevRows = []) => prevRows.map(applyTrack));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyTrack) : prev);
+      if (payload.notifyJobId) watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
+      setTrackingModal(null); setTrackingForm({ carrier: "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true });
+      if (detailView) {
+        const j = await fetchOrderStatus(
+          shop,
+          detailView.order.shopifyOrderId,
+          detailView.item.variantId,
+          detailView.item.lineIndexId,
+        );
+        if (j) setCommunications(j.communications ?? []);
+      }
+    } catch (e) { setTrackingError(e instanceof Error ? e.message : "Failed to save tracking"); } finally { setIsSavingTracking(false); }
+  };
+
+  // ── Dispatch & Freight: panel Edit opens EDD only (carrier/tracking stay read-only / via Tracking btn) ──
+  const handleDispatchEdit = () => {
+    if (!detailView) return;
+    setEddModal({ order: detailView.order, item: detailView.item });
+    setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: true });
+    setEddError("");
+  };
+  const handleDispatchSave = async () => {
+    if (!detailView) return;
+    setIsSavingDispatch(true); setEditDispatchError("");
+    try {
+      const data: Record<string, string> = {};
+      if (editDispatchForm.trackingNumber !== (detailView.item.trackingNumber || "")) data.trackingNumber = editDispatchForm.trackingNumber;
+      if (editDispatchForm.freightRef !== (detailView.item.freightRef || "")) data.freightRef = editDispatchForm.freightRef;
+      if (Object.keys(data).length === 0) { setEditDispatchModal(false); return; }
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
+      const payload = await res.json(); logSyncTrace("Dispatch edit", payload); const cin7Exists = Boolean(payload.cin7Exists);
+      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, trackingNumber: data.trackingNumber || li.trackingNumber, freightRef: data.freightRef || li.freightRef, cin7Exists }) };
+      setRows((prev) => prev.map(apply));
+      if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, trackingNumber: data.trackingNumber || prev.item.trackingNumber, freightRef: data.freightRef || prev.item.freightRef, cin7Exists } } : prev);
+      setEditDispatchModal(false); setSyncNotification("Dispatch & Freight updated & synced"); window.setTimeout(() => setSyncNotification(null), 4500);
+    } catch (e) { setEditDispatchError(e instanceof Error ? e.message : "Failed to save"); } finally { setIsSavingDispatch(false); }
+  };
+
+  // ── Operational save ──
+  const handleAmendOpen = async () => {
+    if (!detailView) return;
+    setAmendError("");
+    setIsSavingAmend(false);
+    try {
+      const json = await fetchOrderAmendments(
+        shop,
+        detailView.order.shopifyOrderId,
+        detailView.item.variantId,
+      );
+      if (!json?.ok) throw new Error(json?.error || "Failed to load order");
+      const d = json.draft;
+      setAmendForm({
+        firstName: d.firstName || "",
+        lastName: d.lastName || "",
+        email: d.email || "",
+        phone: d.phone || "",
+        address1: d.address1 || "",
+        address2: d.address2 || "",
+        city: d.city || "",
+        province: d.province || "",
+        zip: d.zip || "",
+        country: d.country || "",
+        deliveryInstructions: d.deliveryInstructions || "",
+      });
+      setAmendModalOpen(true);
+    } catch (e) {
+      setSyncNotification(e instanceof Error ? e.message : "Failed to open amend form");
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    }
+  };
+
+  const handleAmendSave = async (opts: { cancelLineItem?: boolean; cancelOrder?: boolean } = {}) => {
+    if (!detailView) return;
+    if (opts.cancelOrder && !window.confirm("Cancel all line items on this order? This sets Customer status to Cancelled.")) return;
+    if (opts.cancelLineItem && !window.confirm("Cancel this line item? Customer status → Cancelled.")) return;
+    setIsSavingAmend(true);
+    setAmendError("");
+    try {
+      const { ok, json } = await postOrderAmendments({
+        shop,
+        orderId: detailView.order.shopifyOrderId,
+        variantId: detailView.item.variantId,
+        performedBy: noteAuthor,
+        contact: {
+          firstName: amendForm.firstName,
+          lastName: amendForm.lastName,
+          email: amendForm.email,
+          phone: amendForm.phone,
+        },
+        address: {
+          firstName: amendForm.firstName,
+          lastName: amendForm.lastName,
+          address1: amendForm.address1,
+          address2: amendForm.address2,
+          city: amendForm.city,
+          province: amendForm.province,
+          zip: amendForm.zip,
+          country: amendForm.country,
+          phone: amendForm.phone,
+        },
+        deliveryInstructions: amendForm.deliveryInstructions,
+        cancelLineItem: Boolean(opts.cancelLineItem),
+        cancelOrder: Boolean(opts.cancelOrder),
+      });
+      if (!ok || !json.ok) throw new Error(json.error || "Amendment failed");
+
+      const fullAddress = [amendForm.address1, amendForm.address2, amendForm.city, amendForm.province, amendForm.zip, amendForm.country]
+        .filter(Boolean)
+        .join(", ");
+      const customerName = `${amendForm.firstName} ${amendForm.lastName}`.trim();
+      const applyOrder = (o: FreightOrderRow): FreightOrderRow => {
+        if (o.id !== detailView.order.id) return o;
+        return {
+          ...o,
+          customerName: customerName || o.customerName,
+          email: amendForm.email || o.email,
+          phone: amendForm.phone || o.phone,
+          fullAddress: fullAddress || o.fullAddress,
+          city: amendForm.city || o.city,
+          postalCode: amendForm.zip || o.postalCode,
+          lineItems: o.lineItems.map((li) => {
+            if (opts.cancelOrder) return { ...li, customerStatus: "cancelled" };
+            if (opts.cancelLineItem && li.variantId === detailView.item.variantId) {
+              return { ...li, customerStatus: "cancelled" };
+            }
+            return li;
+          }),
+        };
+      };
+      setRows((prev) => prev.map(applyOrder));
+      if (allRows) setAllRows((prev) => (prev ? prev.map(applyOrder) : prev));
+      setDetailView((prev) =>
+        prev
+          ? {
+              ...prev,
+              order: applyOrder(prev.order),
+              item: opts.cancelOrder || opts.cancelLineItem
+                ? { ...prev.item, customerStatus: "cancelled" }
+                : prev.item,
+            }
+          : prev,
+      );
+      setAmendModalOpen(false);
+      const n = json.changes?.length ?? 0;
+      setSyncNotification(
+        n
+          ? `Order amended (${n} change${n === 1 ? "" : "s"})${json.shopifyOk === false ? " — Shopify sync issue" : " & synced"}`
+          : "No changes",
+      );
+      window.setTimeout(() => setSyncNotification(null), 5000);
+    } catch (e) {
+      setAmendError(e instanceof Error ? e.message : "Failed to save amendment");
+    } finally {
+      setIsSavingAmend(false);
+    }
+  };
+
+  const handleOpsEdit = () => {
+    if (!detailView) return;
+    setEditOpsForm({
+      customerStatus: normalizeStatusValue(CUSTOMER_STATUS_OPTIONS, detailView.item.customerStatus || ""),
+      warehouseStatus: normalizeStatusValue(WAREHOUSE_STATUS_OPTIONS, detailView.item.warehouseStatus || ""),
+      dispatchStatus: normalizeStatusValue(DISPATCH_STATUS_OPTIONS, detailView.item.dispatchStatus || ""),
+      deliveryStatus: normalizeStatusValue(DELIVERY_STATUS_OPTIONS, detailView.item.deliveryStatus || ""),
+      poNumber: detailView.item.poNumber || "",
+      depositPaid: detailView.item.depositPaid || "",
+      balanceDue: detailView.item.balanceDue || "",
+      paymentStatus: normalizeStatusValue(PAYMENT_STATUS_OPTIONS, detailView.item.paymentStatus || ""),
+      supplierContainer: detailView.item.supplierContainer || "",
+      receivedDate: detailView.item.receivedDate || "",
+      portArrivalDate: detailView.item.portArrivalDate || "",
+      inTransitDate: detailView.item.inTransitDate || "",
+    });
+    setEditOpsError(""); setEditOpsModal(true);
+  };
+  const handleOpsSave = async () => {
+    if (!detailView) return;
+    setIsSavingOps(true); setEditOpsError("");
+    try {
+      const data: Record<string, string> = {};
+      if (editOpsForm.customerStatus !== (detailView.item.customerStatus || "")) data.customerStatus = editOpsForm.customerStatus;
+      if (editOpsForm.warehouseStatus !== (detailView.item.warehouseStatus || "")) data.warehouseStatus = editOpsForm.warehouseStatus;
+      if (editOpsForm.dispatchStatus !== (detailView.item.dispatchStatus || "")) data.dispatchStatus = editOpsForm.dispatchStatus;
+      if (editOpsForm.deliveryStatus !== (detailView.item.deliveryStatus || "")) data.deliveryStatus = editOpsForm.deliveryStatus;
+      if (editOpsForm.poNumber !== (detailView.item.poNumber || "")) data.poNumber = editOpsForm.poNumber;
+      if (editOpsForm.depositPaid !== (detailView.item.depositPaid || "")) data.depositPaid = editOpsForm.depositPaid;
+      if (editOpsForm.balanceDue !== (detailView.item.balanceDue || "")) data.balanceDue = editOpsForm.balanceDue;
+      if (editOpsForm.paymentStatus !== (detailView.item.paymentStatus || "")) data.paymentStatus = editOpsForm.paymentStatus;
+      if (editOpsForm.supplierContainer !== (detailView.item.supplierContainer || "")) data.supplierContainer = editOpsForm.supplierContainer;
+      if (editOpsForm.receivedDate !== (detailView.item.receivedDate || "")) data.receivedDate = editOpsForm.receivedDate;
+      if (editOpsForm.portArrivalDate !== (detailView.item.portArrivalDate || "")) data.portArrivalDate = editOpsForm.portArrivalDate;
+      if (editOpsForm.inTransitDate !== (detailView.item.inTransitDate || "")) data.inTransitDate = editOpsForm.inTransitDate;
+      if (Object.keys(data).length === 0) { setEditOpsModal(false); return; }
+      const res = await fetch("/api/order-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId, variantId: detailView.item.variantId, data, performedBy: noteAuthor }) });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `API error: ${res.status}`); }
+      const payload = await res.json();
+      logSyncTrace("Operational edit", payload);
+      const apply = (o: FreightOrderRow): FreightOrderRow => o.id !== detailView.order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== detailView.item.variantId ? li : { ...li, customerStatus: data.customerStatus ?? li.customerStatus, warehouseStatus: data.warehouseStatus ?? li.warehouseStatus, dispatchStatus: data.dispatchStatus ?? li.dispatchStatus, deliveryStatus: data.deliveryStatus ?? li.deliveryStatus, poNumber: data.poNumber ?? li.poNumber, depositPaid: data.depositPaid ?? li.depositPaid, balanceDue: data.balanceDue ?? li.balanceDue, paymentStatus: data.paymentStatus ?? li.paymentStatus, supplierContainer: data.supplierContainer ?? li.supplierContainer, receivedDate: data.receivedDate ?? li.receivedDate, portArrivalDate: data.portArrivalDate ?? li.portArrivalDate, inTransitDate: data.inTransitDate ?? li.inTransitDate }) };
+      setRows((prev) => prev.map(apply));
+      if (allRows) setAllRows((prev) => prev ? prev.map(apply) : prev);
+      setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, customerStatus: data.customerStatus ?? prev.item.customerStatus, warehouseStatus: data.warehouseStatus ?? prev.item.warehouseStatus, dispatchStatus: data.dispatchStatus ?? prev.item.dispatchStatus, deliveryStatus: data.deliveryStatus ?? prev.item.deliveryStatus, poNumber: data.poNumber ?? prev.item.poNumber, depositPaid: data.depositPaid ?? prev.item.depositPaid, balanceDue: data.balanceDue ?? prev.item.balanceDue, paymentStatus: data.paymentStatus ?? prev.item.paymentStatus, supplierContainer: data.supplierContainer ?? prev.item.supplierContainer, receivedDate: data.receivedDate ?? prev.item.receivedDate, portArrivalDate: data.portArrivalDate ?? prev.item.portArrivalDate, inTransitDate: data.inTransitDate ?? prev.item.inTransitDate } } : prev);
+      setEditOpsModal(false); setSyncNotification("Operational data updated & synced"); window.setTimeout(() => setSyncNotification(null), 4500);
+    } catch (e) { setEditOpsError(e instanceof Error ? e.message : "Failed to save"); } finally { setIsSavingOps(false); }
+  };
+
+  const handleFixCin7Mismatch = async (order: FreightOrderRow, item: FreightLineItem) => {
+    const key = `${order.id}-${item.variantId}`;
+    if (cin7FixingId) return; setCin7FixingId(key);
+    try {
+      const res = await fetch("/api/cin7-update", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId, variantId: item.variantId, trackingNumber: item.trackingNumber, eddDate: item.eddDate, carrier: item.company, fields: item.cin7Mismatches }) });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok || !payload.ok) throw new Error(payload.error || "Failed to sync mismatched fields to Cin7");
+      const pulled = payload.updated || {};
+      const applyMatch = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== item.variantId ? li : { ...li, trackingNumber: pulled.trackingNumber ?? li.trackingNumber, eddDate: pulled.eddDate ?? li.eddDate, company: pulled.carrier ?? li.company, cin7Status: "match" as const, cin7Mismatches: [] }) };
+      setRows((prev) => prev.map(applyMatch));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyMatch) : prev);
+      setSyncNotification(payload.direction === "pulled" ? "Pulled latest from Cin7" : "Cin7 fields updated");
+    } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to update Cin7"); } finally { setCin7FixingId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
+  };
+
+  const handleSyncMondayItem = async (order: FreightOrderRow, item: FreightLineItem) => {
+    const key = `${order.id}-${item.variantId}-monday`;
+    if (mondayFixingId) return; setMondayFixingId(key);
+    try {
+      const res = await fetch("/api/monday-sync", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, orderId: order.shopifyOrderId, variantId: item.variantId, itemName: `${order.shopifyOrderName}${item.letterSuffix}`, row: { customerName: order.customerName, email: order.email, carriers: item.company, trackingNumber: item.trackingNumber, eddDate: item.eddDate, originalEddDate: item.originalEddDate, productTitle: item.title ?? "", sku: item.sku ?? "", boxes: item.boxes ?? "", customerStatus: item.customerStatus, paymentStatus: item.paymentStatus ?? "" } }) });
+      if (!res.ok) throw new Error("Failed to sync Monday");
+      const json = await res.json();
+      const updated = json.updated || {};
+      const applyRow = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li) => li.variantId !== item.variantId ? li : { ...li, ...updated, mondayStatus: "match", mondayMismatches: [] }) };
+      setRows((prev) => prev.map(applyRow));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyRow) : prev);
+      if (detailView?.order.id === order.id && detailView.item.variantId === item.variantId) {
+        setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, ...updated, mondayStatus: "match", mondayMismatches: [] } } : prev);
+      }
+      setSyncNotification(json.syncStatus === "created" ? "Created in Monday" : "Monday fields updated");
+    } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to sync Monday"); } finally { setMondayFixingId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
+  };
+
+  const handleRefreshCin7Status = async (ordersArg?: FreightOrderRow[]) => {
+    const useOrders = dedupeOrders(ordersArg ?? rows);
+    if (isRefreshingCin7 || useOrders.length === 0) return; setIsRefreshingCin7(true);
+    try {
+      const res = await fetch("/api/cin7-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, force: true, orders: useOrders.map((order) => ({ orderId: order.shopifyOrderId, lineItems: order.lineItems.map((li) => ({ variantId: li.variantId, trackingNumber: li.trackingNumber, eddDate: li.eddDate, company: li.company })) })) }) });
+      if (!res.ok) return;
+      const json = await res.json();
+      const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+      const applyResults = (o: FreightOrderRow): FreightOrderRow => { const result = ordersResult[o.shopifyOrderId]?.results; if (!result) return o; return { ...o, lineItems: o.lineItems.map((li) => { const m = result.find((r: any) => r.variantId === li.variantId); return m ? { ...li, cin7Status: m.status, cin7Mismatches: m.mismatches } : li; }) }; };
+      setRows((prev) => prev.map(applyResults));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyResults) : prev);
+    } catch (e) { console.error("Failed to force-refresh Cin7 status", e); } finally { setIsRefreshingCin7(false); }
+  };
+
+  const handleRefreshMondayStatus = async (ordersArg?: FreightOrderRow[]) => {
+    const useOrders = dedupeOrders(ordersArg ?? rows);
+    if (isRefreshingMonday || useOrders.length === 0) return; setIsRefreshingMonday(true);
+    try {
+      const res = await fetch("/api/monday-status", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ shop, force: true, orders: useOrders.map((order) => ({ orderId: order.shopifyOrderId, lineItems: order.lineItems.map((li) => ({ variantId: li.variantId })) })) }) });
+      if (!res.ok) return;
+      const json = await res.json();
+      const ordersResult: Record<string, { results: any[] }> = json.orders ?? {};
+      const applyResults = (o: FreightOrderRow): FreightOrderRow => { const result = ordersResult[o.shopifyOrderId]?.results; if (!result) return o; return { ...o, lineItems: o.lineItems.map((li) => { const m = result.find((r: any) => r.variantId === li.variantId); return m ? { ...li, mondayStatus: m.status, mondayMismatches: m.mismatches } : li; }) }; };
+      setRows((prev) => prev.map(applyResults));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyResults) : prev);
+    } catch (e) { console.error("Failed to force-refresh Monday status", e); } finally { setIsRefreshingMonday(false); }
+  };
+
+  const handleRefreshStatuses = async () => {
+    const source = dedupeOrders(allRows ?? rows);
+    const ordersToCheck = source.slice(0, 100);
+    if (ordersToCheck.length === 0) return;
+    await Promise.allSettled([handleRefreshCin7Status(ordersToCheck), handleRefreshMondayStatus(ordersToCheck)]);
+  };
+
+  const handleCreateCin7Order = async (order: FreightOrderRow, item?: FreightLineItem) => {
+    if (creatingCin7OrderId) return; setCreatingCin7OrderId(order.id);
+    try {
+      const response = await fetch("/api/cin7-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shop,
+          orderId: order.shopifyOrderId,
+          variantId: item?.variantId ?? undefined,
+        }),
+      });
+      if (!response.ok) { const errorJson = await response.json().catch(() => null); throw new Error(errorJson?.error || `Failed to create Cin7 order (${response.status})`); }
+      const payload = await response.json();
+      if (!payload.ok) throw new Error(payload.error || "Failed to create Cin7 order");
+      const cin7Exists = Boolean(payload.cin7SalesOrderId && payload.cin7SalesOrderId !== "pending");
+      const cin7SalesOrderUrl = String(payload.cin7SalesOrderUrl ?? "");
+      const applyCin7 = (o: FreightOrderRow): FreightOrderRow => o.id !== order.id ? o : { ...o, lineItems: o.lineItems.map((li: any) => {
+        const matchesTarget = item ? li.variantId === item.variantId : true;
+        return matchesTarget ? { ...li, cin7Exists, cin7SalesOrderId: cin7Exists ? String(payload.cin7SalesOrderId) : li.cin7SalesOrderId, cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl, cin7Status: cin7Exists ? "match" : "missing", cin7Mismatches: [] } : li;
+      }) };
+      setRows((prevRows = []) => prevRows.map(applyCin7));
+      if (allRows) setAllRows((prev) => prev ? prev.map(applyCin7) : prev);
+      if (detailView?.order.id === order.id && item && detailView.item.variantId === item.variantId) setDetailView((prev) => prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev);
+      setSyncNotification("Cin7 order created successfully");
+    } catch (e) { setSyncNotification(e instanceof Error ? e.message : "Failed to create Cin7 order"); } finally { setCreatingCin7OrderId(null); window.setTimeout(() => setSyncNotification(null), 4500); }
+  };
+
+  const handleSync = async () => {
+    if (!detailView) return;
+    setIsSyncing(true);
+    setSyncResultModal(null);
+
+    const lines: Array<{ system: string; ok: boolean; summary: string; details?: string[] }> = [];
+    const orderLabel = `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix || ""}`;
+
+    try {
+      // ── Monday ──
+      try {
+        const res = await fetch("/api/monday-sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            shop,
+            orderId: detailView.order.shopifyOrderId,
+            variantId: detailView.item.variantId,
+            itemName: `${detailView.order.shopifyOrderName}${detailView.item.letterSuffix}`,
+            row: {
+              customerName: detailView.order.customerName,
+              email: detailView.order.email,
+              carriers: detailView.item.company,
+              trackingNumber: detailView.item.trackingNumber,
+              eddDate: detailView.item.eddDate,
+              originalEddDate: detailView.item.originalEddDate,
+              productTitle: detailView.item.title ?? "",
+              sku: detailView.item.sku ?? "",
+              boxes: detailView.item.boxes ?? "",
+              customerStatus: detailView.item.customerStatus,
+              paymentStatus: detailView.item.paymentStatus ?? "",
+            },
+          }),
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || json.ok === false) {
+          lines.push({
+            system: "Monday",
+            ok: false,
+            summary: json.error || `Sync failed (HTTP ${res.status})`,
+          });
+        } else {
+          const syncedKeys = json.syncedFields && typeof json.syncedFields === "object"
+            ? Object.keys(json.syncedFields)
+            : [];
+          const blankKeys = Array.isArray(json.blankFields) ? json.blankFields : [];
+          const pulse = json.mondayItemName || orderLabel;
+          const details = [
+            `Pulse: ${pulse}`,
+            json.mondayItemId ? `Item id: ${json.mondayItemId}` : null,
+            syncedKeys.length ? `Fields pushed: ${syncedKeys.slice(0, 12).join(", ")}${syncedKeys.length > 12 ? ` (+${syncedKeys.length - 12} more)` : ""}` : "Fields pushed: (none reported)",
+            blankKeys.length ? `Blank on Monday: ${blankKeys.slice(0, 8).join(", ")}${blankKeys.length > 8 ? "…" : ""}` : null,
+          ].filter(Boolean) as string[];
+          lines.push({
+            system: "Monday",
+            ok: true,
+            summary: json.syncStatus === "created" ? "Created / linked pulse" : "Updated pulse from OMS",
+            details,
+          });
+          const applySync = (o: FreightOrderRow): FreightOrderRow =>
+            o.id !== detailView.order.id
+              ? o
+              : {
+                  ...o,
+                  lineItems: o.lineItems.map((li: any) =>
+                    li.variantId !== detailView.item.variantId ? li : { ...li, ...json.updated },
+                  ),
+                };
+          setDetailView((prev) =>
+            prev ? { ...prev, item: { ...prev.item, ...json.updated } } : prev,
+          );
+          setRows((prevRows = []) => prevRows.map(applySync));
+          if (allRows) setAllRows((prev) => (prev ? prev.map(applySync) : prev));
+        }
+      } catch (e) {
+        lines.push({
+          system: "Monday",
+          ok: false,
+          summary: e instanceof Error ? e.message : "Monday sync failed",
+        });
+      }
+
+      // ── Cin7 ──
+      try {
+        if (!detailView.item.cin7Exists) {
+          const cin7Res = await fetch("/api/cin7-create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ shop, orderId: detailView.order.shopifyOrderId }),
+          });
+          const cin7Payload = await cin7Res.json().catch(() => ({}));
+          if (cin7Res.ok && cin7Payload.ok !== false) {
+            const cin7Exists = Boolean(
+              cin7Payload.cin7SalesOrderId && cin7Payload.cin7SalesOrderId !== "pending",
+            );
+            const cin7SalesOrderUrl = String(cin7Payload.cin7SalesOrderUrl ?? "");
+            lines.push({
+              system: "Cin7",
+              ok: cin7Exists,
+              summary: cin7Exists
+                ? "Created Sales Order (linked)"
+                : cin7Payload.error || "Create returned no Sales Order id",
+              details: cin7Exists
+                ? [`Sales Order id: ${cin7Payload.cin7SalesOrderId}`]
+                : undefined,
+            });
+            const applyCin7Created = (o: FreightOrderRow): FreightOrderRow =>
+              o.id !== detailView.order.id
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) => ({
+                      ...li,
+                      cin7Exists,
+                      cin7SalesOrderId: cin7Exists ? String(cin7Payload.cin7SalesOrderId) : li.cin7SalesOrderId,
+                      cin7SalesOrderUrl: cin7SalesOrderUrl || li.cin7SalesOrderUrl,
+                      cin7Status: cin7Exists ? ("match" as const) : ("missing" as const),
+                      cin7Mismatches: [],
+                    })),
+                  };
+            setRows((prev) => prev.map(applyCin7Created));
+            if (allRows) setAllRows((prev) => (prev ? prev.map(applyCin7Created) : prev));
+            setDetailView((prev) =>
+              prev ? { ...prev, item: { ...prev.item, cin7Exists, cin7SalesOrderUrl: cin7SalesOrderUrl || prev.item.cin7SalesOrderUrl } } : prev,
+            );
+          } else {
+            lines.push({
+              system: "Cin7",
+              ok: false,
+              summary: cin7Payload.error || `Create failed (HTTP ${cin7Res.status})`,
+            });
+          }
+        } else {
+          const cin7Res = await fetch("/api/cin7-update", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop,
+              orderId: detailView.order.shopifyOrderId,
+              variantId: detailView.item.variantId,
+              trackingNumber: detailView.item.trackingNumber,
+              eddDate: detailView.item.eddDate,
+              carrier: detailView.item.company,
+              fields: ["trackingNumber", "eddDate", "carrier"],
+              forceCarrier: true,
+            }),
+          });
+          const cin7Payload = await cin7Res.json().catch(() => ({}));
+          if (cin7Res.ok && cin7Payload.ok) {
+            const pulled = cin7Payload.updated || {};
+            const direction = cin7Payload.direction === "pushed" ? "Pushed OMS → Cin7" : "Pulled Cin7 → OMS";
+            const fieldBits = [
+              pulled.trackingNumber !== undefined ? `tracking=${pulled.trackingNumber || "—"}` : null,
+              pulled.eddDate !== undefined ? `edd=${pulled.eddDate || "—"}` : null,
+              pulled.carrier !== undefined ? `carrier=${pulled.carrier || "—"}` : null,
+            ].filter(Boolean) as string[];
+            lines.push({
+              system: "Cin7",
+              ok: true,
+              summary: direction,
+              details: [
+                "Compared: tracking #, EDD, carrier",
+                fieldBits.length ? `Updated fields: ${fieldBits.join(", ")}` : "No field values changed",
+              ],
+            });
+            const applyCin7Updated = (o: FreightOrderRow): FreightOrderRow =>
+              o.id !== detailView.order.id
+                ? o
+                : {
+                    ...o,
+                    lineItems: o.lineItems.map((li) =>
+                      li.variantId !== detailView.item.variantId
+                        ? li
+                        : {
+                            ...li,
+                            trackingNumber: pulled.trackingNumber ?? li.trackingNumber,
+                            eddDate: pulled.eddDate ?? li.eddDate,
+                            company: pulled.carrier ?? li.company,
+                            cin7Status: "match" as const,
+                            cin7Mismatches: [],
+                          },
+                    ),
+                  };
+            setRows((prev) => prev.map(applyCin7Updated));
+            if (allRows) setAllRows((prev) => (prev ? prev.map(applyCin7Updated) : prev));
+            setDetailView((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    item: {
+                      ...prev.item,
+                      trackingNumber: pulled.trackingNumber ?? prev.item.trackingNumber,
+                      eddDate: pulled.eddDate ?? prev.item.eddDate,
+                      company: pulled.carrier ?? prev.item.company,
+                      cin7Status: "match",
+                      cin7Mismatches: [],
+                    },
+                  }
+                : prev,
+            );
+          } else {
+            lines.push({
+              system: "Cin7",
+              ok: false,
+              summary: cin7Payload.error || `Update failed (HTTP ${cin7Res.status})`,
+            });
+          }
+        }
+      } catch (cin7Err) {
+        console.error("Cin7 sync failed", cin7Err);
+        lines.push({
+          system: "Cin7",
+          ok: false,
+          summary: cin7Err instanceof Error ? cin7Err.message : "Cin7 sync failed",
+        });
+      }
+
+      // Refresh activity
+      const notesJson = await fetchOrderStatus(
+        shop,
+        detailView.order.shopifyOrderId,
+        detailView.item.variantId,
+        detailView.item.lineIndexId,
+      );
+      if (notesJson) {
+        const line = findStatusLine(notesJson, detailView.item.variantId);
+        setNotes(parseNotesString(line?.notes ?? ""));
+      }
+
+      const anyFail = lines.some((l) => !l.ok);
+      setSyncResultModal({
+        title: anyFail ? `Sync finished with errors — ${orderLabel}` : `Sync complete — ${orderLabel}`,
+        lines,
+      });
+      console.log("[SYNC RESULT]", { orderLabel, lines });
+    } catch (e) {
+      console.error("Sync failed", e);
+      setSyncResultModal({
+        title: `Sync failed — ${orderLabel}`,
+        lines: [
+          {
+            system: "OMS",
+            ok: false,
+            summary: e instanceof Error ? e.message : "Unexpected sync error",
+          },
+        ],
+      });
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="fo-root">
+        {/* Navbar */}
+        <nav className="fo-nav">
+          <div className="fo-nav-left">
+            <div className="fo-logo-box">CD</div>
+            <span className="fo-nav-title">ContainerDoor OMS</span>
+            {!isDetailPage ? (
+              <div className="fo-nav-search-wrap">
+                <span className="fo-nav-search-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+                  </svg>
+                </span>
+                <input
+                  className="fo-nav-search"
+                  placeholder="Search by order #, customer, SKU, product ID, tracking…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") clearSearch();
+                  }}
+                />
+                {search ? (
+                  <button type="button" className="fo-nav-search-clear" onClick={clearSearch} title="Clear search" aria-label="Clear search">
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+          <div className="fo-nav-right">
+            <NavQueueJobs
+              shop={shop}
+              job={queueJob ?? (backgroundJobId ? { jobId: backgroundJobId, status: "PROCESSING", sent: 0, failed: 0, total: 0 } : null)}
+            />
+            {navbarRight}
+          </div>
+        </nav>
+
+        <div className="fo-body">
+          {/* Stat cards */}
+          {!isDetailPage && (
+            <div className="fo-stats">
+              {[
+                { label: "Total line orders", value: totalLineItems, color: "#111827" },
+                { label: "Awaiting dispatch", value: awaitingCount, color: "#d97706" },
+                { label: "Dispatched today", value: dispatchedCount, color: "#2563eb" },
+                { label: "Pending notify", value: pendingNotifyCount, color: "#dc2626" },
+              ].map(({ label, value, color }) => (
+                <div className="fo-stat" key={label}>
+                  <div className="fo-stat-label">{label}</div>
+                  <div className="fo-stat-value" style={{ color }}>{value}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="fo-card">
+            {/* Tabs */}
+            {!isDetailPage && (
+              <div className="fo-tabs">
+                {TABS.map((tab) => (
+                  <button type="button" key={tab.key} className={`fo-tab${activeTab === tab.key ? " active" : ""}`} aria-current={activeTab === tab.key ? "page" : undefined} onClick={() => setTab(tab.key)}>
+                    {tab.label}
+                    <span className="fo-tab-pill" style={activeTab === tab.key ? { background: tab.color, color: "#fff" } : {}}>
+                      {tab.key === "all" ? totalLineItems : tab.count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {/* Toolbar */}
+            {!isDetailPage && (
+              <div className="fo-toolbar">
+                <div className="fo-toolbar-left">
+                  <label className="fo-select-label">
+                    <input type="checkbox" className="fo-checkbox" checked={selected.size === selectableIds.length && selectableIds.length > 0} onChange={toggleSelectAll} />
+                    {selected.size > 0 ? `${selected.size} selected` : "0 selected"}
+                  </label>
+                  {selected.size > 0 && (
+                  <button
+                    type="button"
+                    className="fo-tool-btn"
+                    style={{ background: "#111827", color: "#fff", borderColor: "#111827" }}
+                    onClick={() => setBulkActionsOpen(true)}
+                  >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M12 20h9" /><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                      </svg>
+                      Bulk Actions ({selected.size})
+                    </button>
+                  )}
+                </div>
+                <div className="fo-toolbar-right">
+                  <button
+                    type="button"
+                    className="fo-tool-btn"
+                    onClick={() => setShowFilters(!showFilters)}
+                    aria-expanded={showFilters}
+                    aria-controls="fo-oms-filter-panel"
+                    style={hasActiveFilters || showFilters ? { background: "#eff6ff", borderColor: "#93c5fd", color: "#2563eb" } : {}}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6" /><line x1="8" y1="12" x2="16" y2="12" /><line x1="11" y1="18" x2="13" y2="18" /></svg>
+                    {showFilters ? "Hide filters" : "Filters"}
+                    {activeFilterChips.length > 0 ? ` (${activeFilterChips.length})` : ""}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Active filter chips — always visible when filters applied (even if panel closed) */}
+            {!isDetailPage && activeFilterChips.length > 0 && (
+              <div className="fo-filter-chips">
+                {activeFilterChips.map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    className="fo-filter-chip"
+                    onClick={() => removeFilter(chip.key)}
+                    title={`Remove ${chip.label} filter`}
+                    aria-label={`Remove ${chip.label} filter ${chip.value}`}
+                  >
+                    <span className="fo-filter-chip-label">{chip.label}:</span> {chip.value}
+                    <span className="fo-filter-chip-x" aria-hidden>✕</span>
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="fo-filter-chip-clear"
+                  onClick={() => { clearAllFilters(); }}
+                  aria-label="Clear all filters"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+
+            {/* Filter Panel — stays open after apply so staff can tweak */}
+            {showFilters && !isDetailPage && (
+              <div className="fo-filter-panel" id="fo-oms-filter-panel">
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-customer-status" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Customer status</label>
+                  <select id="fo-filter-customer-status" aria-label="Customer status" className="fo-status-select" value={searchParams.get("tab") === "awaiting" ? "confirmed" : searchParams.get("tab") === "dispatch" ? "dispatched" : searchParams.get("tab") === "complete" ? "delivered" : ""} onChange={(e) => {
+                    const v = e.target.value;
+                    if (!v) setTab("all");
+                    else if (v === "confirmed") setTab("awaiting");
+                    else if (v === "dispatched") setTab("dispatch");
+                    else if (v === "delivered") setTab("complete");
+                  }}>
+                    <option value="">All statuses</option>
+                    <option value="confirmed">Confirmed</option>
+                    <option value="pending">Pending</option>
+                    <option value="dispatched">Dispatched</option>
+                    <option value="delivered">Delivered</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-supplier" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Supplier</label>
+                  <select
+                    id="fo-filter-supplier"
+                    aria-label="Supplier"
+                    className="fo-status-select"
+                    value={stagedFilters.supplier}
+                    onChange={(e) => applyFilters({ supplier: e.target.value })}
+                  >
+                    <option value="">All suppliers</option>
+                    {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-warehouse" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Warehouse status</label>
+                  <select
+                    id="fo-filter-warehouse"
+                    aria-label="Warehouse status"
+                    className="fo-status-select"
+                    value={stagedFilters.warehouseStatus}
+                    onChange={(e) => applyFilters({ warehouseStatus: e.target.value })}
+                  >
+                    <option value="">All</option>
+                    {warehouseStatuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-carrier" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Carrier</label>
+                  <select
+                    id="fo-filter-carrier"
+                    aria-label="Carrier"
+                    className="fo-status-select"
+                    value={stagedFilters.carrier}
+                    onChange={(e) => applyFilters({ carrier: e.target.value })}
+                  >
+                    <option value="">All carriers</option>
+                    {carriers.map((c) => {
+                      const label = getCarrierLabel(c, false) || c;
+                      const { bg, text } = getCarrierStatusStyle(label);
+                      return (
+                        <option key={c} value={c} style={{ background: bg, color: text }}>
+                          {label}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-payment" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>Payment status</label>
+                  <select
+                    id="fo-filter-payment"
+                    aria-label="Payment status"
+                    className="fo-status-select"
+                    value={stagedFilters.paymentStatus}
+                    onChange={(e) => applyFilters({ paymentStatus: e.target.value })}
+                  >
+                    <option value="">All</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Paid">Paid</option>
+                    <option value="Partial">Partial</option>
+                    <option value="Overdue">Overdue</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-edd-from" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD from</label>
+                  <input
+                    id="fo-filter-edd-from"
+                    aria-label="EDD from"
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDate}
+                    onChange={(e) => applyFilters({ eddDate: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "3px" }}>
+                  <label htmlFor="fo-filter-edd-to" style={{ fontSize: "10px", fontWeight: 600, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.04em" }}>EDD to</label>
+                  <input
+                    id="fo-filter-edd-to"
+                    aria-label="EDD to"
+                    type="date"
+                    className="fo-status-select"
+                    value={stagedFilters.eddDateEnd}
+                    onChange={(e) => applyFilters({ eddDateEnd: e.target.value })}
+                    style={{ padding: "6px 8px", fontSize: "13px" }}
+                  />
+                </div>
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    className="fo-tool-btn"
+                    onClick={() => { clearAllFilters(); }}
+                    aria-label="Clear all filters"
+                    style={{ color: "#dc2626", borderColor: "#fecaca", height: "30px" }}
+                  >
+                    Clear all
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="fo-tool-btn"
+                  onClick={() => setShowFilters(false)}
+                  style={{ height: "30px" }}
+                >
+                  Done
+                </button>
+              </div>
+            )}
+
+            {syncNotification && (
+              <div className="fo-sync-progress" style={{ marginTop: "14px", padding: "16px", border: "1px solid #d1fae5", borderRadius: "12px", background: "#ecfdf5", color: "#065f46" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 700 }}>{syncNotification}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Detail View — detail route never falls through to list */}
+            {isDetailPage ? (
+              detailView ? (
+              <div className="fo-detail-wrap">
+                <div className="fo-detail-bar">
+                  <div className="fo-detail-bar-left">
+                    <button type="button" className="fo-icon-btn" aria-label="Back" onClick={() => { if (detailBackHref) { navigate(detailBackHref); } else { navigate("/app"); } }} title="Back">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6" /></svg>
+                    </button>
+                    <span style={{ fontWeight: 700, fontSize: "14px", color: "#111827" }}>{detailView.order.shopifyOrderName}</span>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", padding: "3px 8px", borderRadius: "6px", fontSize: "11px", fontWeight: 700, background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe" }}>
+                      #{detailView.order.shopifyOrderName} <span style={{ background: "#bfdbfe", borderRadius: "3px", padding: "0 4px" }}>{detailView.item.letterSuffix}</span>
+                    </span>
+                    <span className="fo-detail-badge" style={{ background: getCustomerStatusStyle(detailView.item.customerStatus).bg, color: getCustomerStatusStyle(detailView.item.customerStatus).text }}>
+                      {getCustomerStatusStyle(detailView.item.customerStatus).label || "Not set"}
+                    </span>
+                    <span style={{ fontSize: "12px", color: "#6b7280", width: "100%", marginTop: "4px" }}>
+                      Parent order {detailView.order.shopifyOrderName} · {detailView.order.customerName} · {new Date(detailView.order.createdAt).toLocaleDateString("en-NZ", { day: "numeric", month: "short", year: "numeric" })}
+                    </span>
+                  </div>
+                  <div className="fo-detail-bar-actions">
+                    <button className="fo-detail-action-btn" onClick={() => { setEddModal({ order: detailView.order, item: detailView.item }); setEddForm({ newEdd: detailView.item.eddDate, reason: "", notifyCustomer: true }); }}>
+                      <IconCalendar /> Update EDD
+                    </button>
+                    <button className="fo-detail-action-btn" onClick={() => { setTrackingModal({ order: detailView.order, item: detailView.item }); setTrackingForm({ carrier: detailView.item.company || "", trackingNumber: "", freightRef: "", deliveryMethod: "Standard", notifyCustomer: true }); }}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="3" width="15" height="13" /><polygon points="16 8 20 8 23 11 23 16 16 16 16 8" /><circle cx="5.5" cy="18.5" r="2.5" /><circle cx="18.5" cy="18.5" r="2.5" /></svg>
+                      Tracking
+                    </button>
+                    <button className="fo-detail-action-btn sync-btn" onClick={handleSync} disabled={isSyncing}>
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></svg>
+                      {isSyncing ? "Syncing..." : "Sync"}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="fo-detail-content">
+                  <DetailPanels order={detailView.order} item={detailView.item} onEditDispatch={handleDispatchEdit} onEditOps={handleOpsEdit} onAmendOrder={handleAmendOpen} />
+                  <NotesPanel communications={communications} notesFetching={notesFetching} onAddNote={() => { setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }} />
+                </div>
+              </div>
+              ) : (
+                <div className="fo-empty">
+                  <div className="fo-empty-icon">📦</div>
+                  <div className="fo-empty-title">Order not found</div>
+                  <div className="fo-empty-sub">This line may have been removed or has no freight data.</div>
+                </div>
+              )
+            ) : filteredOrders.length === 0 ? (
+              <div className="fo-empty">
+                <div className="fo-empty-icon">📦</div>
+                <div className="fo-empty-title">No freight orders found</div>
+                <div className="fo-empty-sub">{search ? "Try a different search term." : "Orders appear here after checkout completes."}</div>
+              </div>
+            ) : (
+              <OrderTable
+                filteredOrders={filteredOrders}
+                selected={selected}
+                orderLetterColors={orderLetterColors}
+                selectableIds={selectableIds}
+                toggleSelectAll={toggleSelectAll}
+                toggleSelect={toggleSelect}
+                onOpenDetail={(order, item) => {
+                  // Clean URL: `/app/order/{OrderLineItemIndex.id}` — variantId lives in DB.
+                  const pathId =
+                    (item.lineIndexId || "").trim() ||
+                    (order.snapshotId || "").trim() ||
+                    order.shopifyOrderId;
+                  navigate(`/app/order/${encodeURIComponent(pathId)}`);
+                }}
+                onOpenNotes={(order, item) => { setNoteModalTarget({ order, item }); setNoteModal(true); setNoteTab("internal"); setNoteText(""); setNoteSubject(""); setSendToMonday(false); setSendToCin7(false); setSendToShopify(false); }}
+                onOpenEdd={(order, item) => { setEddModal({ order, item }); setEddForm({ newEdd: item.eddDate, reason: "", notifyCustomer: true }); }}
+                onOpenTracking={(order, item) => { setTrackingModal({ order, item }); setTrackingForm({ carrier: item.company || "", trackingNumber: "", freightRef: getRefPrefix(item.company || ""), deliveryMethod: "Standard", notifyCustomer: true }); }}
+                onFixCin7={handleFixCin7Mismatch}
+                onSyncMonday={handleSyncMondayItem}
+                onCreateCin7={handleCreateCin7Order}
+                cin7FixingId={cin7FixingId}
+                mondayFixingId={mondayFixingId}
+                creatingCin7OrderId={creatingCin7OrderId}
+                hiddenColumns={hiddenColumns}
+                navigate={navigate}
+                onShowNotification={(msg) => {
+                  setSyncNotification(msg);
+                  window.setTimeout(() => setSyncNotification(null), 4500);
+                }}
+              />
+            )}
+
+            {/* Pagination */}
+            {!isDetailPage && pageCount > 1 && (
+              <div className="fo-pagination">
+                <button type="button" className="fo-page-btn" aria-label="Previous page" disabled={currentPage <= 1}
+                  onClick={() => {
+                    const newPage = Math.max(1, currentPage - 1);
+                    if (!serverDriven && allRows) { setCurrentPage(newPage); setRows(allRows.slice((newPage - 1) * 25, newPage * 25)); return; }
+                    const np = new URLSearchParams(Array.from(searchParams.entries())); np.set("page", String(newPage)); setSearchParams(np);
+                  }}>← Previous</button>
+                <span className="fo-page-info">Page {currentPage} of {pageCount}</span>
+                <button type="button" className="fo-page-btn" aria-label="Next page" disabled={currentPage >= pageCount}
+                  onClick={() => {
+                    const newPage = Math.min(pageCount, currentPage + 1);
+                    if (!serverDriven && allRows) { setCurrentPage(newPage); setRows(allRows.slice((newPage - 1) * 25, newPage * 25)); return; }
+                    const np = new URLSearchParams(Array.from(searchParams.entries())); np.set("page", String(newPage)); setSearchParams(np);
+                  }}>Next →</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Modals */}
+      {syncResultModal && (
+        <div
+          className="fo-overlay"
+          onClick={() => setSyncResultModal(null)}
+          style={{ zIndex: 80 }}
+        >
+          <div
+            className="fo-modal"
+            style={{ width: "520px", maxWidth: "95vw" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="fo-modal-hdr" style={{ borderBottom: "1px solid #e5e7eb", padding: "16px 20px" }}>
+              <span className="fo-modal-title" style={{ fontSize: "14px", fontWeight: 700, color: "#111827" }}>
+                {syncResultModal.title}
+              </span>
+              <button className="fo-modal-close" type="button" aria-label="Close" onClick={() => setSyncResultModal(null)}>✕</button>
+            </div>
+            <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+              <div style={{ fontSize: "12px", color: "#6b7280" }}>
+                Actions run for this line item (Monday pulse + Cin7 Sales Order).
+              </div>
+              {syncResultModal.lines.map((line) => (
+                <div
+                  key={line.system}
+                  style={{
+                    border: `1px solid ${line.ok ? "#bbf7d0" : "#fecaca"}`,
+                    background: line.ok ? "#f0fdf4" : "#fef2f2",
+                    borderRadius: "8px",
+                    padding: "12px 14px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: "#111827" }}>{line.system}</span>
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "2px 8px",
+                        borderRadius: "999px",
+                        background: line.ok ? "#dcfce7" : "#fee2e2",
+                        color: line.ok ? "#166534" : "#991b1b",
+                      }}
+                    >
+                      {line.ok ? "OK" : "Failed"}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "13px", color: "#374151", marginTop: "6px" }}>{line.summary}</div>
+                  {line.details && line.details.length > 0 ? (
+                    <ul style={{ margin: "8px 0 0", paddingLeft: "18px", color: "#4b5563", fontSize: "12px" }}>
+                      {line.details.map((d) => (
+                        <li key={d} style={{ marginBottom: "2px" }}>{d}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+            <div className="fo-modal-ftr" style={{ padding: "12px 20px" }}>
+              <button
+                type="button"
+                className="fo-btn-ghost"
+                onClick={() => setSyncResultModal(null)}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {trackingModal && (
+        <TrackingModal trackingModal={trackingModal} trackingForm={trackingForm} trackingError={trackingError} isSavingTracking={isSavingTracking} setTrackingForm={setTrackingForm} setTrackingModal={setTrackingModal} setTrackingError={setTrackingError} onSave={handleTrackingSave} />
+      )}
+      {eddModal && (
+        <EddModal eddModal={eddModal} eddForm={eddForm} eddError={eddError} isSavingEdd={isSavingEdd} setEddForm={setEddForm} setEddModal={setEddModal} setEddError={setEddError} onSave={handleEddSave} />
+      )}
+      {bulkActionsOpen && (
+        <BulkActionsWorkspace
+          open={bulkActionsOpen}
+          onClose={handleBulkActionsClose}
+          targets={selectedTargets}
+          onRun={handleBulkActionsRun}
+          onExportFreightCsv={handleFreightCsvExport}
+          onNotifyJobQueued={(jobId) => {
+            watchQueuedEmail(jobId, 1);
+          }}
+        />
+      )}
+      {noteModal && activeNoteTarget && (
+        <NoteModal
+          target={activeNoteTarget}
+          noteTab={noteTab}
+          noteText={noteText}
+          noteSubject={noteSubject}
+          sendToMonday={sendToMonday}
+          sendToCin7={sendToCin7}
+          sendToShopify={sendToShopify}
+          isSavingNote={isSavingNote}
+          noteAuthor={noteAuthor}
+          setNoteTab={setNoteTab}
+          setNoteText={setNoteText}
+          setNoteSubject={setNoteSubject}
+          setSendToMonday={setSendToMonday}
+          setSendToCin7={setSendToCin7}
+          setSendToShopify={setSendToShopify}
+          setNoteModal={setNoteModal}
+          setNoteModalTarget={setNoteModalTarget}
+          onSave={async ({ text, tab, subject, pushMonday, pushCin7, pushShopify }) => {
+            setIsSavingNote(true);
+            const isCustomer = tab === "customer";
+            const newNoteEntry: NoteItem = { author: noteAuthor, role: isCustomer ? "customer" : "internal", scheme: tab, time: formatNoteDateTime(), text, pushToMonday: pushMonday };
+            const nextNotes = [...notes, newNoteEntry];
+            try {
+              const res = await fetch("/api/order-status", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  shop,
+                  orderId: activeNoteTarget.order.shopifyOrderId,
+                  variantId: activeNoteTarget.item.variantId,
+                  data: { notes: serializeNotes(nextNotes) },
+                  newNotes: [text],
+                  newCin7Notes: pushCin7 ? [text] : [],
+                  syncNotes: { monday: pushMonday, cin7: pushCin7, shopify: pushShopify },
+                  isStaffNote: true,
+                  noteRole: tab,
+                  performedBy: noteAuthor,
+                  ...(isCustomer
+                    ? {
+                        notifyCustomer: true,
+                        notifyKind: "custom",
+                        notifySubject: subject,
+                      }
+                    : {}),
+                }),
+              });
+              const payload = await res.json().catch(() => ({} as any));
+              if (!res.ok) {
+                setSyncNotification(`Note save failed: ${payload.error || res.status}`);
+                window.setTimeout(() => setSyncNotification(null), 8000);
+                return;
+              }
+              setNotes(nextNotes);
+              setNoteText("");
+              setNoteSubject("");
+              setSendToMonday(false);
+              setSendToCin7(false);
+              setSendToShopify(false);
+              setNoteModal(false);
+              setNoteModalTarget(null);
+              if (payload.notifyJobId) {
+                watchQueuedEmail(payload.notifyJobId, payload.notifyRecipients ?? 1);
+              }
+              const logJson = await fetchOrderStatus(
+                shop,
+                activeNoteTarget.order.shopifyOrderId,
+                activeNoteTarget.item.variantId,
+                activeNoteTarget.item.lineIndexId,
+              );
+              if (logJson) {
+                setCommunications(logJson.communications ?? []);
+              }
+            } catch (error) {
+              console.error("Failed to save note", error);
+              setSyncNotification(`Note save failed: ${error instanceof Error ? error.message : "network error"}`);
+              window.setTimeout(() => setSyncNotification(null), 8000);
+            } finally { setIsSavingNote(false); }
+          }}
+        />
+      )}
+      {editDispatchModal && detailView && (
+        <DispatchEditModal order={detailView.order} item={detailView.item} form={editDispatchForm} error={editDispatchError} isSaving={isSavingDispatch} setForm={setEditDispatchForm} onClose={() => { setEditDispatchModal(false); setEditDispatchError(""); }} onSave={handleDispatchSave} />
+      )}
+      {editOpsModal && detailView && (
+        <OpsEditModal order={detailView.order} item={detailView.item} form={editOpsForm} error={editOpsError} isSaving={isSavingOps} setForm={setEditOpsForm} onClose={() => { setEditOpsModal(false); setEditOpsError(""); }} onSave={handleOpsSave} />
+      )}
+      {amendModalOpen && detailView && (
+        <AmendOrderModal
+          orderName={detailView.order.shopifyOrderName}
+          variantId={detailView.item.variantId}
+          form={amendForm}
+          error={amendError}
+          isSaving={isSavingAmend}
+          setForm={setAmendForm}
+          onClose={() => { setAmendModalOpen(false); setAmendError(""); }}
+          onSave={handleAmendSave}
+        />
+      )}
+    </>
+  );
+}

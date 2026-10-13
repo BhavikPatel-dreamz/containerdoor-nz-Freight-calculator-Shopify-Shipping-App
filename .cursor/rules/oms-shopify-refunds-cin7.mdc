@@ -1,0 +1,56 @@
+---
+description: Launch — Shopify refunds/amendments → OMS; Cin7 Credit Notes; manual Cin7/Monday product ops
+alwaysApply: true
+---
+
+# Shopify refunds & amendments (launch) — ContainerDoor confirmed 13 Oct 2026
+
+Client confirmed. **Do not reopen product/SKU/qty Cin7 automation** unless they ask.
+
+## Source of truth
+- **Shopify** = where staff enter refunds and customer order amendments.
+- Those changes **must flow Shopify → OMS**.
+- **Cin7 + Monday product/SKU/qty/cancel-for-warehouse** = **manual at launch**. Staff update them as soon as a change is *agreed*, not when Accounts later refunds in Shopify (can be ~2 weeks).
+- Staff check dispatch / picking / labels **before** changing Shopify.
+- Sync **must not overwrite** those manual Cin7/Monday ops or duplicate Credit Notes on retry.
+- A **full-value refund does not, by itself, cancel a line** or stop fulfilment.
+
+## Keep existing syncs
+- EDD, dispatch/customer status, tracking as today.
+- **Current EDD is edited in OMS**, then pushed to Shopify metafield `containerdoor_ops.edd_{variantId}` + customer account + Monday (+ Cin7 on existing update path).
+- Do **not** treat a native Shopify admin date as Current EDD unless product later asks for Shopify → OMS EDD.
+
+## Automate at launch
+
+### Refunds → Cin7 Credit Notes
+When a refund is **processed in Shopify** (money-back **or** store credit; full or partial):
+1. OMS records it on the **affected line order(s)** only (`CommunicationLog` + `Cin7CreditNoteSync`).
+2. Create **one Cin7 Credit Note per OMS line order per Shopify refund event**.
+   - Example: one Shopify cancel covering `#123456A/B/C` → **three** Credit Notes.
+   - A later refund on the same line → **another** Credit Note.
+3. Amount = **exact Shopify refunded amount** for that line (incl. shipping/tax as refunded).
+4. Credit Note stays **open** (not auto-completed). Link: Shopify order name, original Cin7 SO, lines/qty/value, freight if refunded, refund method.
+5. **Do not** amend, restage, or close the Cin7 Sales Order. Do **not** overwrite original Cin7 paid value to a net Shopify total.
+6. Idempotent: unique `(shop, shopifyRefundId, variantId)` — retry must not duplicate.
+
+### Address
+Shopify address → OMS → **existing open** Cin7 SO (`syncCin7DeliveryAddress`).
+- Extra freight **collected in Shopify** → sync increased freight + payment onto that **line** SO (single-line orders; multi-line extra freight → failed-sync for staff if we cannot allocate).
+- Freight **reduces** → keep original Cin7 freight; Credit Note when the Shopify refund posts.
+- **Do not** auto-update completed/dispatched Cin7 records.
+
+## Manual at launch (staff)
+- Full/partial cancel fulfilment flags on Monday; Cin7 cancel / backorder / SKU swap / allocation release.
+- Partial qty: remaining units stay fulfilable in OMS; Cin7/Monday by staff.
+- Goodwill/discount refund: preserve qty/allocation; Credit Note only when Shopify refund posts.
+- Refund after dispatch / returns: do not auto-return stock or rewrite dispatched SO.
+
+## Errors
+Shared OMS failed-sync list (`Cin7CreditNoteSync` status `failed` + CommunicationLog). Staff (Dayna + others) retry without duplicates.
+
+## Out of launch
+- Auto SKU swap / allocation release in Cin7
+- Auto Monday cancel column
+- Auto Cin7 stage “Cancelled”
+- Auto `customerStatus=cancelled` from refund alone
+- Token-exchange / App Store public-app work (this app is **custom**, ContainerDoor-only)

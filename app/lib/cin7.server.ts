@@ -1,0 +1,1149 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const CIN7_API_URL = process.env.CIN7_SYNC_URL || `${process.env.CIN7_BASE_URL}/SalesOrders`;
+
+/**
+ * Cin7 Omni update endpoint:
+ * - GET single order:    /v1/SalesOrders/{id}
+ * - PUT updates (array): /v1/SalesOrders
+ */
+function getCin7UpdateUrl(): string {
+  // If env already points to /SalesOrders/{id}, normalize to /SalesOrders.
+  return String(CIN7_API_URL || "").replace(/\/\d+$/, "");
+}
+
+function getCin7OrderUrl(salesOrderId: string): string {
+  return `${getCin7UpdateUrl()}/${encodeURIComponent(salesOrderId)}`;
+}
+
+// Simple debug helper for terminal logging
+const debug = (namespace: string, message: string, data?: any) => {
+  const timestamp = new Date().toLocaleTimeString();
+  const prefix = `[${timestamp}] ${namespace}`;
+  if (data !== undefined) {
+    console.log(`${prefix}: ${message}`, data);
+  } else {
+    console.log(`${prefix}: ${message}`);
+  }
+};
+
+export function getCin7AuthHeader(): string {
+  const username = process.env.CIN7_USERNAME;
+  const token = process.env.CIN7_SYNC_TOKEN;
+  if (!username || !token) {
+    throw new Error("Missing CIN7_USERNAME or CIN7_SYNC_TOKEN env vars");
+  }
+  return "Basic " + Buffer.from(`${username}:${token}`).toString("base64");
+}
+
+async function fetchCin7WithRateLimit(url: string, init: RequestInit): Promise<Response> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(url, init);
+    if (response.status !== 429 || attempt === 2) return response;
+
+    const retryAfter = Number(response.headers.get("retry-after") || 0);
+    const waitMs = Math.min(retryAfter > 0 ? retryAfter * 1000 : 2000, 3000);
+    debug("Cin7", `Rate limited; waiting ${waitMs}ms before retry ${attempt + 2}/3`);
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+  }
+
+  throw new Error("Cin7 rate-limit retry failed");
+}
+
+export type Cin7LineItem = {
+  code: string; // Product SKU — Cin7 matches an existing product by this
+  name?: string;
+  qty: number;
+  unitPrice?: number;
+};
+
+export type Cin7SalesOrderInput = {
+  reference: string;
+  firstName?: string;
+  lastName?: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  deliveryAddress1?: string;
+  deliveryCity?: string;
+  deliveryState?: string;
+  deliveryPostalCode?: string;
+  deliveryCountry?: string;
+  billingAddress1?: string;
+  billingCity?: string;
+  billingState?: string;
+  billingPostalCode?: string;
+  billingCountry?: string;
+  billingFirstName?: string;
+  billingLastName?: string;
+  billingCompany?: string;
+  logisticsCarrier?: string;
+  currencyCode?: string;
+  customerOrderNo?: string;
+  internalComments?: string;
+  freightTotal?: number;
+  freightDescription?: string;
+  discountTotal?: number;
+  discountDescription?: string;
+  taxRate?: number;
+  taxStatus?: "Incl" | "Excl" | "Exempt";
+  lineItems: Cin7LineItem[];
+};
+
+export async function syncCin7EstimatedDispatchDate(input: {
+  salesOrderId?: string;
+  eddDate?: string;
+  reference?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7EstimatedDispatchDate: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7EstimatedDispatchDate: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = getCin7UpdateUrl();
+    
+    // Cin7 expects EstimatedDeliveryDate in ISO 8601 format with time
+    let eddFormatted = "";
+    if (input.eddDate) {
+      try {
+        // Parse YYYY-MM-DD and convert to ISO 8601 format with midnight UTC
+        eddFormatted = `${input.eddDate}T00:00:00Z`;
+      } catch {
+        eddFormatted = input.eddDate; // fallback to original format
+      }
+    }
+    
+    const body = [
+      {
+        id: parseInt(salesOrderId, 10) || 0,
+        estimatedDeliveryDate: eddFormatted,
+      },
+    ];
+    debug("Cin7", `PUT request to ${url}`);
+    debug("Cin7", "PUT body:", body);
+    
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT response status: ${res.status}`);
+    debug("Cin7", `PUT response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    // Cin7 returns 200 but may have success: false in the response
+    const result = Array.isArray(json) ? json[0] : json;
+    
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for EDD update (salesOrderId=${salesOrderId})`,
+      };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT success (200): EDD updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    } else {
+      debug("Cin7", `PUT error (${res.status}): ${responseText}`);
+      return { exists: true, updated: false, salesOrderId, error: responseText };
+    }
+  } catch (error) {
+    debug("Cin7", "PUT request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function syncCin7TrackingNumber(input: {
+  salesOrderId?: string;
+  trackingNumber?: string;
+  reference?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7TrackingNumber: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7TrackingNumber: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = getCin7UpdateUrl();
+    const body = [{
+      id: parseInt(salesOrderId, 10) || 0,
+      trackingCode: input.trackingNumber ?? "",
+    }];
+
+    debug("Cin7", `PUT tracking request to ${url}`);
+    debug("Cin7", "PUT tracking body:", body);
+
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT tracking response status: ${res.status}`);
+    debug("Cin7", `PUT tracking response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT tracking failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT tracking success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for tracking update (salesOrderId=${salesOrderId})`,
+      };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT tracking success (200): tracking updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    }
+
+    debug("Cin7", `PUT tracking error (${res.status}): ${responseText}`);
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    debug("Cin7", "PUT tracking request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export type Cin7OrderSnapshot = {
+  id: string;
+  trackingCode: string;
+  estimatedDeliveryDate: string;
+  logisticsCarrier: string;
+  status: string;
+  isVoid: boolean;
+  cancellationDate: string | null;
+  lineItems: { code: string; qty: number }[];
+};
+
+export type Cin7SalesOrderMatch = {
+  id: string;
+  code?: string;
+  reference?: string;
+  customerOrderNo?: string;
+  lineSkus: string[];
+};
+
+function parseCin7SalesOrderRows(json: any): any[] {
+  return Array.isArray(json)
+    ? json
+    : Array.isArray(json?.data)
+      ? json.data
+      : Array.isArray(json?.items)
+        ? json.items
+        : json && typeof json === "object" && (json.id || json.Id)
+          ? [json]
+          : [];
+}
+
+function mapCin7SalesOrderRow(row: any): Cin7SalesOrderMatch | null {
+  const id = String(row?.id ?? row?.Id ?? "").trim();
+  if (!id) return null;
+  const lines = Array.isArray(row?.lineItems)
+    ? row.lineItems
+    : Array.isArray(row?.LineItems)
+      ? row.LineItems
+      : [];
+  const lineSkus = lines
+    .map((li: any) => String(li?.code ?? li?.Code ?? li?.sku ?? li?.SKU ?? "").trim())
+    .filter(Boolean);
+  return {
+    id,
+    code: String(row?.code ?? row?.Code ?? "").trim() || undefined,
+    reference: String(row?.reference ?? row?.Reference ?? "").trim() || undefined,
+    customerOrderNo: String(row?.customerOrderNo ?? row?.CustomerOrderNo ?? "").trim() || undefined,
+    lineSkus,
+  };
+}
+
+function cin7WhereEscape(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+async function queryCin7SalesOrders(
+  where: string,
+  strict = false,
+): Promise<Cin7SalesOrderMatch[]> {
+  if (!CIN7_API_URL) {
+    if (strict) throw new Error("Cin7 API URL not configured");
+    return [];
+  }
+  const base = getCin7UpdateUrl();
+  const url = `${base}?where=${encodeURIComponent(where)}&fields=${encodeURIComponent(
+    "id,code,reference,customerOrderNo,lineItems",
+  )}&rows=50`;
+  try {
+    const res = await fetchCin7WithRateLimit(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrders where failed (${res.status}) where=${where}`);
+      if (strict) {
+        throw new Error(`Cin7 SalesOrder lookup failed: HTTP ${res.status} for ${where}`);
+      }
+      return [];
+    }
+    const json: any = await res.json();
+    return parseCin7SalesOrderRows(json)
+      .map(mapCin7SalesOrderRow)
+      .filter((row): row is Cin7SalesOrderMatch => Boolean(row));
+  } catch (error) {
+    debug("Cin7", "GET SalesOrders where failed:", error);
+    if (strict) throw error;
+    return [];
+  }
+}
+
+export async function findCin7SalesOrderByReference(reference: string): Promise<{ id: string; code?: string } | null> {
+  const ref = String(reference ?? "").trim();
+  if (!ref || ref === "pending" || ref === "duplicate" || !CIN7_API_URL) return null;
+
+  const rows = await queryCin7SalesOrders(`reference='${cin7WhereEscape(ref)}'`);
+  const matched = rows.find((row) => String(row.reference || "").trim() === ref) ?? rows[0];
+  if (!matched?.id) return null;
+  return { id: matched.id, code: matched.code };
+}
+
+/** Order-number keys used on the old (non-Shopify) Cin7 platform. */
+export function cin7CustomerOrderNoCandidates(orderName?: string | null, orderId?: string | null): string[] {
+  const raw = String(orderName || "").trim();
+  const id = String(orderId || "").trim();
+  const withHash = raw ? (raw.startsWith("#") ? raw : `#${raw}`) : "";
+  const withoutHash = withHash.replace(/^#/, "");
+  const out = [withHash, withoutHash, raw].map((v) => v.trim()).filter(Boolean);
+  // Shopify numeric ids are not historical Cin7 order numbers.
+  if (id && id.length < 12) out.push(id);
+  return [...new Set(out)];
+}
+
+export async function findCin7SalesOrdersForShopifyOrder(input: {
+  orderName?: string | null;
+  orderId?: string | null;
+  reference?: string | null;
+  strict?: boolean;
+}): Promise<Cin7SalesOrderMatch[]> {
+  const strict = Boolean(input.strict);
+  const seen = new Set<string>();
+  const out: Cin7SalesOrderMatch[] = [];
+  const add = (rows: Cin7SalesOrderMatch[]) => {
+    for (const row of rows) {
+      if (!row.id || seen.has(row.id)) continue;
+      seen.add(row.id);
+      out.push(row);
+    }
+  };
+
+  const unique = [...new Set(cin7CustomerOrderNoCandidates(input.orderName, input.orderId).filter(Boolean))];
+  if (!unique.length) return [];
+
+  const clauses = unique.flatMap((key) => [
+    `customerOrderNo='${cin7WhereEscape(key)}'`,
+    `reference='${cin7WhereEscape(key)}'`,
+  ]);
+  add(await queryCin7SalesOrders(clauses.join(" OR "), strict));
+  return out;
+}
+
+function normalizeCin7Ref(value?: string | null): string {
+  return String(value || "")
+    .trim()
+    .replace(/^#/, "")
+    .replace(/[A-Z]$/i, "")
+    .toLowerCase();
+}
+
+/** Trailing line letter of a Cin7 reference: "#1273A" -> "A"; "#1273" -> "". */
+function cin7RefLineLetter(value?: string | null): string {
+  const m = /^#?.*\d+([A-Z])$/i.exec(String(value || "").trim());
+  return m ? m[1].toUpperCase() : "";
+}
+
+/** References match when a shared line letter is identical (same order), or legacy un-lettered. */
+function cin7RefLineMatches(reference: string, candidate?: string | null): boolean {
+  const refLetter = cin7RefLineLetter(reference);
+  const candidateRef = String(candidate || "").trim();
+  if (refLetter) {
+    const candidateLetter = cin7RefLineLetter(candidateRef);
+    // Lettered references must share BOTH the line letter and the order number
+    // (#1273A never matches #1273B or #1274A); un-lettered candidates keep the
+    // legacy historical-SO linkage (#1273A may match an un-lettered "#1273").
+    if (candidateLetter) {
+      return candidateLetter === refLetter && normalizeCin7Ref(reference) === normalizeCin7Ref(candidateRef);
+    }
+  }
+  return normalizeCin7Ref(reference) === normalizeCin7Ref(candidateRef);
+}
+
+export function pickCin7MatchForLine(
+  candidates: Cin7SalesOrderMatch[],
+  input: { reference?: string | null; sku?: string | null; orderName?: string | null },
+): Cin7SalesOrderMatch | null {
+  if (!candidates.length) return null;
+  const reference = String(input.reference || "").trim();
+  const sku = String(input.sku || "").trim().toLowerCase();
+  const orderKey = normalizeCin7Ref(input.orderName || reference);
+  const referenceLineLetter = cin7RefLineLetter(reference);
+
+  if (reference) {
+    const byRef = candidates.find((c) => String(c.reference || "").trim() === reference);
+    if (byRef) return byRef;
+    const byRefNorm = candidates.find((c) => cin7RefLineMatches(reference, c.reference));
+    if (byRefNorm) return byRefNorm;
+  }
+
+  if (orderKey) {
+    const byOrderRef = candidates.filter((c) => {
+      const ref = normalizeCin7Ref(c.reference);
+      const cust = normalizeCin7Ref(c.customerOrderNo);
+      if (ref !== orderKey && cust !== orderKey) return false;
+      // A lettered reference must never link another line's SO: only a
+      // candidate with the same line letter (or a legacy un-lettered SO)
+      // may be treated as a match.
+      if (referenceLineLetter) {
+        const candidateLetter = cin7RefLineLetter(c.reference);
+        if (candidateLetter && candidateLetter !== referenceLineLetter) return false;
+      }
+      return true;
+    });
+    if (byOrderRef.length === 1) return byOrderRef[0];
+    if (byOrderRef.length > 1 && sku) {
+      const skuHit = byOrderRef.find((c) => c.lineSkus.some((code) => code.toLowerCase() === sku));
+      if (skuHit) return skuHit;
+    }
+    if (byOrderRef.length === 1 || (byOrderRef.length > 1 && !sku)) return byOrderRef[0];
+  }
+
+  if (sku) {
+    const bySku = candidates.filter((c) =>
+      c.lineSkus.some((code) => code.toLowerCase() === sku),
+    );
+    if (bySku.length === 1) return bySku[0];
+    if (bySku.length > 1 && reference) {
+      const named = bySku.find((c) => String(c.reference || "").includes(reference.replace(/^#/, "")));
+      if (named) return named;
+    }
+    if (bySku.length > 1) return bySku[0];
+  }
+
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    if (!referenceLineLetter || cin7RefLineMatches(reference, only.reference)) return only;
+    return null;
+  }
+  return null;
+}
+
+export async function fetchCin7SalesOrder(salesOrderId: string): Promise<Cin7OrderSnapshot | null> {
+  const id = salesOrderId?.trim();
+  if (!id || ["pending", "duplicate"].includes(id) || !CIN7_API_URL) return null;
+
+  try {
+    const url = getCin7OrderUrl(id);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrder failed (${res.status}) for id=${id}`);
+      return null;
+    }
+    const json: any = await res.json();
+
+    // TEMP: log the raw shape once so we can confirm the real field name/value for void status
+    debug("Cin7", `GET SalesOrder raw response for id=${id}:`, json);
+
+    const status = String(json.status ?? json.Status ?? json.orderStatus ?? "").toUpperCase();
+
+    return {
+      id: String(json.id ?? id),
+      trackingCode: json.trackingCode ?? "",
+      estimatedDeliveryDate: json.estimatedDeliveryDate ?? "",
+      logisticsCarrier: json.logisticsCarrier ?? "",
+      status,
+      isVoid: Boolean(json.isVoid),
+      cancellationDate: json.cancellationDate ?? null,
+      lineItems: (json.lineItems ?? []).map((li: any) => ({ code: li.code ?? "", qty: li.qty ?? 0 })),
+    };
+  } catch (error) {
+    debug("Cin7", "GET SalesOrder failed:", error);
+    return null;
+  }
+}
+
+/** Update a Cin7 Sales Order's `logisticsCarrier` field via PUT /v1/SalesOrders. */
+export async function updateCin7SalesOrderCarrier(input: {
+  salesOrderId: string;
+  logisticsCarrier: string;
+}): Promise<{ updated: boolean; salesOrderId: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  const logisticsCarrier = input.logisticsCarrier?.trim() ?? "";
+  if (!salesOrderId || !CIN7_API_URL) return { updated: false, salesOrderId: "" };
+  try {
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, logisticsCarrier }];
+    const res = await fetch(getCin7UpdateUrl(), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      debug("Cin7", `PUT update carrier failed (${res.status}) for id=${salesOrderId}:`, text);
+      return { updated: false, salesOrderId, error: text };
+    }
+    const json: any = await res.json().catch(() => null);
+    const result = Array.isArray(json) ? json[0] : json;
+    if (result?.errors?.length) return { updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) return { updated: false, salesOrderId, error: `Cin7 returned success:false` };
+    return { updated: true, salesOrderId };
+  } catch (error) {
+    debug("Cin7", "PUT update carrier failed:", error);
+    return { updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** Fetch the Cin7-computed order total (post their own tax rules) for a Sales Order. */
+export async function fetchCin7SalesOrderTotal(salesOrderId: string): Promise<number | null> {
+  const id = salesOrderId?.trim();
+  if (!id || id === "pending" || !CIN7_API_URL) return null;
+  try {
+    const url = getCin7OrderUrl(id);
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      debug("Cin7", `GET SalesOrder (for total) failed (${res.status}) for id=${id}`);
+      return null;
+    }
+    const json: any = await res.json();
+
+    // Confirmed via testing: Cin7's `total` field on this endpoint is in the
+    // ACCOUNT'S HOME/BASE CURRENCY, not the order's own currency — e.g. a
+    // 230.00 INR order came back as total=4.1186 (NZD base). The order also
+    // carries its own currency conversion rate, so convert home->order
+    // currency before using this as a payment amount, or Paid % is wrong.
+    const homeTotal = Number(json.total ?? json.Total ?? json.orderTotal ?? json.grandTotal ?? 0);
+    const currencyRate = Number(
+      json.currencyRate ?? json.exchangeRate ?? json.CurrencyRate ?? json.ExchangeRate ?? 1,
+    );
+    const rate = Number.isFinite(currencyRate) && currencyRate > 0 ? currencyRate : 1;
+    const orderCurrencyTotal = homeTotal * rate;
+
+    debug(
+      "Cin7",
+      `GET SalesOrder total for id=${id}: home=${homeTotal} rate=${rate} orderCurrencyTotal=${orderCurrencyTotal}`,
+    );
+    // Full raw response logged so the currencyRate field name can be verified
+    // against Cin7's actual response shape if this ever drifts.
+    debug("Cin7", `GET SalesOrder (for total) raw response for id=${id}:`, json);
+
+    return Number.isFinite(orderCurrencyTotal) && orderCurrencyTotal > 0 ? orderCurrencyTotal : null;
+  } catch (error) {
+    debug("Cin7", "GET SalesOrder (for total) failed:", error);
+    return null;
+  }
+}
+
+export function diffCin7Fields(
+  item: { trackingNumber?: string; eddDate?: string; company?: string },
+  cin7: Cin7OrderSnapshot,
+): string[] {
+  const mismatches: string[] = [];
+
+  const wantTracking = (item.trackingNumber ?? "").trim();
+  if (wantTracking && wantTracking !== (cin7.trackingCode ?? "").trim()) {
+    mismatches.push("trackingNumber");
+  }
+
+  const wantEdd = item.eddDate ? item.eddDate.slice(0, 10) : "";
+  const haveEdd = cin7.estimatedDeliveryDate ? cin7.estimatedDeliveryDate.slice(0, 10) : "";
+  if (wantEdd && wantEdd !== haveEdd) {
+    mismatches.push("eddDate");
+  }
+
+  const wantCarrier = (item.company ?? "").trim().toUpperCase();
+  const haveCarrier = (cin7.logisticsCarrier ?? "").trim().toUpperCase();
+  if (wantCarrier && wantCarrier !== haveCarrier) {
+    mismatches.push("carrier");
+  }
+
+  return mismatches;
+}
+
+export async function syncCin7Carrier(input: {
+  salesOrderId?: string;
+  carrier?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) return { exists: false, updated: false };
+  if (!CIN7_API_URL) return { exists: true, updated: false, salesOrderId };
+
+  try {
+    const url = getCin7UpdateUrl();
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, logisticsCarrier: input.carrier ?? "" }];
+    const res = await fetch(url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    const responseText = await res.text();
+    let json: any;
+    try { json = responseText ? JSON.parse(responseText) : null; } catch { json = null; }
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) {
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for carrier update (salesOrderId=${salesOrderId})`,
+      };
+    }
+    if (res.ok) return { exists: true, updated: true, salesOrderId };
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    return { exists: true, updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function syncCin7DeliveryAddress(input: {
+  salesOrderId?: string;
+  firstName?: string;
+  lastName?: string;
+  address1?: string;
+  address2?: string;
+  city?: string;
+  state?: string;
+  postalCode?: string;
+  country?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  if (!salesOrderId) {
+    debug("Cin7", "syncCin7DeliveryAddress: SKIP - no salesOrderId");
+    return { exists: false, updated: false };
+  }
+  if (!CIN7_API_URL) {
+    debug("Cin7", "syncCin7DeliveryAddress: SKIP - no CIN7 base URL configured");
+    return { exists: true, updated: false, salesOrderId };
+  }
+
+  try {
+    const url = getCin7UpdateUrl();
+    const body = [
+      {
+        id: parseInt(salesOrderId, 10) || 0,
+        deliveryFirstName: input.firstName ?? "",
+        deliveryLastName: input.lastName ?? "",
+        deliveryAddress1: input.address1 ?? "",
+        deliveryAddress2: input.address2 ?? "",
+        deliveryCity: input.city ?? "",
+        deliveryState: input.state ?? "",
+        deliveryPostalCode: input.postalCode ?? "",
+        deliveryCountry: input.country ?? "",
+      },
+    ];
+
+    debug("Cin7", `PUT address request to ${url}`);
+    debug("Cin7", "PUT address body:", body);
+
+    const res = await fetchCin7WithRateLimit(url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const responseText = await res.text();
+    debug("Cin7", `PUT address response status: ${res.status}`);
+    debug("Cin7", `PUT address response body: ${responseText}`);
+
+    let json: any;
+    try {
+      json = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      json = null;
+    }
+
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors && result.errors.length > 0) {
+      debug("Cin7", `PUT address failed with errors:`, result.errors);
+      return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    }
+
+    if (result?.success === false) {
+      debug("Cin7", `PUT address success false: salesOrderId=${salesOrderId} may not exist in Cin7`);
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for address update (salesOrderId=${salesOrderId})`,
+      };
+    }
+
+    if (res.ok) {
+      debug("Cin7", `PUT address success (200): address updated for salesOrderId=${salesOrderId}`);
+      return { exists: true, updated: true, salesOrderId };
+    }
+
+    debug("Cin7", `PUT address error (${res.status}): ${responseText}`);
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    debug("Cin7", "PUT address request failed:", error);
+    return {
+      exists: true,
+      updated: false,
+      salesOrderId,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+export async function appendCin7InternalComment(input: {
+  salesOrderId?: string;
+  comment?: string;
+}): Promise<{ exists: boolean; updated: boolean; salesOrderId?: string; error?: string }> {
+  const salesOrderId = input.salesOrderId?.trim();
+  const comment = input.comment?.trim();
+  if (!salesOrderId || !comment) return { exists: false, updated: false };
+  if (!CIN7_API_URL) return { exists: true, updated: false, salesOrderId };
+
+  try {
+    // Fetch existing internal comments so we append instead of overwriting
+    const getUrl = getCin7OrderUrl(salesOrderId);
+    const getRes = await fetch(getUrl, { method: "GET", headers: { Authorization: getCin7AuthHeader() } });
+    const existingJson: any = getRes.ok ? await getRes.json().catch(() => null) : null;
+    const existingComments = existingJson?.internalComments ?? "";
+    const nextComments = existingComments ? `${existingComments}\n${comment}` : comment;
+
+    const body = [{ id: parseInt(salesOrderId, 10) || 0, internalComments: nextComments }];
+    const res = await fetch(getCin7UpdateUrl(), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: getCin7AuthHeader() },
+      body: JSON.stringify(body),
+    });
+    const responseText = await res.text();
+    let json: any;
+    try { json = responseText ? JSON.parse(responseText) : null; } catch { json = null; }
+    const result = Array.isArray(json) ? json[0] : json;
+
+    if (result?.errors?.length) return { exists: false, updated: false, salesOrderId, error: result.errors[0] };
+    if (result?.success === false) {
+      return {
+        exists: false,
+        updated: false,
+        salesOrderId,
+        error: `Cin7 returned success:false for comment update (salesOrderId=${salesOrderId})`,
+      };
+    }
+    if (res.ok) return { exists: true, updated: true, salesOrderId };
+    return { exists: true, updated: false, salesOrderId, error: responseText };
+  } catch (error) {
+    return { exists: true, updated: false, salesOrderId, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function createCin7SalesOrder(
+  input: Cin7SalesOrderInput,
+): Promise<{ id: number; code: string }> {
+  const body = [
+    {
+      reference: input.reference,
+      firstName: input.firstName ?? "",
+      lastName: input.lastName ?? "",
+      company: input.company ?? "",
+      memberEmail: input.email ?? "",
+      phone: input.phone ?? "",
+      deliveryFirstName: input.firstName ?? "",
+      deliveryLastName: input.lastName ?? "",
+      deliveryCompany: input.company ?? "",
+      deliveryAddress1: input.deliveryAddress1 ?? "",
+      deliveryCity: input.deliveryCity ?? "",
+      deliveryState: input.deliveryState ?? "",
+      deliveryPostalCode: input.deliveryPostalCode ?? "",
+      deliveryCountry: input.deliveryCountry ?? "",
+      billingFirstName: input.billingFirstName ?? input.firstName ?? "",
+      billingLastName: input.billingLastName ?? input.lastName ?? "",
+      billingCompany: input.billingCompany ?? input.company ?? "",
+      billingAddress1: input.billingAddress1 ?? input.deliveryAddress1 ?? "",
+      billingCity: input.billingCity ?? input.deliveryCity ?? "",
+      billingState: input.billingState ?? input.deliveryState ?? "",
+      billingPostalCode: input.billingPostalCode ?? input.deliveryPostalCode ?? "",
+      billingCountry: input.billingCountry ?? input.deliveryCountry ?? "",
+      logisticsCarrier: input.logisticsCarrier ?? "",
+      ...(input.currencyCode ? { currencyCode: input.currencyCode } : {}),
+      customerOrderNo: input.customerOrderNo ?? "",
+      internalComments: input.internalComments ?? "",
+      ...(input.freightTotal !== undefined ? { freightTotal: input.freightTotal } : {}),
+      ...(input.freightDescription ? { freightDescription: input.freightDescription } : {}),
+      ...(input.discountTotal !== undefined ? { discountTotal: input.discountTotal } : {}),
+      ...(input.discountDescription ? { discountDescription: input.discountDescription } : {}),
+      ...(input.taxRate !== undefined ? { taxRate: input.taxRate } : {}),
+      ...(input.taxStatus ? { taxStatus: input.taxStatus } : {}),
+      lineItems: input.lineItems.map((li, idx) => ({
+        code: li.code,
+        name: li.name ?? "",
+        qty: li.qty,
+        unitPrice: li.unitPrice ?? 0,
+        sort: (idx + 1) * 10,
+      })),
+    },
+  ];
+
+  debug("Cin7", "POST SalesOrder", body);
+
+  const res = await fetchCin7WithRateLimit(CIN7_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: getCin7AuthHeader(),
+    },
+    body: JSON.stringify(body),
+  });
+
+  const json: any = await res.json().catch(() => null);
+  debug("Cin7", "POST SalesOrder response:", json);
+
+  if (!res.ok) {
+    throw new Error(`Cin7 API error ${res.status}: ${JSON.stringify(json)}`);
+  }
+
+  const result = Array.isArray(json) ? json[0] : null;
+  if (!result || !result.success) {
+    const errors = result?.errors ?? json;
+    const err = new Error(`Cin7 SalesOrder creation failed: ${JSON.stringify(errors)}`) as Error & { isDuplicate?: boolean };
+    err.isDuplicate = /already exists/i.test(JSON.stringify(errors));
+    throw err;
+  }
+
+  return { id: result.id, code: result.code };
+}
+
+function getCin7PaymentsUrl(): string {
+  // Same base as SalesOrders, swap the resource segment.
+  return getCin7UpdateUrl().replace(/\/SalesOrders$/i, "/Payments");
+}
+
+export type Cin7PaymentInput = {
+  orderId: number;
+  amount: number;
+  method?: string;
+  paymentDate?: string; // ISO date; defaults to now
+  isAuthorized?: boolean;
+  transactionRef?: string;
+  comments?: string;
+};
+
+/**
+ * Create a Payment against a Cin7 Sales Order so Cin7's Total Paid / Total
+ * Owing reflects what was actually paid on the Shopify order (0–100% range).
+ * Best-effort: caller should treat failure as non-fatal (SO already exists).
+ */
+export async function createCin7Payment(
+  input: Cin7PaymentInput,
+): Promise<{ ok: boolean; id?: number; error?: string }> {
+  if (!input.orderId || !input.amount) {
+    debug("Cin7", "createCin7Payment: SKIP - missing orderId or amount");
+    return { ok: false, error: "Missing orderId or amount" };
+  }
+
+  const body = [
+    {
+      orderId: input.orderId,
+      amount: input.amount,
+      method: input.method ?? "Shopify",
+      isAuthorized: input.isAuthorized ?? true,
+      paymentDate: input.paymentDate ?? new Date().toISOString(),
+      ...(input.transactionRef ? { transactionRef: input.transactionRef } : {}),
+      ...(input.comments ? { comments: input.comments } : {}),
+    },
+  ];
+
+  debug("Cin7", "POST Payment", body);
+
+  try {
+    const res = await fetch(getCin7PaymentsUrl(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+
+    const json: any = await res.json().catch(() => null);
+    debug("Cin7", "POST Payment response:", json);
+
+    if (!res.ok) {
+      return { ok: false, error: `Cin7 API error ${res.status}: ${JSON.stringify(json)}` };
+    }
+
+    const result = Array.isArray(json) ? json[0] : null;
+    if (!result || !result.success) {
+      return { ok: false, error: `Cin7 Payment creation failed: ${JSON.stringify(result?.errors ?? json)}` };
+    }
+
+    return { ok: true, id: result.id };
+  } catch (error) {
+    debug("Cin7", "POST Payment request failed:", error);
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+function getCin7CreditNotesUrl(): string {
+  return getCin7UpdateUrl().replace(/\/SalesOrders$/i, "/CreditNotes");
+}
+
+export type Cin7CreditNoteInput = {
+  salesOrderId: number;
+  /** Cin7 SO `reference` / `code` — API field "Sales Reference" (required). */
+  salesReference: string;
+  memberId?: number;
+  memberEmail?: string;
+  customerOrderNo?: string;
+  reference?: string;
+  internalComments?: string;
+  freightTotal?: number;
+  freightDescription?: string;
+  currencyCode?: string;
+  taxStatus?: string;
+  taxRate?: number;
+  lineItems: Cin7LineItem[];
+};
+
+export async function fetchCin7SalesOrderBrief(salesOrderId: string): Promise<{
+  id: string;
+  reference: string;
+  code: string;
+  memberId: number;
+  memberEmail: string;
+  deliveryAddress1: string;
+  deliveryCity: string;
+  deliveryPostalCode: string;
+} | null> {
+  const id = salesOrderId?.trim();
+  if (!id || id === "pending" || !CIN7_API_URL) return null;
+  try {
+    const res = await fetchCin7WithRateLimit(getCin7OrderUrl(id), {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      console.warn(`[RefundCin7] GET SalesOrder ${id} HTTP ${res.status}`);
+      return null;
+    }
+    const json: any = await res.json();
+    const reference = String(json.reference ?? json.Reference ?? "").trim();
+    const code = String(json.code ?? json.Code ?? "").trim();
+    const memberId = Number(json.memberId ?? json.MemberId ?? 0) || 0;
+    const mailKeys = Object.keys(json || {}).filter((k) => /mail|member/i.test(k));
+    let memberEmail = "";
+    for (const k of ["memberEmail", "MemberEmail", "email", "Email", "billingEmail", "customerEmail"]) {
+      const v = String(json?.[k] ?? "").trim();
+      if (v.includes("@")) {
+        memberEmail = v;
+        break;
+      }
+    }
+    if (!memberEmail) {
+      for (const [k, v] of Object.entries(json || {})) {
+        if (typeof v === "string" && v.includes("@") && /mail/i.test(k)) {
+          memberEmail = v.trim();
+          break;
+        }
+      }
+    }
+    console.log(
+      `[RefundCin7] GET SalesOrder ${id} reference=${reference || "(empty)"} code=${code || "(empty)"} memberId=${memberId} email=${memberEmail || "(empty)"} mailKeys=${mailKeys.join(",") || "(none)"}`,
+    );
+    return {
+      id,
+      reference,
+      code,
+      memberId,
+      memberEmail,
+      deliveryAddress1: String(json.deliveryAddress1 ?? "").trim(),
+      deliveryCity: String(json.deliveryCity ?? "").trim(),
+      deliveryPostalCode: String(json.deliveryPostalCode ?? json.deliveryZip ?? "").trim(),
+    };
+  } catch (error) {
+    console.error(`[RefundCin7] GET SalesOrder ${id} failed`, error);
+    return null;
+  }
+}
+
+/** Create a Credit Note and leave it open (isApproved false). Qty must be negative. */
+export async function createCin7CreditNote(
+  input: Cin7CreditNoteInput,
+): Promise<{ ok: boolean; id?: number; code?: string; error?: string }> {
+  if (!input.salesOrderId || !input.lineItems?.length) {
+    return { ok: false, error: "Missing salesOrderId or lineItems" };
+  }
+  const salesReference = String(input.salesReference || "").trim();
+  if (!salesReference) {
+    return { ok: false, error: "Missing salesReference (Cin7 Sales Reference)" };
+  }
+  const lineItems = input.lineItems.map((li, idx) => ({
+    code: li.code,
+    name: li.name ?? "",
+    qty: -Math.abs(Number(li.qty) || 1),
+    unitPrice: Math.abs(li.unitPrice ?? 0),
+    sort: (idx + 1) * 10,
+  }));
+  const freightTotal =
+    input.freightTotal && input.freightTotal !== 0 ? -Math.abs(input.freightTotal) : undefined;
+  const memberEmail = String(input.memberEmail || "").trim();
+  const memberId = Number(input.memberId || 0) || 0;
+  if (!memberId && !memberEmail) {
+    return { ok: false, error: "Missing memberId and memberEmail for Cin7 Credit Note" };
+  }
+  const body = [
+    {
+      salesOrderId: input.salesOrderId,
+      relatedOrderId: input.salesOrderId,
+      salesReference,
+      memberId,
+      memberEmail,
+      email: memberEmail,
+      billingEmail: memberEmail,
+      customerOrderNo: input.customerOrderNo ?? "",
+      reference: String(input.reference ?? "").slice(0, 50),
+      internalComments: input.internalComments ?? "",
+      creditNoteDate: new Date().toISOString(),
+      isApproved: false,
+      completed: false,
+      ...(input.currencyCode ? { currencyCode: input.currencyCode } : {}),
+      ...(input.taxStatus ? { taxStatus: input.taxStatus } : {}),
+      ...(input.taxRate !== undefined ? { taxRate: input.taxRate } : {}),
+      ...(freightTotal !== undefined ? { freightTotal } : {}),
+      ...(input.freightDescription ? { freightDescription: input.freightDescription } : {}),
+      lineItems,
+    },
+  ];
+  const url = getCin7CreditNotesUrl();
+  console.log(
+    `[RefundCin7] POST ${url} salesOrderId=${input.salesOrderId} salesReference=${salesReference} memberId=${memberId} email=${memberEmail || "(none)"} ref=${input.reference} qty=${lineItems.map((l) => l.qty).join(",")} freight=${freightTotal ?? 0}`,
+  );
+  console.log(`[RefundCin7] POST CreditNote lineItems`, lineItems);
+  debug("Cin7", "POST CreditNote", body);
+  try {
+    const res = await fetchCin7WithRateLimit(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: getCin7AuthHeader(),
+      },
+      body: JSON.stringify(body),
+    });
+    const json: any = await res.json().catch(() => null);
+    debug("Cin7", "POST CreditNote response:", json);
+    console.log(`[RefundCin7] POST CreditNote status=${res.status} success=${json?.[0]?.success ?? json?.success} id=${json?.[0]?.id ?? json?.id} code=${json?.[0]?.code ?? json?.code}`);
+    console.log(`[RefundCin7] Cin7 API response JSON`, JSON.stringify(json, null, 2));
+    if (!res.ok) {
+      console.error(`[RefundCin7] POST CreditNote HTTP ${res.status}`, json);
+      return { ok: false, error: `Cin7 API error ${res.status}: ${JSON.stringify(json)}` };
+    }
+    const result = Array.isArray(json) ? json[0] : json;
+    if (!result || result.success === false) {
+      console.error(`[RefundCin7] POST CreditNote success=false`, result?.errors ?? json);
+      return { ok: false, error: `Cin7 CreditNote failed: ${JSON.stringify(result?.errors ?? json)}` };
+    }
+    console.log(`[RefundCin7] POST CreditNote OK id=${result.id} code=${result.code}`);
+    return { ok: true, id: result.id, code: result.code };
+  } catch (error) {
+    console.error(`[RefundCin7] POST CreditNote exception`, error);
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+export async function isCin7SalesOrderOpen(salesOrderId: string): Promise<boolean> {
+  const id = salesOrderId?.trim();
+  if (!id || id === "pending" || !CIN7_API_URL) return false;
+  try {
+    const res = await fetchCin7WithRateLimit(getCin7OrderUrl(id), {
+      method: "GET",
+      headers: { Authorization: getCin7AuthHeader() },
+    });
+    if (!res.ok) {
+      console.warn(`[AddressCin7] GET SalesOrder ${id} HTTP ${res.status} — treat as not open`);
+      return false;
+    }
+    const json: any = await res.json();
+    const stage = String(json.stage ?? json.status ?? json.workflowStage ?? "").toLowerCase();
+    const open =
+      !json.completedDate &&
+      !json.fullyPickedDate &&
+      !json.dispatchedDate &&
+      json.completed !== true &&
+      !/complet|dispatch|invoic|void|cancel/.test(stage);
+    console.log(`[AddressCin7] GET SalesOrder ${id} stage=${stage || "(none)"} completed=${json.completed} open=${open}`);
+    return open;
+  } catch (error) {
+    console.error(`[AddressCin7] GET SalesOrder ${id} failed`, error);
+    return false;
+  }
+}

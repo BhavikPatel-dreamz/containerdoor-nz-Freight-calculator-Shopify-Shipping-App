@@ -1,0 +1,1394 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const MONDAY_API_URL = "https://api.monday.com/v2";
+const MONDAY_API_GAP_MS = Math.max(0, Number(process.env.MONDAY_API_GAP_MS || "200"));
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+let mondayQueue: Promise<unknown> = Promise.resolve();
+let lastMondayCallAt = 0;
+
+async function mondayRequest(
+  query: string,
+  variables?: Record<string, any>,
+  retries = 3,
+): Promise<any> {
+  const run = async () => {
+    const wait = MONDAY_API_GAP_MS - (Date.now() - lastMondayCallAt);
+    if (wait > 0) {
+      console.log(`[Monday API] waiting ${wait}ms before next call`);
+      await sleep(wait);
+    }
+    lastMondayCallAt = Date.now();
+    return mondayRequestNow(query, variables, retries);
+  };
+  const next = mondayQueue.then(run, run);
+  mondayQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
+async function mondayRequestNow(
+  query: string,
+  variables?: Record<string, any>,
+  retries = 3,
+): Promise<any> {
+  const res = await fetch(MONDAY_API_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: process.env.MONDAY_API_TOKEN!,
+      "API-Version": "2024-01",
+    },
+    body: JSON.stringify({ query, variables }),
+  });
+  const json = await res.json();
+  console.log("[Monday API] request:", JSON.stringify(variables));
+  console.log("[Monday API] response:", JSON.stringify(json));
+
+  const complexityError = json.errors?.find(
+    (e: any) => e?.extensions?.code === "COMPLEXITY_BUDGET_EXHAUSTED",
+  );
+  if (complexityError && retries > 0) {
+    const waitSeconds = Math.min(
+      complexityError.extensions?.retry_in_seconds ?? 3,
+      8,
+    );
+    console.log(
+      `[Monday API] Complexity budget exhausted, retrying in ${waitSeconds}s (retries left: ${retries - 1})`,
+    );
+    await sleep(waitSeconds * 1000);
+    lastMondayCallAt = Date.now();
+    return mondayRequestNow(query, variables, retries - 1);
+  }
+
+  if (json.errors) throw new Error(JSON.stringify(json.errors));
+  return json.data;
+}
+
+export async function deleteMondayItem(itemId: string): Promise<boolean> {
+  const id = String(itemId || "").trim();
+  if (!id || id === "pending") return false;
+  const data = await mondayRequest(
+    `mutation ($id: ID!) { delete_item (item_id: $id) { id } }`,
+    { id },
+  );
+  return Boolean(data?.delete_item?.id);
+}
+
+export async function listMondayBoardItemsPage(cursor?: string | null): Promise<{
+  cursor: string | null;
+  items: Array<{ id: string; name: string }>;
+}> {
+  const boardId = process.env.MONDAY_BOARD_ID;
+  if (!boardId) return { cursor: null, items: [] };
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $cursor: String) {
+      boards(ids: [$boardId]) {
+        items_page(limit: 100, cursor: $cursor) {
+          cursor
+          items { id name }
+        }
+      }
+    }`,
+    { boardId, cursor: cursor || null },
+  );
+  const page = data?.boards?.[0]?.items_page;
+  return {
+    cursor: page?.cursor ? String(page.cursor) : null,
+    items: (page?.items ?? []).map((item: any) => ({
+      id: String(item?.id || ""),
+      name: String(item?.name || ""),
+    })),
+  };
+}
+
+export function isMondayBoardFullError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("Board has reached its max size") || msg.includes("RecordInvalidException");
+}
+
+export function isStaleMondayItemError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("Item not found in board") ||
+    msg.includes("inactiveItems") ||
+    msg.includes("Cannot change column value for inactive items")
+  );
+}
+
+/** `{MONDAY_BOARD_LINK}/boards/{MONDAY_BOARD_ID}/pulses/{itemId}` */
+export function buildMondayItemUrl(itemId?: string | null): string | null {
+  const id = String(itemId ?? "").trim();
+  if (!id || id === "pending") return null;
+  const base = String(process.env.MONDAY_BOARD_LINK || "").replace(/\/$/, "");
+  const boardId = String(process.env.MONDAY_BOARD_ID || "").trim();
+  if (!base || !boardId) return null;
+  return `${base}/boards/${boardId}/pulses/${id}`;
+}
+
+export function isInvalidColumnError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("InvalidColumnIdException") ||
+    msg.includes("doesn't exist for the board")
+  );
+}
+
+/**
+ * Monday pulse name = Shopify order name + line letter, e.g. `#CDL215347A`.
+ * Product titles must never be used as Monday item names.
+ */
+export function buildMondayPulseName(
+  orderName?: string | null,
+  letterSuffix?: string | null,
+  fallbackOrderId?: string | null,
+): string {
+  let base = String(orderName || "").trim();
+  if (!base) base = String(fallbackOrderId || "").trim();
+  if (!base) return "Order";
+  if (!base.startsWith("#")) base = `#${base}`;
+  const letter = String(letterSuffix || "").trim().toUpperCase();
+  return `${base}${letter}`;
+}
+
+/** Load full Monday row from OMS (ops + line index + snapshot + order ops). */
+export async function buildMondayRowFromOms(args: {
+  shop: string;
+  orderId: string;
+  variantId: string;
+  /** Optional ops overrides (e.g. just-saved fields). */
+  ops?: Record<string, any> | null;
+}): Promise<{ row: MondayRow; itemName: string }> {
+  const { default: prisma } = await import("../db.server");
+  const { normalizePaymentStatus } = await import("./freight-orders.server");
+  const { shop, orderId, variantId, ops: opsOverride } = args;
+
+  // Always load OMS rows, then overlay overrides (never skip DB when override is passed).
+  let [opsDb, lineIndex, snap, orderOps] = await Promise.all([
+    prisma.orderLineItemOperationalData.findUnique({
+      where: { shop_orderId_variantId: { shop, orderId, variantId } },
+    }),
+    prisma.orderLineItemIndex.findFirst({
+      where: { shop, orderId, variantId },
+    }),
+    prisma.orderSnapshot.findFirst({
+      where: { shop, orderId },
+    }),
+    prisma.orderOperationalData.findUnique({
+      where: { shop_orderId: { shop, orderId } },
+      select: { poNumber: true },
+    }),
+  ]);
+
+  // Fallback without shop if shop mismatch left index/snapshot empty.
+  if (!lineIndex || !snap) {
+    const [lineFb, snapFb] = await Promise.all([
+      !lineIndex
+        ? prisma.orderLineItemIndex.findFirst({ where: { orderId, variantId } })
+        : Promise.resolve(lineIndex),
+      !snap
+        ? prisma.orderSnapshot.findFirst({ where: { orderId } })
+        : Promise.resolve(snap),
+    ]);
+    lineIndex = lineFb;
+    snap = snapFb;
+  }
+  if (!opsDb) {
+    opsDb = await prisma.orderLineItemOperationalData.findFirst({
+      where: { orderId, variantId },
+    });
+  }
+
+  const ops = { ...(opsDb || {}), ...(opsOverride || {}) } as Record<string, any>;
+  const customerName =
+    String(lineIndex?.customerName || "").trim() ||
+    `${snap?.shippingFirstName || ""} ${snap?.shippingLastName || ""}`.trim() ||
+    String(opsOverride?.customerName || "").trim();
+  const email =
+    String(lineIndex?.email || "").trim() ||
+    String(snap?.email || "").trim() ||
+    String(opsOverride?.email || "").trim();
+  const phone =
+    String(lineIndex?.phone || "").trim() || String(snap?.phone || "").trim();
+  const address =
+    String(lineIndex?.fullAddress || "").trim() ||
+    [
+      snap?.shippingAddress1,
+      snap?.shippingAddress2,
+      snap?.shippingCity,
+      snap?.shippingProvince,
+      snap?.shippingZip,
+      snap?.shippingCountry,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+  const itemName = buildMondayPulseName(
+    lineIndex?.orderName || snap?.orderName,
+    lineIndex?.letterSuffix,
+    orderId,
+  );
+
+  const orderDateRaw = snap?.createdAt
+    ? new Date(snap.createdAt).toISOString().slice(0, 10)
+    : lineIndex?.createdAt
+      ? new Date(lineIndex.createdAt).toISOString().slice(0, 10)
+      : "";
+
+  const boxes =
+    lineIndex?.boxes != null && Number(lineIndex.boxes) > 0
+      ? Number(lineIndex.boxes)
+      : ops.boxes != null && ops.boxes !== ""
+        ? Number(ops.boxes) || ops.boxes
+        : "";
+
+   const isDepot =
+    String(snap?.shippingCode ?? "").startsWith("depot_delivery::") ||
+    Boolean(ops.depotAddress1 || ops.depotCity || ops.depotZip);
+
+  const row: MondayRow = {
+    customerName,
+    email,
+    phone,
+    address,
+    carriers: String(ops.carrier || lineIndex?.company || "").trim(),
+    trackingNumber: String(ops.trackingNumber || "").trim(),
+    freightRef: String(ops.freightRef || "").trim(),
+    deliveryMethod: "Standard",
+    eddDate: String(ops.eddDate || "").trim(),
+    originalEddDate: String(ops.originalEddDate || "").trim(),
+    productTitle: String(ops.productTitle || lineIndex?.productTitle || "").trim(),
+    variantTitle: String(lineIndex?.variantTitle || "").trim(),
+    sku: String(lineIndex?.sku || "").trim(),
+    productId: String(lineIndex?.productId || "").trim(),
+    boxes,
+    customerStatus: String(ops.customerStatus || "").trim(),
+    paymentStatus: normalizePaymentStatus(
+      ops.paymentStatus || lineIndex?.financialStatus || "",
+    ),
+    shop: shop || String(ops.shop || snap?.shop || lineIndex?.shop || ""),
+    orderId,
+    variantId,
+    lineOrderName: itemName,
+    orderDate: orderDateRaw,
+    warehouseStatus: String(ops.warehouseStatus || "").trim(),
+    dispatchStatus: String(ops.dispatchStatus || "").trim(),
+    deliveryStatus: String(ops.deliveryStatus || "").trim(),
+    receivedDate: String(ops.receivedDate || "").trim(),
+    portArrivalDate: String(ops.portArrivalDate || "").trim(),
+    inTransitDate: String(ops.inTransitDate || "").trim(),
+    supplierContainer: String(ops.supplierContainer || "").trim(),
+    poNumber: String(orderOps?.poNumber || ops.poNumber || "").trim(),
+    depositPaid: String(ops.depositPaid || "").trim(),
+    balanceDue: String(ops.balanceDue || "").trim(),
+    isDepot,
+  };
+
+  return { row, itemName };
+}
+
+export async function renameMondayItem(itemId: string, newName: string) {
+  const name = String(newName || "").trim();
+  if (!itemId || !name) return;
+  // Never allow product-title style names as the Monday pulse name.
+  if (name.includes(" - ") && name.length > 40) {
+    console.warn("[Monday] renameMondayItem refused product-title-like name:", name);
+    return;
+  }
+  console.log("[Monday] renameMondayItem:", itemId, "→", name);
+
+  // Prefer change_multiple_column_values on the built-in "name" column
+  // (change_name_on_board is flaky / deprecated on some API versions).
+  try {
+    await mondayRequest(
+      `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+        change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id name }
+      }`,
+      {
+        boardId: process.env.MONDAY_BOARD_ID,
+        itemId,
+        columnValues: JSON.stringify({ name }),
+      },
+    );
+    return;
+  } catch (err) {
+    console.warn("[Monday] rename via name column failed, trying change_name_on_board", err);
+  }
+
+  await mondayRequest(
+    `mutation ($boardId: ID!, $itemId: ID!, $newName: String!) {
+      change_name_on_board(board_id: $boardId, item_id: $itemId, new_name: $newName) { id name }
+    }`,
+    {
+      boardId: process.env.MONDAY_BOARD_ID,
+      itemId,
+      newName: name,
+    },
+  );
+}
+
+type MondayRow = {
+  customerName: string;
+  email: string;
+  phone: string;
+  address: string;
+  carriers: string;
+  trackingNumber: string;
+  freightRef: string;
+  deliveryMethod: string;
+  eddDate: string;
+  originalEddDate: string;
+  productTitle: string;
+  variantTitle: string;
+  sku: string;
+  productId: string;
+  boxes: number | string;
+  customerStatus: string;
+  paymentStatus: string;
+  shop: string;
+  orderId: string;
+  variantId: string;
+  lineOrderName: string;
+  orderDate: string;
+  warehouseStatus: string;
+  dispatchStatus: string;
+  deliveryStatus: string;
+  receivedDate: string;
+  portArrivalDate: string;
+  inTransitDate: string;
+  supplierContainer: string;
+  poNumber: string;
+  depositPaid: string;
+  balanceDue: string;
+  isDepot: boolean;
+};
+
+const FIELD_DEFS: Partial<
+  Record<keyof MondayRow, { title: string; type: string; defaults?: string }>
+> = {
+  customerName: { title: "Customer", type: "text" },
+  email: { title: "Email", type: "email" },
+  // phone: not synced to Monday — client doesn't need this column (2026-07)
+  // address: not synced to Monday — client doesn't need this column (2026-07)
+  carriers: {
+    title: "Carrier",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Linehaul - Fliway",
+        "1": "Midsize - Fliway",
+        "2": "NZP",
+        "3": "NZP - Age Restricted",
+        "4": "MAINFREIGHT",
+        "5": "Castle",
+        "6": "Special",
+        "7": "M2H Delivery",
+        "8": "MF Depot",
+        "9": "TGE Depot",
+        "10": "Depot - Fliway",
+        "11": "Van Run",
+        "12": "TGE",
+      },
+    }),
+  },
+  trackingNumber: { title: "Tracking Number", type: "text" },
+  // freightRef: not synced to Monday — client doesn't need this column (2026-07)
+  // deliveryMethod: not synced to Monday — client doesn't need this column (2026-07)
+  eddDate: { title: "EDD", type: "date" },
+  originalEddDate: { title: "Original EDD", type: "date" },
+  productTitle: { title: "Product", type: "text" },
+  variantTitle: { title: "Variant", type: "text" },
+  sku: { title: "SKU", type: "text" },
+  // productId: not synced to Monday — client doesn't need this column (2026-07)
+  boxes: { title: "Quantity", type: "numbers" },
+  customerStatus: {
+    title: "Cust. Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Pending",
+        "1": "Confirmed",
+        "2": "Dispatched",
+        "3": "Delivered",
+        "4": "Cancelled",
+      },
+    }),
+  },
+  paymentStatus: {
+    title: "Payment Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Paid",
+        "1": "Partial",
+        "2": "Pending",
+        "3": "Overdue",
+      },
+    }),
+  },
+  // shop: not synced to Monday — client doesn't need this column (2026-07)
+  // orderId: not synced to Monday — client doesn't need this column (2026-07)
+  // variantId: not synced to Monday — client doesn't need this column (2026-07)
+  // lineOrderName: not synced to Monday as a column — client doesn't need this column (2026-07)
+  //   Note: lineOrderName is still used separately as the Monday pulse *name* in
+  //   createMondayItem/buildColumnValues (values.name), that logic is untouched.
+  orderDate: { title: "Order Date", type: "date" },
+  warehouseStatus: {
+    title: "Warehouse Status",
+    type: "status",
+    defaults: JSON.stringify({
+      labels: {
+        "0": "Not received",
+        "1": "Received",
+        "2": "Processing",
+        "3": "Ready to dispatch",
+        "4": "Dispatched",
+      },
+    }),
+  },
+  // dispatchStatus: not synced to Monday — client doesn't need this column (2026-07)
+  // deliveryStatus: not synced to Monday — client doesn't need this column (2026-07)
+  // receivedDate: not synced to Monday — client doesn't need this column (2026-07)
+  // portArrivalDate: not synced to Monday — client doesn't need this column (2026-07)
+  // inTransitDate: not synced to Monday — client doesn't need this column (2026-07)
+  // supplierContainer: { title: "Supplier / Container", type: "text" },
+  // poNumber: { title: "PO #", type: "text" },
+  // depositPaid: not synced to Monday — client doesn't need this column (2026-07)
+  // balanceDue: not synced to Monday — client doesn't need this column (2026-07)
+};
+
+let columnIdCache: Record<string, string> | null = null;
+let columnIdCachePromise: Promise<Record<string, string>> | null = null;
+let validGroupIdCache: string | null = null;
+let validGroupIdPromise: Promise<string | undefined> | null = null;
+
+async function getOrCreateColumnIds(): Promise<Record<string, string>> {
+  if (columnIdCache) {
+    const missing = Object.keys(FIELD_DEFS).filter((k) => !columnIdCache![k]);
+    if (missing.length === 0) {
+      console.log("[Monday] Using cached column IDs:", columnIdCache);
+      return columnIdCache;
+    }
+    console.log("[Monday] Column cache missing new fields, refreshing:", missing);
+    columnIdCache = null;
+  }
+
+  if (columnIdCachePromise) {
+    console.log("[Monday] Column ID fetch already in flight, awaiting it");
+    return columnIdCachePromise;
+  }
+
+  columnIdCachePromise = (async () => {
+    console.log(
+      "[Monday] Fetching board columns for board:",
+      process.env.MONDAY_BOARD_ID,
+    );
+    const data = await mondayRequest(
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { columns { id title type } } }`,
+      { boardId: process.env.MONDAY_BOARD_ID },
+    );
+    const existing: { id: string; title: string; type: string }[] =
+      data.boards?.[0]?.columns ?? [];
+    console.log(
+      "[Monday] Existing columns:",
+      existing.map((c) => c.title),
+    );
+    const map: Record<string, string> = {};
+
+    for (const [key, def] of Object.entries(FIELD_DEFS)) {
+      const found = existing.find(
+        (c) => c.title.toLowerCase() === def.title.toLowerCase(),
+      );
+      if (found) {
+        console.log(
+          `[Monday] Column "${def.title}" already exists (id: ${found.id})`,
+        );
+        map[key] = found.id;
+        continue;
+      }
+      console.log(
+        `[Monday] Creating column "${def.title}" (type: ${def.type})`,
+      );
+      let created;
+      try {
+        created = await mondayRequest(
+          `mutation ($boardId: ID!, $title: String!, $columnType: ColumnType!, $defaults: JSON) {
+            create_column(board_id: $boardId, title: $title, column_type: $columnType, defaults: $defaults) { id }
+          }`,
+          {
+            boardId: process.env.MONDAY_BOARD_ID,
+            title: def.title,
+            columnType: def.type,
+            defaults: def.defaults,
+          },
+        );
+      } catch {
+        console.warn(`[Monday] Skipping missing column "${def.title}"`);
+        continue;
+      }
+      if (!created?.create_column?.id) {
+        console.warn(`[Monday] Skipping missing column "${def.title}"`);
+        continue;
+      }
+      console.log(
+        `[Monday] Created column "${def.title}" -> id: ${created.create_column.id}`,
+      );
+      map[key] = created.create_column.id;
+    }
+
+    columnIdCache = map;
+    console.log("[Monday] Final column ID map:", map);
+    return map;
+  })();
+
+  try {
+    return await columnIdCachePromise;
+  } finally {
+    columnIdCachePromise = null;
+  }
+}
+
+async function getValidGroupId(): Promise<string | undefined> {
+  if (validGroupIdCache) return validGroupIdCache;
+  if (validGroupIdPromise) return validGroupIdPromise;
+
+  validGroupIdPromise = (async () => {
+    const configuredGroupId = process.env.MONDAY_GROUP_ID;
+    if (!configuredGroupId) return undefined;
+
+    const data = await mondayRequest(
+      `query ($boardId: ID!) { boards(ids: [$boardId]) { groups { id title archived deleted } } }`,
+      { boardId: process.env.MONDAY_BOARD_ID },
+    );
+    const groups: {
+      id: string;
+      title: string;
+      archived?: boolean;
+      deleted?: boolean;
+    }[] = data.boards?.[0]?.groups ?? [];
+
+    const configured = groups.find((g) => g.id === configuredGroupId);
+    if (configured && !configured.archived && !configured.deleted) {
+      console.log(
+        `[Monday] Configured group "${configuredGroupId}" is active, using it`,
+      );
+      validGroupIdCache = configuredGroupId;
+      return configuredGroupId;
+    }
+
+    console.warn(
+      `[Monday] Configured MONDAY_GROUP_ID "${configuredGroupId}" is missing/archived/deleted. Falling back to first active group.`,
+    );
+    const fallback = groups.find((g) => !g.archived && !g.deleted);
+    if (fallback) {
+      console.log(
+        `[Monday] Using fallback group "${fallback.title}" (${fallback.id})`,
+      );
+      validGroupIdCache = fallback.id;
+      return fallback.id;
+    }
+
+    console.warn(
+      "[Monday] No active groups found, creating item without a group_id (board default).",
+    );
+    return undefined;
+  })();
+
+  try {
+    return await validGroupIdPromise;
+  } finally {
+    validGroupIdPromise = null;
+  }
+}
+
+const statusLabelMap: Record<string, string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  dispatched: "Dispatched",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+};
+
+const paymentStatusLabelMap: Record<string, string> = {
+  paid: "Paid",
+  partial: "Partial",
+  pending: "Pending",
+  overdue: "Overdue",
+  // Shopify financial statuses
+  complete: "Paid",
+  fully_paid: "Paid",
+  authorized: "Paid",
+  captured: "Paid",
+  partially_paid: "Partial",
+  partially_refunded: "Partial",
+  pending_payment: "Pending",
+  unpaid: "Pending",
+  authorized_pending_capture: "Pending",
+  outstanding: "Pending",
+  // spaced variants
+  "fully paid": "Paid",
+  "partially paid": "Partial",
+  "partially refunded": "Partial",
+  "pending payment": "Pending",
+};
+
+/** Monday Payment Status board labels only — omit unknown to avoid whole-mutation fail. */
+const MONDAY_PAYMENT_LABELS = new Set(["Paid", "Partial", "Pending", "Overdue"]);
+
+export function resolveMondayPaymentLabel(raw: string): string | null {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const key = v.toLowerCase().replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  const underscored = v.toLowerCase().replace(/[\s-]+/g, "_");
+  const mapped =
+    paymentStatusLabelMap[key] ||
+    paymentStatusLabelMap[underscored] ||
+    paymentStatusLabelMap[v.toLowerCase()] ||
+    null;
+  if (mapped && MONDAY_PAYMENT_LABELS.has(mapped)) return mapped;
+  // Already a valid Monday label (exact casing)
+  if (MONDAY_PAYMENT_LABELS.has(v)) return v;
+  const titleCase = MONDAY_PAYMENT_LABELS.has(
+    v.charAt(0).toUpperCase() + v.slice(1).toLowerCase(),
+  )
+    ? v.charAt(0).toUpperCase() + v.slice(1).toLowerCase()
+    : null;
+  return titleCase;
+}
+
+const warehouseStatusLabelMap: Record<string, string> = {
+  pending: "Not received",
+  "not received": "Not received",
+  received: "Received",
+  processing: "Processing",
+  "ready to dispatch": "Ready to dispatch",
+  dispatched: "Dispatched",
+};
+
+const dispatchStatusLabelMap: Record<string, string> = {
+  "not dispatched": "Not dispatched",
+  booked: "Booked",
+  dispatched: "Dispatched",
+  failed: "Failed",
+};
+
+const deliveryStatusLabelMap: Record<string, string> = {
+  pending: "Pending",
+  "in transit": "In transit",
+  "out for delivery": "Out for delivery",
+  delivered: "Delivered",
+  failed: "Failed",
+};
+
+const carrierLabelMap: Record<string, string> = {
+  fliway: "Linehaul - Fliway",
+  fliwaylinehaul: "Linehaul - Fliway",
+  "fliway - linehaul": "Linehaul - Fliway",
+  fliwaymidsize: "Midsize - Fliway",
+  "fliway - midsize": "Midsize - Fliway",
+  nzp: "NZP",
+  nzp_age_restricted: "NZP - Age Restricted",
+  castle: "Castle",
+  tge: "TGE",
+  "team global express": "TGE",
+  m2h: "M2H Delivery",
+  m2h_delivery: "M2H Delivery",
+  mainfreight: "MAINFREIGHT",
+  "mainfreight depot": "MF Depot",
+  "tge depot": "TGE Depot",
+  "depot - fliway": "Depot - Fliway",
+  "fliway depot": "Depot - Fliway",
+};
+
+const MONDAY_CARRIER_LABELS = new Set(Object.values(carrierLabelMap));
+
+export function resolveMondayCarrierLabel(rawCarrier: string, isDepot: boolean): string | null {
+  const carrierVal = String(rawCarrier || "").trim();
+  if (!carrierVal) return null;
+  const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
+  let label: string | null = null;
+
+  if (isDepot) {
+    if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+    else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+    else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+  }
+  if (!label) {
+    label =
+      carrierLabelMap[carrierVal.toLowerCase()] ||
+      carrierLabelMap[keyNorm] ||
+      (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+  }
+  return label;
+}
+
+export function resolveMondayCustomerStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), statusLabelMap);
+}
+
+export function resolveMondayWarehouseStatusLabel(raw: string): string | null {
+  return resolveMappedLabel(String(raw || ""), warehouseStatusLabelMap);
+}
+
+const columnColorCache: Record<string, { map: Record<string, string>; fetchedAt: number }> = {};
+/** Cache TTL — short enough that a color change in Monday's column settings
+ *  is picked up quickly, long enough to avoid hammering the API on busy syncs. */
+const COLUMN_COLOR_CACHE_TTL_MS = 60_000;
+
+async function getColumnColorMap(
+  columnKey: string,
+  forceRefresh = false,
+): Promise<Record<string, string>> {
+  const cached = columnColorCache[columnKey];
+  if (!forceRefresh && cached && Date.now() - cached.fetchedAt < COLUMN_COLOR_CACHE_TTL_MS) {
+    return cached.map;
+  }
+  const colIds = await getOrCreateColumnIds();
+  const colId = colIds[columnKey];
+  if (!colId) return cached?.map ?? {};
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $colId: [String!]) { boards(ids: [$boardId]) { columns(ids: $colId) { settings_str } } }`,
+    { boardId: process.env.MONDAY_BOARD_ID, colId: [colId] },
+  ).catch(() => null);
+  const settingsStr = data?.boards?.[0]?.columns?.[0]?.settings_str;
+  if (!settingsStr) return cached?.map ?? {};
+  try {
+    const settings = JSON.parse(settingsStr);
+    const labels: Record<string, string> = settings.labels ?? {};
+    const labelsColors: Record<string, { color?: string }> = settings.labels_colors ?? {};
+    const map: Record<string, string> = {};
+    for (const [idx, labelText] of Object.entries(labels)) {
+      const hex = labelsColors[idx]?.color;
+      if (hex) map[String(labelText)] = hex;
+    }
+    columnColorCache[columnKey] = { map, fetchedAt: Date.now() };
+    return map;
+  } catch {
+    return cached?.map ?? {};
+  }
+}
+
+/** Resolve the live badge hex color Monday shows for a status-column label.
+ *  Pass `forceRefresh=true` to bypass the short-lived cache (e.g. inbound
+ *  webhook processing, where staleness would silently keep the wrong color). */
+export async function resolveMondayStatusColor(
+  columnKey: "carriers" | "customerStatus" | "paymentStatus" | "warehouseStatus",
+  label: string | null,
+  forceRefresh = false,
+): Promise<string> {
+  if (!label) return "";
+  const map = await getColumnColorMap(columnKey, forceRefresh);
+  return map[label] ?? "";
+}
+
+function resolveMappedLabel(
+  raw: string,
+  map: Record<string, string>,
+): string | null {
+  const v = String(raw || "").trim();
+  if (!v) return null;
+  const lower = v.toLowerCase();
+  if (map[lower]) return map[lower];
+  // Already a valid label value in the map
+  if (Object.values(map).includes(v)) return v;
+  return null;
+}
+
+async function buildColumnValues(row: MondayRow) {
+  const colIds = await getOrCreateColumnIds();
+  const values: Record<string, any> = {};
+  const skipped: string[] = [];
+  const dateKeys = new Set<keyof MondayRow>([
+    "eddDate",
+    "originalEddDate",
+    "receivedDate",
+    "portArrivalDate",
+    "inTransitDate",
+    "orderDate",
+  ]);
+  const toDate = (raw: unknown) => {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+    const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? m[1] : s.slice(0, 10);
+  };
+
+  // Always set Monday pulse Name to Line Order # (e.g. #CDL215347A) — never product title.
+  const pulseName = String(row.lineOrderName || "").trim();
+  if (pulseName && !(pulseName.includes(" - ") && pulseName.length > 40)) {
+    values.name = pulseName;
+  }
+
+  for (const key of Object.keys(FIELD_DEFS) as (keyof MondayRow)[]) {
+    const colId = colIds[key];
+    if (!colId) {
+      skipped.push(`${key}:no-column`);
+      continue;
+    }
+    const val = row[key];
+    if (dateKeys.has(key)) {
+      const d = toDate(val);
+      if (d) values[colId] = { date: d };
+      else if (val) skipped.push(`${key}:bad-date`);
+    } else if (key === "customerStatus") {
+      const label = resolveMappedLabel(String(val || ""), statusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
+    } else if (key === "carriers") {
+      const carrierVal = String(val || "").trim();
+      if (carrierVal) {
+        const keyNorm = carrierVal.toLowerCase().replace(/[\s-]+/g, "");
+        let label: string | null = null;
+
+        if (row.isDepot) {
+          if (keyNorm.includes("fliway")) label = carrierLabelMap["depot - fliway"];
+          else if (keyNorm.includes("mainfreight")) label = carrierLabelMap["mainfreight depot"];
+          else if (keyNorm.includes("tge")) label = carrierLabelMap["tge depot"];
+        }
+
+        if (!label) {
+          label =
+            carrierLabelMap[carrierVal.toLowerCase()] ||
+            carrierLabelMap[keyNorm] ||
+            (MONDAY_CARRIER_LABELS.has(carrierVal) ? carrierVal : null);
+        }
+
+        if (label) values[colId] = { label };
+        else skipped.push(`${key}:bad-label:${carrierVal}`);
+      }
+    } else if (key === "paymentStatus") {
+      const label = resolveMondayPaymentLabel(String(val || ""));
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
+    } else if (key === "warehouseStatus") {
+      const label = resolveMappedLabel(String(val || ""), warehouseStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
+    } else if (key === "dispatchStatus") {
+      const label = resolveMappedLabel(String(val || ""), dispatchStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
+    } else if (key === "deliveryStatus") {
+      const label = resolveMappedLabel(String(val || ""), deliveryStatusLabelMap);
+      if (label) values[colId] = { label };
+      else if (val) skipped.push(`${key}:bad-label:${val}`);
+    } else if (key === "email") {
+      if (val) values[colId] = { email: val, text: val };
+    } else if (val !== "" && val != null) {
+      values[colId] = val;
+    }
+  }
+  if (skipped.length) {
+    console.log("[Monday] buildColumnValues skipped:", skipped);
+  }
+  return values;
+}
+
+/** Which MondayRow fields are non-empty (for sync debug responses). */
+export function summarizeMondayRow(row: MondayRow): {
+  filled: Record<string, string | number>;
+  blank: string[];
+} {
+  const filled: Record<string, string | number> = {};
+  const blank: string[] = [];
+  for (const key of Object.keys(FIELD_DEFS) as (keyof MondayRow)[]) {
+    const val = row[key];
+    if (val !== "" && val != null) filled[key] = val as string | number;
+    else blank.push(key);
+  }
+  return { filled, blank };
+}
+
+async function findMondayItemsByColumnValue(columnId: string | undefined, columnValue: string) {
+  const id = String(columnId || "").trim();
+  const value = String(columnValue || "").trim();
+  if (!id || !value) return [];
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $columns: [ItemsPageByColumnValuesQuery!]) {
+      items_page_by_column_values(board_id: $boardId, columns: $columns) {
+        items { id name }
+      }
+    }`,
+    {
+      boardId: process.env.MONDAY_BOARD_ID,
+      columns: [{ column_id: id, column_values: [value] }],
+    },
+  );
+  return data?.items_page_by_column_values?.items ?? [];
+}
+
+export async function findExistingMondayItemId(
+  _orderId: string,
+  _variantId: string,
+) {
+  // Shopify order id is not a Monday column. items_page_by_column_values without
+  // column_id fails the whole Monday step. Match by pulse name / SKU instead.
+  return null;
+}
+
+export function mondayPulseNameCandidates(
+  orderName?: string | null,
+  letterSuffix?: string | null,
+  fallbackOrderId?: string | null,
+): string[] {
+  const letter = String(letterSuffix || "").trim().toUpperCase();
+  let base = String(orderName || "").trim();
+  if (!base) base = String(fallbackOrderId || "").trim();
+  const stripped = base.replace(/^#/, "");
+  if (!stripped) return [];
+  const out = [
+    `#${stripped}${letter}`,
+    `${stripped}${letter}`,
+    `#${stripped}`,
+    stripped,
+  ];
+  return [...new Set(out.map((v) => v.trim()).filter(Boolean))];
+}
+
+function normalizeMondayPulseName(value?: string | null): string {
+  return String(value || "")
+    .trim()
+    .replace(/^#/, "")
+    .toLowerCase();
+}
+
+export async function findMondayItemByName(itemName: string): Promise<string | null> {
+  const found = await findMondayItemByNameDetailed(itemName);
+  return found?.id || null;
+}
+
+export async function findMondayItemByNameDetailed(
+  itemName: string,
+  extraTerms: string[] = [],
+): Promise<{ id: string; name: string } | null> {
+  const name = String(itemName || "").trim();
+  if (!name) return null;
+  const boardId = process.env.MONDAY_BOARD_ID;
+  if (!boardId) return null;
+
+  const stripped = name.replace(/^#/, "");
+  const term = [...new Set([stripped, `#${stripped}`, name, ...extraTerms.map((t) => String(t || "").trim()).filter(Boolean)])];
+
+  try {
+    const data = await mondayRequest(
+      `query ($boardId: ID!, $term: CompareValue!) {
+        boards(ids: [$boardId]) {
+          items_page(
+            limit: 25
+            query_params: {
+              rules: [{ column_id: "name", compare_value: $term, operator: contains_text }]
+            }
+          ) {
+            items { id name }
+          }
+        }
+      }`,
+      { boardId, term },
+    );
+    const items = data?.boards?.[0]?.items_page?.items ?? [];
+    const wants = term.map(normalizeMondayPulseName).filter(Boolean);
+    const scored = items
+      .map((item: any) => {
+        const n = normalizeMondayPulseName(item?.name);
+        const exact = wants.includes(n);
+        const prefix = wants.some((w) => n === w || n.startsWith(w));
+        return { item, exact, prefix };
+      })
+      .filter((row: { exact: boolean; prefix: boolean }) => row.exact || row.prefix);
+    const best = scored.find((row: { exact: boolean }) => row.exact) || scored[0];
+    if (best?.item?.id) {
+      return { id: String(best.item.id), name: String(best.item.name || name) };
+    }
+  } catch (err) {
+    console.error("[Monday] findMondayItemByName failed", name, err);
+  }
+  return null;
+}
+
+/** Find an existing pulse for one operational line (name variants + SKU). */
+export async function findMondayItemForLine(input: {
+  orderName?: string | null;
+  letterSuffix?: string | null;
+  orderId?: string | null;
+  sku?: string | null;
+}): Promise<{ id: string; name: string } | null> {
+  const names = mondayPulseNameCandidates(input.orderName, input.letterSuffix, input.orderId);
+  if (names.length) {
+    const hit = await findMondayItemByNameDetailed(names[0], names.slice(1));
+    if (hit?.id) return hit;
+  }
+  const skuHit = await findMondayItemBySkuAndOrderName({
+    sku: input.sku,
+    orderName: input.orderName,
+    letterSuffix: input.letterSuffix,
+  });
+  if (skuHit?.id) return skuHit;
+  return null;
+}
+
+export async function findMondayItemBySkuAndOrderName(input: {
+  sku?: string | null;
+  orderName?: string | null;
+  letterSuffix?: string | null;
+}): Promise<{ id: string; name: string } | null> {
+  const sku = String(input.sku || "").trim();
+  const orderName = String(input.orderName || "").trim();
+  if (!sku || !orderName) return null;
+
+  try {
+    const colIds = await getOrCreateColumnIds();
+    if (!colIds.sku) return null;
+    const items = await findMondayItemsByColumnValue(colIds.sku, sku);
+    if (!items.length) return null;
+    const letter = String(input.letterSuffix || "").trim().toUpperCase();
+    const needle = orderName.replace(/^#/, "").toLowerCase();
+    const named = items.find((item: any) => {
+      const n = normalizeMondayPulseName(item?.name);
+      if (!n.includes(needle)) return false;
+      if (letter && !n.endsWith(letter.toLowerCase()) && n !== needle) return false;
+      return true;
+    });
+    if (named?.id) return { id: String(named.id), name: String(named.name || "") };
+  } catch (err) {
+    console.error("[Monday] findMondayItemBySkuAndOrderName failed", input, err);
+  }
+  return null;
+}
+
+export async function createMondayItem(itemName: string, row: MondayRow) {
+  const safeName =
+    String(row.lineOrderName || itemName || "").trim() ||
+    buildMondayPulseName(null, null, row.orderId);
+  // Guard: never create with a product-title-like pulse name.
+  const pulseName =
+    safeName.includes(" - ") && safeName.length > 40
+      ? buildMondayPulseName(null, null, row.orderId)
+      : safeName;
+  console.log("[Monday] createMondayItem called:", pulseName, row);
+  const groupId = await getValidGroupId();
+  const query = `mutation ($boardId: ID!, $groupId: String, $itemName: String!, $columnValues: JSON!) {
+    create_item(board_id: $boardId, group_id: $groupId, item_name: $itemName, column_values: $columnValues) { id }
+  }`;
+
+  const rowWithName = { ...row, lineOrderName: pulseName };
+  let columnValues = await buildColumnValues(rowWithName);
+  let data;
+  try {
+    data = await mondayRequest(query, {
+      boardId: process.env.MONDAY_BOARD_ID,
+      groupId,
+      itemName: pulseName,
+      columnValues: JSON.stringify(columnValues),
+    });
+  } catch (err) {
+    if (isInvalidColumnError(err)) {
+      console.log(
+        "[Monday] Stale column ID cache detected on create, clearing cache and retrying once",
+      );
+      columnIdCache = null;
+      columnValues = await buildColumnValues(rowWithName);
+      data = await mondayRequest(query, {
+        boardId: process.env.MONDAY_BOARD_ID,
+        groupId,
+        itemName: pulseName,
+        columnValues: JSON.stringify(columnValues),
+      });
+    } else {
+      throw err;
+    }
+  }
+  console.log("[Monday] Item created with id:", data.create_item.id, "name:", pulseName);
+  return data.create_item.id as string;
+}
+
+export type MondayBundleComponent = {
+  componentSku: string;
+  componentTitle: string;
+  componentQuantity: number;
+};
+
+export function buildMondayBundleSubitemName(component: MondayBundleComponent): string {
+  const sku = String(component.componentSku || "").trim();
+  const title = String(component.componentTitle || "").trim();
+  return [sku, title].filter(Boolean).join(" - ") || "Bundle component";
+}
+
+async function buildMondayBundleSubitemValues(component: MondayBundleComponent) {
+  const columnIds = await getOrCreateColumnIds();
+  const values: Record<string, string | number> = {};
+  if (columnIds.productTitle && component.componentTitle) {
+    values[columnIds.productTitle] = component.componentTitle;
+  }
+  if (columnIds.sku && component.componentSku) {
+    values[columnIds.sku] = component.componentSku;
+  }
+  if (columnIds.boxes) {
+    values[columnIds.boxes] = Number(component.componentQuantity) || 0;
+  }
+  return values;
+}
+
+/** Create or update display-only bundle component subitems beneath a parent pulse. */
+export async function syncMondayBundleSubitems(
+  parentItemId: string,
+  components: MondayBundleComponent[],
+): Promise<{ created: number; updated: number }> {
+  const parentId = String(parentItemId || "").trim();
+  if (!parentId || parentId === "pending" || !components.length) {
+    return { created: 0, updated: 0 };
+  }
+
+  const existingData = await mondayRequest(
+    `query ($itemIds: [ID!]) {
+      items(ids: $itemIds) {
+        subitems { id name }
+      }
+    }`,
+    { itemIds: [parentId] },
+  );
+  const existingByName = new Map<string, Array<{ id: string; name: string }>>();
+  for (const item of existingData?.items?.[0]?.subitems ?? []) {
+    const name = String(item?.name || "").trim();
+    if (!item?.id || !name) continue;
+    const matches = existingByName.get(name) ?? [];
+    matches.push({ id: String(item.id), name });
+    existingByName.set(name, matches);
+  }
+
+  let created = 0;
+  let updated = 0;
+  for (const component of components) {
+    const name = buildMondayBundleSubitemName(component);
+    const values = await buildMondayBundleSubitemValues(component);
+    const existing = existingByName.get(name)?.shift();
+    if (existing) {
+      await mondayRequest(
+        `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+          change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id }
+        }`,
+        {
+          boardId: process.env.MONDAY_BOARD_ID,
+          itemId: existing.id,
+          columnValues: JSON.stringify(values),
+        },
+      );
+      updated++;
+      continue;
+    }
+
+    await mondayRequest(
+      `mutation ($parentItemId: ID!, $itemName: String!, $columnValues: JSON!) {
+        create_subitem(parent_item_id: $parentItemId, item_name: $itemName, column_values: $columnValues) { id }
+      }`,
+      {
+        parentItemId: parentId,
+        itemName: name,
+        columnValues: JSON.stringify(values),
+      },
+    );
+    created++;
+  }
+
+  console.log(`[Monday] Bundle subitems synced parent=${parentId} created=${created} updated=${updated}`);
+  return { created, updated };
+}
+
+export async function updateMondayItem(itemId: string, row: MondayRow) {
+  console.log("[Monday] updateMondayItem called:", itemId, row);
+  const query = `mutation ($boardId: ID!, $itemId: ID!, $columnValues: JSON!) {
+    change_multiple_column_values(board_id: $boardId, item_id: $itemId, column_values: $columnValues) { id }
+  }`;
+
+  let columnValues = await buildColumnValues(row);
+  const send = async (values: Record<string, any>) => {
+    await mondayRequest(query, {
+      boardId: process.env.MONDAY_BOARD_ID,
+      itemId,
+      columnValues: JSON.stringify(values),
+    });
+  };
+
+  try {
+    await send(columnValues);
+  } catch (err) {
+    if (isInvalidColumnError(err)) {
+      console.log(
+        "[Monday] Stale column ID cache detected on update, clearing cache and retrying once",
+      );
+      columnIdCache = null;
+      columnValues = await buildColumnValues(row);
+      await send(columnValues);
+    } else {
+      // One bad status label used to fail the whole mutation — strip that column and retry.
+      const msg = err instanceof Error ? err.message : String(err);
+      const colMatch = msg.match(/"column_id":"([^"]+)"/);
+      const badColId = colMatch?.[1];
+      if (badColId && msg.includes("missingLabel") && columnValues[badColId] != null) {
+        console.warn(
+          `[Monday] Removing bad column ${badColId} after missingLabel and retrying`,
+          columnValues[badColId],
+        );
+        const { [badColId]: _removed, ...rest } = columnValues;
+        await send(rest);
+      } else {
+        throw err;
+      }
+    }
+  }
+
+  // ── NEW: Monday's API returns success even when writing to a deleted/archived
+  // item (the write is silently a no-op). Verify the item is actually active
+  // after updating, so callers' stale-item recovery logic actually triggers.
+  const verifyData = await mondayRequest(
+    `query ($itemId: [ID!]) { items(ids: $itemId) { id state } }`,
+    { itemId: [itemId] },
+  ).catch(() => null);
+  const verifiedState = verifyData?.items?.[0]?.state;
+  if (verifiedState && verifiedState !== "active") {
+    console.log(`[Monday] Item ${itemId} update was a no-op — item state is "${verifiedState}"`);
+    throw new Error("inactiveItems");
+  }
+  // ── end new block ──
+
+  console.log("[Monday] Item updated:", itemId);
+}
+
+// Text columns don't carry `changed_at` in their column value JSON (only
+// date/status columns do), so for text columns we look up the last time
+// that specific column was changed via the board's activity log instead.
+async function fetchColumnChangedAt(
+  itemId: string,
+  columnId: string,
+): Promise<string | null> {
+  const data = await mondayRequest(
+    `query ($boardId: ID!, $columnIds: [String!]) {
+      boards(ids: [$boardId]) {
+        activity_logs(column_ids: $columnIds, limit: 25) {
+          data
+          created_at
+        }
+      }
+    }`,
+    { boardId: process.env.MONDAY_BOARD_ID, columnIds: [columnId] },
+  ).catch((err) => {
+    console.error("[Monday] fetchColumnChangedAt failed", err);
+    return null;
+  });
+
+  const logs: { data: string; created_at: string }[] =
+    data?.boards?.[0]?.activity_logs ?? [];
+
+  let latestMs: number | null = null;
+  for (const log of logs) {
+    try {
+      const parsed = JSON.parse(log.data);
+      const pulseId = String(parsed.pulse_id ?? parsed.item_id ?? "");
+      if (pulseId !== String(itemId)) continue;
+      // Monday activity log created_at is Unix time * 10,000,000
+      // (100-nanosecond intervals) — divide by 10,000 to get milliseconds.
+      const ms = Number(log.created_at) / 10000;
+      if (!Number.isFinite(ms)) continue;
+      if (latestMs === null || ms > latestMs) latestMs = ms;
+    } catch {
+      continue;
+    }
+  }
+
+  return latestMs !== null ? new Date(latestMs).toISOString() : null;
+}
+
+export async function fetchMondayItem(itemId: string) {
+  const colIds = await getOrCreateColumnIds();
+  const query = `query ($itemId: [ID!]) {
+    items(ids: $itemId) { id name state column_values { id text value } }
+  }`;
+  const data = await mondayRequest(query, { itemId: [itemId] });
+  const item = data.items?.[0];
+  if (!item) return null;
+  if (item.state && item.state !== "active") {
+    console.log(
+      `[Monday] Item ${itemId} is not active (state: ${item.state}), treating as not found`,
+    );
+    return null;
+  }
+
+  const getCol = (key: keyof MondayRow) =>
+    item.column_values.find((c: any) => c.id === colIds[key]);
+  const getText = (key: keyof MondayRow) => getCol(key)?.text ?? "";
+
+  const getChangedAt = (key: keyof MondayRow): string | null => {
+    const raw = getCol(key)?.value;
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw)?.changed_at ?? null;
+    } catch {
+      return null;
+    }
+  };
+
+  // trackingNumber is a text column, which has no `changed_at` in its value
+  // JSON, so it needs the activity-log lookup instead of getChangedAt().
+  const trackingNumberChangedAt = await fetchColumnChangedAt(
+    itemId,
+    colIds.trackingNumber,
+  );
+
+  return {
+    name: String(item.name || ""),
+    customerStatus: getText("customerStatus"),
+    statusChangedAt: getChangedAt("customerStatus"),
+    carriers: getText("carriers"),
+    eddDate: getText("eddDate"),
+    eddDateChangedAt: getChangedAt("eddDate"),
+    originalEddDate: getText("originalEddDate"),
+    trackingNumber: getText("trackingNumber"),
+    trackingNumberChangedAt,
+    warehouseStatus: getText("warehouseStatus"),
+    dispatchStatus: getText("dispatchStatus"),
+    deliveryStatus: getText("deliveryStatus"),
+    depositPaid: getText("depositPaid"),
+    balanceDue: getText("balanceDue"),
+    paymentStatus: getText("paymentStatus"),
+    sku: getText("sku"),
+  };
+}
+
+export async function createMondayUpdate(itemId: string, body: string) {
+  console.log("[Monday] createMondayUpdate called:", itemId, body);
+  const query = `mutation ($itemId: ID!, $body: String!) {
+    create_update(item_id: $itemId, body: $body) { id }
+  }`;
+  const data = await mondayRequest(query, { itemId, body });
+  console.log("[Monday] Update created:", data.create_update?.id);
+  return data.create_update?.id as string;
+}
+
+let mondayApiUserId: string | null = null;
+
+export async function getMondayApiUserId(): Promise<string | null> {
+  if (mondayApiUserId) return mondayApiUserId;
+  const data = await mondayRequest(`query { me { id } }`).catch(() => null);
+  mondayApiUserId = data?.me?.id ? String(data.me.id) : null;
+  return mondayApiUserId;
+}
+
+export async function fetchMondayUpdates(itemId: string) {
+  const data = await mondayRequest(
+    `query ($itemId: [ID!]) { items(ids: $itemId) { updates(limit: 50) { id text_body created_at creator { id name } } } }`,
+    { itemId: [itemId] },
+  );
+  const updates = data.items?.[0]?.updates ?? [];
+  return updates
+    .map((u: any) => ({
+      id: String(u.id),
+      creatorId: u.creator?.id != null ? String(u.creator.id) : null,
+      creatorName: u.creator?.name ?? "Monday",
+      body: String(u.text_body ?? "").trim(),
+      createdAt: u.created_at,
+    }))
+    .filter((u: any) => u.body);
+}

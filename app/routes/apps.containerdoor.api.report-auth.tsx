@@ -1,0 +1,113 @@
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import { data } from "react-router";
+import bcrypt from "bcryptjs";
+import { v4 as uuidv4 } from "uuid";
+import prisma from "../db.server";
+import { createReportSession, destroyReportSession } from "../lib/report-auth.server";
+
+function getCorsHeaders(request: Request) {
+  const origin = request.headers.get("origin");
+  return {
+    "Access-Control-Allow-Origin": origin ?? "*",
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Expose-Headers": "Location",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, Cache-Control",
+    ...(origin ? { Vary: "Origin" } : {}),
+  };
+}
+
+export async function loader({ request }: LoaderFunctionArgs) {
+  // CORS preflight — intentionally NOT signature-checked, some browsers'
+  // preflight requests can behave oddly with proxies. The real POST below is checked.
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
+
+  return new Response(null, { status: 405, headers: getCorsHeaders(request) });
+}
+
+export async function action({ request }: ActionFunctionArgs) {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: getCorsHeaders(request) });
+  }
+
+  // Allow auth requests from the login page, including embedded admin access.
+  // A separate App Proxy endpoint is not required for login/logout.
+
+  const url = new URL(request.url);
+  const intent = url.searchParams.get("intent");
+
+  // ── Logout ────────────────────────────────────────────────────────────────
+  if (intent === "logout") {
+    return destroyReportSession(request);
+  }
+
+  // ── Login ─────────────────────────────────────────────────────────────────
+  let body: Record<string, string | undefined> = {};
+  const contentType = request.headers.get("Content-Type") ?? "";
+
+  if (contentType.includes("application/json")) {
+    body = (await request.json()) as Record<string, string>;
+  } else if (contentType.includes("application/x-www-form-urlencoded")) {
+    body = Object.fromEntries(await request.formData()) as Record<string, string>;
+  } else {
+    body = (await request.json().catch(() => ({}))) as Record<string, string>;
+  }
+
+  const { email, password, shop } = body;
+
+  const normalizedEmail = email?.trim().toLowerCase();
+  const normalizedShop = shop?.trim();
+
+  if (!normalizedEmail || !password) {
+    return data({ error: "Email and password are required." }, { status: 400, headers: getCorsHeaders(request) });
+  }
+
+  // Find user for the requested shop. Avoid falling back to another store's
+  // account when a shop is provided, otherwise the dashboard can show the
+  // wrong user identity and data.
+  let user = null;
+
+  if (normalizedShop) {
+    user = await prisma.externalUser.findFirst({
+      where: { shop: normalizedShop, email: normalizedEmail, isActive: true },
+    });
+  }
+
+  if (!user) {
+    user = await prisma.externalUser.findFirst({
+      where: { email: normalizedEmail, isActive: true },
+    });
+  }
+
+  if (!user || !user.passwordHash) {
+    return data({ error: normalizedShop ? "No active account found for this store and email." : "Invalid email or password." }, { status: 401, headers: getCorsHeaders(request) });
+  }
+
+  const isBcryptHash = /^\$2[aby]\$\d{2}\$/.test(user.passwordHash);
+  const valid = isBcryptHash
+    ? await bcrypt.compare(password, user.passwordHash)
+    : password === user.passwordHash;
+
+  if (!valid) {
+    return data({ error: "Invalid email or password." }, { status: 401, headers: getCorsHeaders(request) });
+  }
+
+  if (!isBcryptHash) {
+    await prisma.externalUser.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(password, 10) },
+    });
+  }
+
+  // Create session token
+  const token = uuidv4();
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 7); // 7 days
+
+  await prisma.externalSession.create({
+    data: { userId: user.id, token, expiresAt },
+  });
+
+  return createReportSession(request, token, normalizedShop);
+}

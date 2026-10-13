@@ -1,0 +1,513 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { buildMondayItemUrl } from "./monday.server";
+import { buildCin7SalesOrderUrl } from "./cin7-adapter.server";
+
+// Shared freight-order row builder. Used by both the list loader
+// (app.freight-orders.tsx) and the detail loader (app.freight-orders_.$orderId.tsx)
+// so the FreightDashboard row shape stays identical in both places.
+
+export type ShopifyOrderNode = {
+  id: string; name: string; createdAt: string; currencyCode: string;
+  email?: string; phone?: string;
+  displayFinancialStatus?: string; displayFulfillmentStatus?: string;
+  shippingAddress?: { city?: string; zip?: string; address1?: string; province?: string; country?: string; firstName?: string; lastName?: string };
+  shippingLines: { nodes: Array<{ title: string; code: string; originalPriceSet: { shopMoney: { amount: string; currencyCode: string } } }> };
+  lineItems: { nodes: Array<{ id: string; title: string; quantity: number; sku?: string; vendor?: string; variant?: { id: string; sku?: string } }> };
+};
+
+export const FREIGHT_SERVICE_PREFIXES = ["standard_delivery::", "depot_delivery::", "customer_pickup::"];
+const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+// GraphQL selection set that buildRow depends on. Reuse in loaders so the two
+// queries can't drift from what buildRow reads.
+export const FREIGHT_ORDER_FIELDS = `#graphql
+  fragment FreightOrderFields on Order {
+    id name createdAt currencyCode
+    shippingAddress { city zip address1 province country firstName lastName }
+    email phone displayFinancialStatus displayFulfillmentStatus
+    shippingLines(first: 5) { nodes { title code originalPriceSet { shopMoney { amount currencyCode } } } }
+    lineItems(first: 50) { nodes { id title quantity sku vendor variant { id sku } } }
+  }
+`;
+
+// Build the per-shop operational-data lookups buildRow needs.
+export async function buildOpsMaps(prisma: any, shop: string) {
+  const allOpsData = await prisma.orderLineItemOperationalData.findMany({ where: { shop } });
+  const opsMap = new Map<string, any>(allOpsData.map((r: any) => [`${r.orderId}::${r.variantId}`, r]));
+
+  const orderOpData = await prisma.orderOperationalData.findMany({
+    where: { shop },
+    select: { orderId: true, cin7SalesOrderId: true },
+  });
+  const orderCin7Map = new Map<string, boolean>(
+    orderOpData
+      .filter((row: any) => Boolean(row.cin7SalesOrderId && row.cin7SalesOrderId !== "pending"))
+      .map((row: any) => [row.orderId, true] as [string, boolean])
+  );
+
+  return { opsMap, orderCin7Map };
+}
+
+export function normalizePaymentStatus(status?: string | null): string {
+  const raw = (status ?? "").toString().trim();
+  if (!raw) return "";
+  const normalized = raw.toLowerCase();
+  if (["paid", "fully_paid", "authorized", "captured", "complete"].includes(normalized)) return "Paid";
+  if (["partial", "partially_paid", "partially_refunded"].includes(normalized)) return "Partial";
+  if (["pending", "pending_payment", "unpaid", "authorized_pending_capture", "outstanding"].includes(normalized)) return "Pending";
+  if (["overdue"].includes(normalized)) return "Overdue";
+  if (["refunded"].includes(normalized)) return "Refunded";
+  return raw;
+}
+
+// Immutable per-item snapshot fields for one freight line item. Shared by the
+// row builder (below), the order-webhook indexer, and the backfill route so the
+// three can't drift on how the shipping code / lineItemsJson is parsed.
+export type LineItemSnapshot = {
+  idx: number;
+  variantId: string;
+  letterSuffix: string;
+  productTitle: string;
+  productId: string;
+  variantTitle: string;
+  sku: string;
+  vendor: string;
+  company: string;
+  boxes: number;
+  amount: number;
+};
+
+// Parse a DB OrderSnapshot's shippingCode + lineItemsJson into the immutable
+// per-freight-line-item fields. Returns [] when the order has no freight code.
+// Parts with an empty variantId are skipped (they can't be keyed/joined).
+function snapshotsFromLineItemsJson(snap: any): LineItemSnapshot[] {
+  let parsed: Array<{
+    variantId?: number | string;
+    productId?: number | string | null;
+    variantTitle?: string;
+    title?: string;
+    sku?: string;
+    vendor?: string;
+    quantity?: number;
+    price?: string | number;
+    isBundleParent?: boolean;
+    bundleGroupId?: string;
+  }> = [];
+  try {
+    parsed = JSON.parse(snap?.lineItemsJson ?? "[]");
+  } catch {
+    return [];
+  }
+  const freightParts = String(snap?.shippingCode ?? "").split("::")[4] ?? "";
+  const bundleParent = parsed.find((li) => li.isBundleParent);
+  if (bundleParent && freightParts) {
+    const freightItems = freightParts.split("|").map((part) => part.split(":")[0]).filter(Boolean);
+    if (!freightItems.includes(String(bundleParent.variantId))) {
+      const totalBoxes = Number(snap.packageCount?.replace(/[^0-9.]/g, "") ?? 0) || 0;
+      return [{
+        idx: 0,
+        variantId: String(bundleParent.variantId),
+        letterSuffix: "A",
+        productTitle: bundleParent.title ?? "",
+        productId: bundleParent.productId != null ? String(bundleParent.productId) : "",
+        variantTitle: bundleParent.variantTitle ?? "",
+        sku: bundleParent.sku ?? "",
+        vendor: bundleParent.vendor ?? "",
+        company: String(snap.carriers ?? "").split(",")[0] ?? "",
+        boxes: totalBoxes,
+        amount: Number(snap.totalFreight ?? 0),
+      }];
+    }
+  }
+  const out: LineItemSnapshot[] = [];
+  parsed.forEach((li, idx) => {
+    const variantId = li.variantId != null && String(li.variantId).trim() ? String(li.variantId) : "";
+    if (!variantId) return;
+    out.push({
+      idx,
+      variantId,
+      letterSuffix: LETTERS[idx % 26],
+      productTitle: li.title ?? "",
+      productId: li.productId != null ? String(li.productId) : "",
+      variantTitle: li.variantTitle ?? "",
+      sku: li.sku ?? "",
+      vendor: li.vendor ?? "",
+      company: "",
+      boxes: Number(li.quantity ?? 1) || 1,
+      amount: Number(li.price ?? 0),
+    });
+  });
+  return out;
+}
+
+export function buildLineItemSnapshots(snap: any): LineItemSnapshot[] {
+  if (!snap.carriers || !snap.shippingCode) return snapshotsFromLineItemsJson(snap);
+  const lineItemsRaw = snap.shippingCode.split("::")[4] ?? "";
+  if (!lineItemsRaw) return snapshotsFromLineItemsJson(snap);
+
+  let parsedLineItems: Array<{ variantId?: number; productId?: number | null; variantTitle?: string; title?: string; sku?: string; vendor?: string; isBundleParent?: boolean; company?: string; boxes?: number; amount?: number }> = [];
+  try {
+    parsedLineItems = JSON.parse(snap.lineItemsJson ?? "[]");
+  } catch { /* empty */ }
+
+  // A collapsed bundle snapshot carries customer-facing parent(s) flagged
+  // isBundleParent, while the unchanged checkout freight code still lists the
+  // physical component variants. Component variants must never surface as their
+  // own OMS rows: each bundle parent becomes the row (inheriting the carrier its
+  // components were billed at checkout) and non-bundle lines keep the per-variant
+  // freight-code breakdown. When there is no bundle parent, the freight code is
+  // parsed per-variant unchanged (normal / multi-part orders).
+  const bundleParents = parsedLineItems.filter((li) => li.isBundleParent);
+  if (bundleParents.length) {
+    const codeParts = String(snap.shippingCode ?? "").split("::");
+    const fallbackCarrier = String(snap.carriers ?? "").split(",")[0] ?? "";
+    const fallbackBoxes =
+      Number(String(snap.packageCount ?? codeParts[2] ?? "").replace(/[^0-9.]/g, "")) || 0;
+    const fallbackAmount =
+      Number(snap.totalFreight ?? String(codeParts[3] ?? "").replace(/[^0-9.-]/g, "")) || 0;
+    const codeByVariant = new Map<string, { company: string; boxes: number; amount: number }>();
+    for (const part of lineItemsRaw.split("|")) {
+      const [variantId, rest] = part.split(":");
+      if (!variantId) continue;
+      const [company, boxesStr, amountStr] = (rest ?? "").split("x");
+      codeByVariant.set(variantId, {
+        company: company ?? "",
+        boxes: Number(boxesStr ?? 0),
+        amount: Number(amountStr ?? 0),
+      });
+    }
+    const out: LineItemSnapshot[] = [];
+    for (const li of parsedLineItems) {
+      if (li.variantId == null) continue;
+      const vid = String(li.variantId);
+      const code = codeByVariant.get(vid);
+      out.push({
+        idx: out.length,
+        variantId: vid,
+        letterSuffix: LETTERS[out.length % 26],
+        productTitle: li.title ?? "",
+        productId: li.productId != null ? String(li.productId) : "",
+        variantTitle: li.variantTitle ?? "",
+        sku: li.sku ?? "",
+        vendor: li.vendor ?? "",
+        // Bundle parent inherits the carrier/boxes/amount its components were
+        // billed (persisted on the snapshot line by saveOrderSnapshot), with a
+        // fallback to order-level freight data for legacy collapsed snapshots.
+        company: li.isBundleParent
+          ? (String(li.company ?? "").trim() || fallbackCarrier)
+          : (code?.company ?? ""),
+        boxes: li.isBundleParent
+          ? (Number(li.boxes ?? fallbackBoxes) || 0)
+          : (code?.boxes ?? 0),
+        amount: li.isBundleParent
+          ? (Number(li.amount ?? fallbackAmount) || 0)
+          : (code?.amount ?? 0),
+      });
+    }
+    return out;
+  }
+
+  const variantTitleMap = new Map<string, string>();
+  const variantProductIdMap = new Map<string, string>();
+  const variantOptionMap = new Map<string, string>();
+  const variantSkuMap = new Map<string, string>();
+  const variantVendorMap = new Map<string, string>();
+  for (const li of parsedLineItems) {
+    if (li.variantId != null) {
+      const vid = String(li.variantId);
+      if (li.title) variantTitleMap.set(vid, li.title);
+      if (li.productId != null) variantProductIdMap.set(vid, String(li.productId));
+      if (li.variantTitle) variantOptionMap.set(vid, li.variantTitle);
+      if (li.sku) variantSkuMap.set(vid, li.sku);
+      if (li.vendor) variantVendorMap.set(vid, li.vendor);
+    }
+  }
+
+  const out: LineItemSnapshot[] = [];
+  lineItemsRaw.split("|").forEach((part: string, idx: number) => {
+    const [variantId, rest] = part.split(":");
+    if (!variantId) return; // skip malformed / empty-variant parts
+    const [company, boxesStr, amountStr] = (rest ?? "").split("x");
+    out.push({
+      idx,
+      variantId,
+      letterSuffix: LETTERS[idx % 26],
+      productTitle: variantTitleMap.get(variantId) ?? "",
+      productId: variantProductIdMap.get(variantId) ?? "",
+      variantTitle: variantOptionMap.get(variantId) ?? "",
+      sku: variantSkuMap.get(variantId) ?? "",
+      vendor: variantVendorMap.get(variantId) ?? "",
+      company: company ?? "",
+      boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
+    });
+  });
+
+  // Include Shopify order line items that are NOT represented in the freight
+  // code (operational $0 BOGOS free gifts, etc.). These keep their Shopify
+  // identity but carry no freight — amount 0 and no invented carrier/company or
+  // package data. This does not change the freight code or charge, which stays
+  // exactly as calculated at checkout.
+  const freightVariantIds = new Set(out.map((o) => o.variantId));
+  let nextIdx = out.length;
+  for (const li of parsedLineItems) {
+    if (li.variantId == null) continue;
+    const vid = String(li.variantId);
+    if (freightVariantIds.has(vid)) continue;
+    freightVariantIds.add(vid);
+    out.push({
+      idx: nextIdx,
+      letterSuffix: LETTERS[nextIdx % 26],
+      variantId: vid,
+      productTitle: li.title ?? "",
+      productId: li.productId != null ? String(li.productId) : "",
+      variantTitle: li.variantTitle ?? "",
+      sku: li.sku ?? "",
+      vendor: li.vendor ?? "",
+      company: "",
+      boxes: 0,
+      amount: 0,
+    });
+    nextIdx++;
+  }
+
+  return out;
+}
+
+// Parse a DB OrderSnapshot's lineItemsJson into a variantId → Shopify ordered
+// quantity map. This is the OMS quantity source of truth (units/items ordered),
+// NOT the carton/box count (which lives in the freight code and is `boxes`).
+export function buildLineItemQuantityMap(snap: any): Map<string, number> {
+  const map = new Map<string, number>();
+  let parsed: Array<{ variantId?: number | string; quantity?: number }> = [];
+  try {
+    parsed = JSON.parse(snap?.lineItemsJson ?? "[]");
+  } catch { /* empty */ }
+  for (const li of parsed) {
+    if (li.variantId != null) {
+      const qty = Math.max(Number(li.quantity ?? 1) || 1, 1);
+      map.set(String(li.variantId), qty);
+    }
+  }
+  return map;
+}
+
+// Build a FreightDashboard row from a DB OrderSnapshot. Used by the list loader
+// and the detail loader so both render identical data (same shape as buildRow,
+// plus per-item paymentStatus derived from the snapshot financial status).
+export function buildRowFromSnapshot(
+  snap: any,
+  opsMap: Map<string, any>,
+  orderCin7Map: Map<string, boolean>,
+  orderPoMap?: Map<string, string>,
+  /** orderId → legacy order-level Cin7 SO id (grouped era). Used as URL fallback
+   *  so the detail page renders the same clickable link as the list page. */
+  orderCin7IdMap?: Map<string, string>,
+) {
+  const itemSnaps = buildLineItemSnapshots(snap);
+  if (itemSnaps.length === 0) return null;
+  const quantityByVariant = buildLineItemQuantityMap(snap);
+  // Business rule: depot orders always ship every line via the same carrier;
+  // standard orders can have a different (calculated) carrier per line. Use
+  // the ORIGINAL carrier recorded in the freight code at checkout (it.company)
+  // — not the live ops.carrier override — so a later per-line edit/sync
+  // (Monday, Cin7, manual) can never flip depot/standard status after the
+  // fact. isDepot must stay exactly what it was at checkout.
+  // Free-gift/operational lines have no carrier (company ""). They must not
+  // affect the depot-vs-standard determination made at checkout.
+  const finalCarriersInOrder = new Set(
+    itemSnaps.filter((it) => it.company).map((it) => it.company),
+  );
+  const isDepotService =
+    String(snap.shippingCode ?? "").startsWith("depot_delivery::") && finalCarriersInOrder.size <= 1;
+
+  const lineItems = itemSnaps.map((it) => {
+    const ops = opsMap.get(`${snap.orderId}::${it.variantId}`);
+    const opsPayment = String(ops?.paymentStatus ?? "").trim();
+    // Prefer per-line Cin7 link; fall back to legacy order-level SO id (same as list loader).
+    const lineCin7Id = String(ops?.cin7SalesOrderId ?? "").trim();
+    const orderCin7Id = String(orderCin7IdMap?.get(String(snap.orderId)) ?? "").trim();
+    const legacyOrderFallbackAllowed = Boolean(orderCin7Id) && itemSnaps.length <= 1;
+    const resolvedCin7Id =
+      lineCin7Id && !["", "pending", "duplicate"].includes(lineCin7Id) ? lineCin7Id : orderCin7Id;
+    return {
+      id: `${snap.orderId}-${it.idx}`,
+      variantId: it.variantId,
+      title: it.productTitle || ops?.productTitle || "",
+      variantTitle: it.variantTitle,
+      vendor: it.vendor,
+      sku: it.sku,
+      productId: it.productId,
+      // Prefer OMS carrier override when set
+      company: (ops?.carrier && String(ops.carrier).trim()) || it.company,
+      carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
+      boxes: it.boxes,
+      // Shopify ordered quantity (units/items) — OMS Qty source of truth, NOT
+      // the carton/box count.
+      quantity: quantityByVariant.get(it.variantId) ?? 1,
+      amount: it.amount,
+      letterSuffix: it.letterSuffix,
+      isDepot: isDepotService,
+      customerStatus: ops?.customerStatus ?? "",
+      customerStatusColor: ops?.customerStatusColor ?? "",
+      paymentStatus: opsPayment || normalizePaymentStatus(snap.financialStatus),
+      paymentStatusColor: ops?.paymentStatusColor ?? "",
+      trackingNumber: ops?.trackingNumber ?? "",
+      freightRef: ops?.freightRef ?? "",
+      eddDate: ops?.eddDate ?? "",
+      originalEddDate: ops?.originalEddDate ?? "",
+      warehouseStatus: ops?.warehouseStatus ?? "",
+      warehouseStatusColor: ops?.warehouseStatusColor ?? "",
+      dispatchStatus: ops?.dispatchStatus ?? "",
+      deliveryStatus: ops?.deliveryStatus ?? "",
+      depositPaid: ops?.depositPaid ?? "",
+      balanceDue: ops?.balanceDue ?? "",
+      depotAddress1: ops?.depotAddress1 ?? "",
+      depotCity: ops?.depotCity ?? "",
+      depotZip: ops?.depotZip ?? "",
+      supplierContainer: ops?.supplierContainer ?? "",
+      receivedDate: ops?.receivedDate ?? "",
+      portArrivalDate: ops?.portArrivalDate ?? "",
+      inTransitDate: ops?.inTransitDate ?? "",
+      cin7SalesOrderId: resolvedCin7Id,
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(resolvedCin7Id) ?? "",
+      poNumber: orderPoMap?.get(String(snap.orderId)) ?? "",
+      // The tick is per-line, not per-order. We still retain the legacy
+      // order-level SO as a fallback for single-line historical orders, but
+      // multi-line orders must not inherit the first line's SO state.
+      cin7Exists:
+        Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
+        (legacyOrderFallbackAllowed),
+      cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
+        ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
+        ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+      mondayItemId: ops?.mondayItemId ?? "",
+      mondayItemName: ops?.mondayItemName || "",
+      mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
+      mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
+        ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      mondayMismatches: typeof ops?.mondayCachedMismatches === "string" && ops.mondayCachedMismatches.trim()
+        ? ops.mondayCachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+    };
+  });
+
+  return {
+    id: `gid://shopify/Order/${snap.orderId}`,
+    snapshotId: String(snap.id || ""),
+    shopifyOrderId: snap.orderId,
+    shopifyOrderName: snap.orderName,
+    currency: snap.currencyCode,
+    totalFreight: Number(snap.totalFreight ?? 0),
+    city: snap.shippingCity || null,
+    postalCode: snap.shippingZip || null,
+    createdAt: snap.createdAt instanceof Date ? snap.createdAt.toISOString() : new Date(snap.createdAt).toISOString(),
+    carriers: snap.carriers,
+    packageCount: snap.packageCount,
+    shippingTitle: snap.shippingTitle,
+    lineItems,
+    customerName: `${snap.shippingFirstName} ${snap.shippingLastName}`.trim() || "—",
+    email: snap.email || "—",
+    phone: snap.phone || "—",
+    financialStatus: snap.financialStatus || "—",
+    fulfillmentStatus: snap.fulfillmentStatus || "UNFULFILLED",
+    fullAddress: [snap.shippingAddress1, snap.shippingCity, snap.shippingProvince, snap.shippingZip, snap.shippingCountry].filter(Boolean).join(", "),
+  };
+}
+
+export function buildRow(
+  order: ShopifyOrderNode,
+  opsMap: Map<string, any>,
+  orderCin7Map: Map<string, boolean>,
+) {
+  const shippingLine = order.shippingLines.nodes.find((s) =>
+    FREIGHT_SERVICE_PREFIXES.some((prefix) => s.code?.startsWith(prefix))
+  );
+  if (!shippingLine) return null;
+  const parts = shippingLine.code.split("::");
+  const carriers = parts[1]; const packageCount = parts[2]; const lineItemsRaw = parts[4];
+  if (!carriers || !lineItemsRaw) return null;
+  const numericOrderId = order.id.replace("gid://shopify/Order/", "");
+  const variantTitleMap = new Map<string, string>();
+  const variantSkuMap = new Map<string, string>();
+  const variantVendorMap = new Map<string, string>();
+  for (const li of order.lineItems.nodes) {
+    if (li.variant?.id) {
+      const vid = li.variant.id.replace("gid://shopify/ProductVariant/", "");
+      variantTitleMap.set(vid, li.title);
+      variantSkuMap.set(vid, li.variant.sku || li.sku || "");
+      variantVendorMap.set(vid, li.vendor ?? "");
+    }
+  }
+  const lineItems = lineItemsRaw.split("|").map((part, idx) => {
+    const [variantId, rest] = part.split(":");
+    const [company, boxesStr, amountStr] = (rest ?? "").split("x");
+    const ops = opsMap.get(`${numericOrderId}::${variantId}`);
+    return {
+      id: `${order.id}-${idx}`,
+      variantId,
+      title: variantTitleMap.get(variantId),
+      vendor: variantVendorMap.get(variantId) ?? "",
+      sku: variantSkuMap.get(variantId) ?? "",
+      company: company ?? "",
+      carrierColor: ops?.carrierColor ?? "",
+      carrierColorLabel: ops?.carrierColorLabel ?? "",
+      boxes: Number(boxesStr ?? 0),
+      amount: Number(amountStr ?? 0),
+      letterSuffix: LETTERS[idx % 26],
+      customerStatus: ops?.customerStatus ?? "",
+      customerStatusColor: ops?.customerStatusColor ?? "",
+      trackingNumber: ops?.trackingNumber ?? "",
+      freightRef: ops?.freightRef ?? "",
+      eddDate: ops?.eddDate ?? "",
+      originalEddDate: ops?.originalEddDate ?? "",
+      cin7SalesOrderId: ops?.cin7SalesOrderId ?? "",
+      cin7SalesOrderUrl: buildCin7SalesOrderUrl(ops?.cin7SalesOrderId) ?? "",
+      cin7Exists:
+        Boolean(ops?.cin7SalesOrderId && !["", "pending", "duplicate"].includes(String(ops.cin7SalesOrderId).trim())) ||
+        (orderCin7Map.get(numericOrderId) ?? false),
+      // Restore persisted cached statuses so the UI shows DB values after a reload
+      cin7Status: typeof ops?.cin7CachedStatus === "string" && ops.cin7CachedStatus.trim()
+        ? (ops.cin7CachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      cin7Mismatches: typeof ops?.cin7CachedMismatches === "string" && ops.cin7CachedMismatches.trim()
+        ? ops.cin7CachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+      mondayItemId: ops?.mondayItemId ?? "",
+      mondayItemName: ops?.mondayItemName || "",
+      mondayItemUrl: buildMondayItemUrl(ops?.mondayItemId) ?? "",
+      mondayStatus: typeof ops?.mondayCachedStatus === "string" && ops.mondayCachedStatus.trim()
+        ? (ops.mondayCachedStatus.trim().toLowerCase() as any)
+        : undefined,
+      mondayMismatches: typeof ops?.mondayCachedMismatches === "string" && ops.mondayCachedMismatches.trim()
+        ? ops.mondayCachedMismatches.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : [],
+    };
+  });
+  return {
+    id: order.id,
+    snapshotId: "",
+    shopifyOrderId: numericOrderId,
+    shopifyOrderName: order.name,
+    currency: order.currencyCode,
+    totalFreight: Number(shippingLine.originalPriceSet.shopMoney.amount ?? 0),
+    city: order.shippingAddress?.city ?? null,
+    postalCode: order.shippingAddress?.zip ?? null,
+    createdAt: order.createdAt,
+    carriers,
+    packageCount,
+    shippingTitle: shippingLine.title,
+    lineItems,
+    customerName: `${order.shippingAddress?.firstName ?? ""} ${order.shippingAddress?.lastName ?? ""}`.trim() || "—",
+    email: order.email ?? "—",
+    phone: order.phone ?? "—",
+    financialStatus: order.displayFinancialStatus ?? "—",
+    fulfillmentStatus: order.displayFulfillmentStatus ?? "UNFULFILLED",
+    fullAddress: [order.shippingAddress?.address1, order.shippingAddress?.city, order.shippingAddress?.province, order.shippingAddress?.zip, order.shippingAddress?.country].filter(Boolean).join(", "),
+  };
+}

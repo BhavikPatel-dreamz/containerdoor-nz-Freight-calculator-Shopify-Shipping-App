@@ -1,0 +1,988 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { useState, useEffect, useRef, useCallback } from "react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "react-router";
+import {
+  Form,
+  Link,
+  redirect,
+  useActionData,
+  useLoaderData,
+  useNavigation,
+  useSearchParams,
+} from "react-router";
+import {
+  carrierCompanies,
+  carrierModes,
+  companyLabels,
+  modeLabels,
+  nzpSectors,
+  serviceLabels,
+  serviceTypes,
+  toMoney,
+} from "../lib/freight";
+import { deleteRate, bulkDeleteRates, bulkToggleActive, exportRatesCsv, importRatesCsv, listRates, upsertRate } from "../models/freight.server";
+import { authenticate } from "../shopify.server";
+
+async function* iterateCsvChunks(file: File, linesPerChunk: number) {
+  const reader = file.stream().getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let header = "";
+  let batch: string[] = [];
+  let bytesSinceYield = 0;
+
+  const yieldChunk = () => {
+    const csv = `${header}\n${batch.join("\n")}`;
+    const bytes = bytesSinceYield;
+    bytesSinceYield = 0;
+    batch = [];
+    return { csv, bytes };
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value) bytesSinceYield += value.byteLength;
+    buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
+    const parts = buffer.split(/\r?\n/);
+    buffer = done ? "" : (parts.pop() ?? "");
+    for (const line of parts) {
+      if (!line) continue;
+      if (!header) {
+        header = line;
+        continue;
+      }
+      batch.push(line);
+      if (batch.length >= linesPerChunk) {
+        yield yieldChunk();
+      }
+    }
+    if (done) {
+      if (buffer) {
+        if (!header) header = buffer;
+        else batch.push(buffer);
+      }
+      if (header && batch.length > 0) yield yieldChunk();
+      break;
+    }
+  }
+}
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const url = new URL(request.url);
+  const page = Number.parseInt(url.searchParams.get("page") || "1", 10);
+  const query = url.searchParams.get("q") || "";
+  const companyParam = url.searchParams.get("company") || "";
+  const serviceTypeParam = url.searchParams.get("serviceType") || "";
+  const activeParam = url.searchParams.get("active") || "";
+
+  const company = carrierCompanies.includes(companyParam as (typeof carrierCompanies)[number])
+    ? companyParam
+    : "";
+  const serviceType = serviceTypes.includes(serviceTypeParam as (typeof serviceTypes)[number])
+    ? serviceTypeParam
+    : "";
+
+  return listRates(session.shop, page, {
+    query,
+    company: company as "" | (typeof carrierCompanies)[number],
+    serviceType: serviceType as "" | (typeof serviceTypes)[number],
+    active: (activeParam === "true" || activeParam === "false") ? activeParam as "true" | "false" : "",
+  });
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  const formData = await request.formData();
+  const intent = String(formData.get("intent") || "save");
+
+  if (intent === "delete") {
+    await deleteRate(session.shop, String(formData.get("id")));
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
+
+  if (intent === "bulkDelete") {
+    const ids = formData.getAll("ids").map(String);
+    await bulkDeleteRates(session.shop, ids);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
+
+  if (intent === "bulkToggleActive") {
+    const ids = formData.getAll("ids").map(String);
+    const active = formData.get("active") === "true";
+    await bulkToggleActive(session.shop, ids, active);
+    const url = new URL(request.url);
+    return redirect(`${url.pathname}${url.search}`);
+  }
+
+  if (intent === "export") {
+  const csv = await exportRatesCsv(session.shop);
+  return { csv };
+}
+
+  if (intent === "import") {
+    const file = formData.get("csv");
+    if (!(file instanceof File)) return { ok: false, message: "Choose a CSV file" };
+    return importRatesCsv(session.shop, await file.text());
+  }
+
+  return upsertRate(session.shop, formData);
+};
+
+export default function RatesPage() {
+  const { rates, page, pageCount, total } = useLoaderData<typeof loader>();
+  const actionData = useActionData<typeof action>();
+  const navigation = useNavigation();
+  const [searchParams] = useSearchParams();
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [importingLarge, setImportingLarge] = useState(false);
+  const [uploadPhase, setUploadPhase] = useState<"" | "importing">("");
+  const [uploadUploaded, setUploadUploaded] = useState(0);
+  const [uploadTotal, setUploadTotal] = useState(0);
+  const [importCreated, setImportCreated] = useState(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const isExporting = navigation.state === "submitting" && navigation.formData?.get("intent") === "export";
+const isImporting = importingLarge || (navigation.state === "submitting" && navigation.formData?.get("intent") === "import");
+const isDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "delete";
+const isBulkDeleting = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkDelete";
+const isBulkToggling = navigation.state === "submitting" && navigation.formData?.get("intent") === "bulkToggleActive";
+
+  useEffect(() => {
+    return () => { uploadAbortRef.current?.abort(); };
+  }, []);
+
+  const handleLargeImport = useCallback(async (file: File) => {
+    const abort = new AbortController();
+    uploadAbortRef.current = abort;
+    setImportingLarge(true);
+    setUploadPhase("importing");
+    setUploadUploaded(0);
+    setUploadTotal(Math.max(file.size, 1));
+    setImportCreated(0);
+    try {
+      const readJson = async (res: Response) => {
+        const raw = await res.text();
+        if (!raw) return {};
+        try {
+          return JSON.parse(raw);
+        } catch {
+          throw new Error(`Import request failed (${res.status}): ${raw.slice(0, 200)}`);
+        }
+      };
+
+      const initRes = await fetch("/api/import-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "init" }),
+        signal: abort.signal,
+      });
+      const initData = await readJson(initRes);
+      if (!initData.ok) throw new Error(initData.error || "Failed to start import");
+      const { uploadId } = initData;
+
+      const CHUNK_LINES = 4000;
+      let createdTotal = 0;
+
+      for await (const { csv, bytes } of iterateCsvChunks(file, CHUNK_LINES)) {
+        const res = await fetch("/api/import-rates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ intent: "chunk", uploadId, csv }),
+          signal: abort.signal,
+        });
+        const d = await readJson(res);
+        if (!d.ok) throw new Error(d.message || d.error || "Chunk import failed");
+        createdTotal = d.createdTotal ?? createdTotal;
+        setImportCreated(createdTotal);
+        setUploadUploaded((prev) => Math.min(file.size, prev + bytes));
+      }
+
+      const commitRes = await fetch("/api/import-rates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intent: "commit", uploadId }),
+        signal: abort.signal,
+      });
+      const result = await readJson(commitRes);
+      if (result.ok) {
+        window.location.reload();
+      } else {
+        throw new Error(result.message || "Import failed");
+      }
+    } catch (err: any) {
+      if (err?.name !== "AbortError") {
+        alert(err?.message || "Import failed");
+      }
+    } finally {
+      setImportingLarge(false);
+      setUploadPhase("");
+      setUploadUploaded(0);
+      setUploadTotal(0);
+      setImportCreated(0);
+      uploadAbortRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (actionData && "csv" in actionData && actionData.csv) {
+      const a = Object.assign(document.createElement("a"), {
+        href: URL.createObjectURL(new Blob([actionData.csv], { type: "text/csv" })),
+        download: "rates.csv",
+      });
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+  }, [actionData]);
+
+  const query = searchParams.get("q") || "";
+  const selectedCompany = searchParams.get("company") || "";
+  const selectedServiceType = searchParams.get("serviceType") || "";
+  const selectedActive = searchParams.get("active") || "";
+
+  const buildPageLink = (nextPage: number) => {
+    const params = new URLSearchParams();
+    params.set("page", String(nextPage));
+    if (query) params.set("q", query);
+    if (selectedCompany) params.set("company", selectedCompany);
+    if (selectedServiceType) params.set("serviceType", selectedServiceType);
+    if (selectedActive) params.set("active", selectedActive);
+    return `/app/rates?${params.toString()}`;
+  };
+
+  return (
+    <s-page inlineSize="large" heading="Rate management">
+      <style>{`
+        .top-row {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          margin-bottom: 12px;
+          flex-wrap: wrap;
+        }
+        .top-btn {
+          border: 1px solid #d4dce4;
+          border-radius: 10px;
+          background: #fff;
+          color: #0f2a43;
+          padding: 8px 14px;
+          font-weight: 700;
+          font-size: 14px;
+          cursor: pointer;
+          box-shadow: 0 1px 2px rgba(15, 42, 67, 0.08);
+        }
+        .import-btn {
+          position: relative;
+          overflow: hidden;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .import-btn input[type="file"] {
+          position: absolute;
+          inset: 0;
+          opacity: 0;
+          cursor: pointer;
+        }
+        .add-wrap {
+          border: 1px solid #dce5ef;
+          border-radius: 12px;
+          background: #f8fbff;
+          padding: 14px;
+          margin-bottom: 12px;
+        }
+        .rates-card {
+          border: 1px solid #dce5ef;
+          border-radius: 12px;
+          background: #fff;
+          overflow: hidden;
+        }
+        .rates-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e8eef4;
+        }
+        .rates-title {
+          margin: 0;
+          color: #0f2a43;
+          font-size: 22px;
+          font-weight: 700;
+        }
+        .summary {
+          margin: 0;
+          color: #486581;
+          font-size: 14px;
+          white-space: nowrap;
+        }
+        .toolbar {
+          display: flex;
+          align-items: end;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          padding: 12px 16px;
+          border-bottom: 1px solid #e8eef4;
+        }
+        .search-form {
+          display: grid;
+          gap: 10px;
+          grid-template-columns: 2fr 1fr 1fr 1fr auto;
+          flex: 1;
+        }
+        .search-form input,
+        .search-form select,
+        .rates-table input,
+        .rates-table select,
+        .grid-form input,
+        .grid-form select {
+          width: 100%;
+          border: 1px solid #d3dde8;
+          border-radius: 10px;
+          padding: 9px 12px;
+          min-height: 36px;
+          box-sizing: border-box;
+        }
+        .table-wrap {
+          width: 100%;
+          overflow-x: auto;
+        }
+        .rates-table {
+          width: 100%;
+          min-width: 1320px;
+          border-collapse: collapse;
+          font-size: 14px;
+        }
+        .rates-table th,
+        .rates-table td {
+          border-bottom: 1px solid #eef3f8;
+          padding: 12px 10px;
+          vertical-align: top;
+          white-space: nowrap;
+        }
+        .rates-table th {
+          color: #486581;
+          font-weight: 700;
+          background: #fff;
+          position: sticky;
+          top: 0;
+          z-index: 1;
+        }
+        .range-col {
+          display: grid;
+          gap: 6px;
+          grid-auto-flow: column;
+        }
+        .checkbox-row {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 12px;
+          color: #52606d;
+        }
+        .inline-actions {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+        }
+        .plain-save {
+          border: 1px solid #d3dde8;
+          background: #fff;
+          color: #102a43;
+          border-radius: 10px;
+          padding: 8px 12px;
+          font-weight: 600;
+          height: 36px;
+          cursor: pointer;
+        }
+        .pager {
+          display: flex;
+          gap: 10px;
+          padding: 12px 16px;
+        }
+        .pager a {
+          text-decoration: none;
+          border: 1px solid #d3dde8;
+          border-radius: 999px;
+          padding: 6px 12px;
+          color: #243b53;
+          font-size: 14px;
+        }
+        .grid-form {
+          display: grid;
+          gap: 12px;
+          grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+        }
+        .grid-form label {
+          display: grid;
+          gap: 6px;
+          color: #455a64;
+          font-size: 13px;
+        }
+        @media (max-width: 980px) {
+          .rates-head {
+            flex-direction: column;
+            align-items: flex-start;
+          }
+          .search-form {
+            grid-template-columns: 1fr;
+          }
+          .toolbar {
+            display: grid;
+          }
+        }
+        .upload-progress {
+          margin-bottom: 12px;
+          border: 1px solid #d4dce4;
+          border-radius: 10px;
+          background: #f8fbff;
+          padding: 12px 16px;
+        }
+        .upload-progress-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: #0f2a43;
+          margin-bottom: 8px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .upload-progress-label span {
+          color: #486581;
+          font-weight: 400;
+        }
+        .upload-progress-track {
+          height: 8px;
+          background: #e8eef4;
+          border-radius: 4px;
+          overflow: hidden;
+        }
+        .upload-progress-fill {
+          height: 100%;
+          background: #00806a;
+          border-radius: 4px;
+          transition: width 0.3s ease;
+        }
+        .upload-progress-fill.processing {
+          background: #9c6ade;
+          animation: progress-indeterminate 1.2s linear infinite;
+          width: 40%;
+        }
+        @keyframes progress-indeterminate {
+          0%   { transform: translateX(-100%); }
+          100% { transform: translateX(350%); }
+        }
+        .upload-cancel {
+          border: 1px solid #d3dde8;
+          background: #fff;
+          color: #c0392b;
+          border-radius: 10px;
+          padding: 6px 12px;
+          font-weight: 600;
+          font-size: 13px;
+          cursor: pointer;
+          margin-left: 10px;
+        }
+      `}</style>
+
+      {actionData && "message" in actionData ? (
+        <s-banner tone={actionData.ok ? "success" : "critical"}>{actionData.message}</s-banner>
+      ) : null}
+
+      {importingLarge ? (
+        <div className="upload-progress">
+          <div className="upload-progress-label">
+            {uploadPhase === "importing" && (
+              <>
+                Importing rates… {Math.min(100, Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100))}%
+                {importCreated > 0 ? ` · ${importCreated.toLocaleString()} created` : ""}
+              </>
+            )}
+            <button
+              type="button"
+              className="upload-cancel"
+              onClick={() => uploadAbortRef.current?.abort()}
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="upload-progress-track">
+            <div
+              className="upload-progress-fill"
+              style={{ width: `${Math.min(100, Math.round((uploadUploaded / Math.max(uploadTotal, 1)) * 100))}%` }}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <div className="top-row">
+        {selectedIds.size > 0 ? (
+          <>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkDelete" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#c0392b", borderColor: "#c0392b" }}>
+               {isBulkDeleting ? "Deleting..." : `Delete selected (${selectedIds.size})`}
+              </button>
+            </Form>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkToggleActive" />
+              <input type="hidden" name="active" value="true" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#1e7e34", borderColor: "#1e7e34" }}>
+                {isBulkToggling ? "Updating..." : `Activate selected (${selectedIds.size})`}
+              </button>
+            </Form>
+            <Form method="post" onSubmit={() => setSelectedIds(new Set())}>
+              <input type="hidden" name="intent" value="bulkToggleActive" />
+              <input type="hidden" name="active" value="false" />
+              {[...selectedIds].map((id) => (
+                <input key={id} type="hidden" name="ids" value={id} />
+              ))}
+              <button className="top-btn" type="submit" style={{ color: "#e67e22", borderColor: "#e67e22" }}>
+                {isBulkToggling ? "Updating..." : `Deactivate selected (${selectedIds.size})`}
+              </button>
+            </Form>
+          </>
+        ) : null}
+        <button className="top-btn" type="button" onClick={() => setShowAddForm((value) => !value)}>
+          + {showAddForm ? "Close add rate" : "Add rate"}
+        </button>
+        <Form method="post" encType="multipart/form-data">
+          <input type="hidden" name="intent" value="import" />
+          <label className="top-btn import-btn">
+            {isImporting ? "Importing..." : "Import CSV"}
+            <input
+              type="file"
+              name="csv"
+              accept=".csv,text/csv"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (!file) return;
+                event.preventDefault();
+                handleLargeImport(file);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </Form>
+      </div>
+
+      {showAddForm ? (
+        <div className="add-wrap">
+          <RateForm />
+        </div>
+      ) : null}
+
+      <div className="rates-card">
+        <div className="rates-head">
+          <h2 className="rates-title">Rates list</h2>
+          <p className="summary">
+            {total} rates · page {page} of {pageCount}
+          </p>
+        </div>
+
+        <div className="toolbar">
+          <Form method="get" className="search-form">
+            <input name="q" placeholder="Search city or postal code" defaultValue={query} />
+            <select name="company" defaultValue={selectedCompany}>
+              <option value="">All companies</option>
+              {carrierCompanies.map((company) => (
+                <option key={company} value={company}>
+                  {companyLabels[company]}
+                </option>
+              ))}
+            </select>
+            <select name="serviceType" defaultValue={selectedServiceType}>
+              <option value="">All services</option>
+              {serviceTypes.map((serviceType) => (
+                <option key={serviceType} value={serviceType}>
+                  {serviceLabels[serviceType]}
+                </option>
+              ))}
+            </select>
+            <select name="active" defaultValue={selectedActive}>
+              <option value="">All statuses</option>
+              <option value="true">Active</option>
+              <option value="false">Inactive</option>
+            </select>
+            <s-button type="submit">Search</s-button>
+          </Form>
+          <Form method="post">
+  <input type="hidden" name="intent" value="export" />
+  <button className="top-btn" type="submit" disabled={isExporting}>
+  {isExporting ? "Exporting..." : "Export CSV"}
+</button>
+</Form>
+        </div>
+
+        <div className="table-wrap">
+          <table className="rates-table">
+            <thead>
+              <tr>
+                <th>
+                  {rates.length > 0 ? (
+                    <input
+                      type="checkbox"
+                      onChange={(e) =>
+                        setSelectedIds(e.target.checked ? new Set(rates.map((r) => r.id)) : new Set())
+                      }
+                      checked={selectedIds.size === rates.length && rates.length > 0}
+                    />
+                  ) : null}
+                </th>
+                <th>Company</th>
+                <th>Service</th>
+                <th>City</th>
+                <th>Sector</th>
+                <th>Postal</th>
+                <th>Weight (g)</th>
+                <th>Volume (cm3)</th>
+                <th>Rate</th>
+                <th>Min Charge</th>
+                <th>Surcharge</th>
+                <th>Mode</th>
+                <th>Active</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rates.map((rate) => (
+                <InlineRateRow
+                  key={`${rate.id}-${rate.active}-${rate.updatedAt}`}
+                  rate={rate}
+                  selected={selectedIds.has(rate.id)}
+                  isDeleting={isDeleting}
+                  onToggle={(id) =>
+                    setSelectedIds((prev) => {
+                      const next = new Set(prev);
+                      next.has(id) ? next.delete(id) : next.add(id);
+                      return next;
+                    })
+                  }
+                />
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="pager">
+          {page > 1 ? <Link to={buildPageLink(page - 1)}>Previous</Link> : null}
+          {page < pageCount ? <Link to={buildPageLink(page + 1)}>Next</Link> : null}
+        </div>
+      </div>
+    </s-page>
+  );
+}
+
+function InlineRateRow({
+  rate,
+  selected,
+  onToggle,
+  isDeleting,
+}: {
+  rate: any;
+  selected: boolean;
+  onToggle: (id: string) => void;
+  isDeleting: boolean;
+}) {
+  const [company, setCompany] = useState(rate.company);
+  return (
+    <tr>
+      <td>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggle(rate.id)}
+        />
+      </td>
+      <td>
+        <Form method="post" id={`rate-${rate.id}`}>
+          <input type="hidden" name="intent" value="save" />
+          <input type="hidden" name="id" value={rate.id} />
+          <select name="company" value={company} onChange={(e) => setCompany(e.target.value)} aria-label="Company">
+            {carrierCompanies.map((company) => (
+              <option key={company} value={company}>
+                {companyLabels[company]}
+              </option>
+            ))}
+          </select>
+        </Form>
+      </td>
+      <td>
+        <select form={`rate-${rate.id}`} name="serviceType" defaultValue={rate.serviceType} aria-label="Service">
+          {serviceTypes.map((serviceType) => (
+            <option key={serviceType} value={serviceType}>
+              {serviceLabels[serviceType]}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
+        <input form={`rate-${rate.id}`} name="city" required defaultValue={rate.city} aria-label="City" />
+      </td>
+      <td>
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") ? (
+          <select form={`rate-${rate.id}`} name="sector" defaultValue={rate.sector ?? ""} aria-label="Sector">
+            <option value="">Any</option>
+            {nzpSectors.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ color: "#90a4ae" }}>—</span>
+        )}
+      </td>
+      <td>
+        <input form={`rate-${rate.id}`} name="postalCode" required defaultValue={rate.postalCode} aria-label="Postal code" />
+      </td>
+      <td>
+        <div className="range-col">
+          <input form={`rate-${rate.id}`} name="minWeightGrams" type="number" min="0" defaultValue={rate.minWeightGrams ?? ""} aria-label="Min weight" />
+          <input form={`rate-${rate.id}`} name="maxWeightGrams" type="number" min="0" defaultValue={rate.maxWeightGrams ?? ""} aria-label="Max weight" />
+        </div>
+        <label className="checkbox-row">
+          <input form={`rate-${rate.id}`} name="useWeightRange" type="checkbox" defaultChecked={rate.useWeightRange} /> Use
+        </label>
+      </td>
+      <td>
+        <div className="range-col">
+          <input form={`rate-${rate.id}`} name="minVolumeCm3" type="number" min="0" step="any" defaultValue={rate.minVolumeCm3 ?? ""} aria-label="Min volume" />
+          <input form={`rate-${rate.id}`} name="maxVolumeCm3" type="number" min="0" step="any" defaultValue={rate.maxVolumeCm3 ?? ""} aria-label="Max volume" />
+        </div>
+        <label className="checkbox-row">
+          <input form={`rate-${rate.id}`} name="useVolumeRange" type="checkbox" defaultChecked={rate.useVolumeRange} /> Use
+        </label>
+      </td>
+       <td>
+        {company !== "MAINFREIGHT" && (
+          <input form={`rate-${rate.id}`} name="rate" type="number" step="0.01" min="0" required defaultValue={toMoney(rate.rate)} aria-label="Rate" />
+        )}
+        {company === "MAINFREIGHT" && (
+          <>
+            <input type="hidden" form={`rate-${rate.id}`} name="rate" value="0" />
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Base fee ($)
+              <input form={`rate-${rate.id}`} name="baseFee" type="number" step="0.01" min="0" defaultValue={toMoney((rate as any).baseFee ?? 0)} aria-label="Base fee" />
+            </label>
+          </>
+        )}
+      </td>
+      <td>
+        <input form={`rate-${rate.id}`} name="minimumCharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.minimumCharge ?? 0)} aria-label="Minimum charge" />
+        <div style={{ marginTop: 4 }}>
+          <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+            Home delivery override ($)
+            <input form={`rate-${rate.id}`} name="homeDeliveryFee" type="number" step="0.01" min="0" defaultValue={rate.homeDeliveryFee ?? ""} placeholder="use global" aria-label="Home delivery fee override" />
+          </label>
+        </div>
+      </td>
+      <td>
+        {company !== "CASTLE" && (
+          <input form={`rate-${rate.id}`} name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.zoneSurcharge)} aria-label="Zone surcharge" />
+        )}
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") && (
+          <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Signature ($)
+              <input form={`rate-${rate.id}`} name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.signatureSurcharge ?? 0)} aria-label="Signature surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Rural ($)
+              <input form={`rate-${rate.id}`} name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ruralSurcharge ?? 0)} aria-label="Rural surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Age restricted ($)
+              <input form={`rate-${rate.id}`} name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ageRestrictedSurcharge ?? 0)} aria-label="Age restricted surcharge" />
+            </label>
+          </div>
+        )}
+        {company === "CASTLE" && (
+          <div style={{ marginTop: 6, display: "grid", gap: 4 }}>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Residential ($) <span style={{ fontWeight: 400 }}>(always applied)</span>
+              <input form={`rate-${rate.id}`} name="residentialFee" type="number" step="0.01" min="0" defaultValue={toMoney(rate.residentialFee ?? 1)} aria-label="Residential surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Signature ($)
+              <input form={`rate-${rate.id}`} name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.signatureSurcharge ?? 1)} aria-label="Signature surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Rural ($)
+              <input form={`rate-${rate.id}`} name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ruralSurcharge ?? 1)} aria-label="Rural surcharge" />
+            </label>
+            <label style={{ fontSize: 11, color: "#486581", display: "grid", gap: 2 }}>
+              Waiheke ($)
+              <input form={`rate-${rate.id}`} name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={toMoney(rate.ageRestrictedSurcharge ?? 1)} aria-label="Waiheke surcharge" />
+            </label>
+          </div>
+        )}
+      </td>
+      <td>
+        <select form={`rate-${rate.id}`} name="mode" defaultValue={rate.mode ?? ""} aria-label="Mode">
+          <option value="">Any</option>
+          {carrierModes.map((mode) => (
+            <option key={mode} value={mode}>
+              {modeLabels[mode]}
+            </option>
+          ))}
+        </select>
+      </td>
+      <td>
+        <label className="checkbox-row">
+          <input form={`rate-${rate.id}`} name="active" type="checkbox" defaultChecked={rate.active} /> Active
+        </label>
+      </td>
+      <td>
+        <div className="inline-actions">
+          <button className="plain-save" form={`rate-${rate.id}`} type="submit">Save</button>
+          <Form method="post">
+            <input type="hidden" name="intent" value="delete" />
+            <input type="hidden" name="id" value={rate.id} />
+            <s-button type="submit" tone="critical" variant="tertiary" {...(isDeleting ? { loading: true } : {})}>Delete</s-button>
+          </Form>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function RateForm({ rate }: { rate?: any }) {
+  const [company, setCompany] = useState(rate?.company ?? "FLIWAY");
+
+  useEffect(() => {
+    setCompany(rate?.company ?? "FLIWAY");
+  }, [rate?.company]);
+
+  return (
+    <Form method="post">
+      <input type="hidden" name="intent" value="save" />
+      {rate?.id ? <input type="hidden" name="id" value={rate.id} /> : null}
+      <div className="grid-form">
+        <label>
+          Company
+          <select name="company" value={company} onChange={(e) => setCompany(e.target.value)}>
+            {carrierCompanies.map((company) => (
+              <option key={company} value={company}>
+                {companyLabels[company]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Service
+          <select name="serviceType" defaultValue={rate?.serviceType ?? "STANDARD_DELIVERY"}>
+            {serviceTypes.map((serviceType) => (
+              <option key={serviceType} value={serviceType}>
+                {serviceLabels[serviceType]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          City
+          <input name="city" required defaultValue={rate?.city ?? ""} />
+        </label>
+        {(company === "NZP" || company === "NZP_AGE_RESTRICTED") ? (
+          <label>
+            Sector
+            <select name="sector" defaultValue={rate?.sector ?? ""}>
+              <option value="">Any</option>
+              {nzpSectors.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+        <label>
+          Postal code/range
+          <input name="postalCode" required defaultValue={rate?.postalCode ?? "*"} />
+        </label>
+        <label>
+          Min weight (g)
+          <input name="minWeightGrams" type="number" min="0" defaultValue={rate?.minWeightGrams ?? ""} />
+        </label>
+        <label>
+          Max weight (g)
+          <input name="maxWeightGrams" type="number" min="0" defaultValue={rate?.maxWeightGrams ?? ""} />
+        </label>
+        <label>
+          Min volume (cm3)
+          <input name="minVolumeCm3" type="number" min="0" step="any" defaultValue={rate?.minVolumeCm3 ?? ""} />
+        </label>
+        <label>
+          Max volume (cm3)
+          <input name="maxVolumeCm3" type="number" min="0" step="any" defaultValue={rate?.maxVolumeCm3 ?? ""} />
+        </label>
+        <label>
+          Rate
+          <input name="rate" type="number" step="0.01" min="0" required defaultValue={rate?.rate?.toString?.() ?? ""} />
+        </label>
+        <label>
+          Minimum charge ($)
+          <input name="minimumCharge" type="number" step="0.01" min="0" defaultValue={rate?.minimumCharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Base fee ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(Mainfreight only)</span>
+          <input name="baseFee" type="number" step="0.01" min="0" defaultValue={(rate as any)?.baseFee?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Home delivery fee override ($) <span style={{ fontWeight: 400, color: "#90a4ae" }}>(leave blank to use global setting)</span>
+          <input name="homeDeliveryFee" type="number" step="0.01" min="0" defaultValue={rate?.homeDeliveryFee?.toString?.() ?? ""} placeholder="use global" />
+        </label>
+        <label>
+          Zone surcharge
+          <input name="zoneSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.zoneSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        {/* NZP-only surcharge fields */}
+        <label>
+          Signature / Waiheke surcharge ($)
+          <input name="signatureSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.signatureSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Rural surcharge ($)
+          <input name="ruralSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.ruralSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Age restricted / Waiheke ($)
+          <input name="ageRestrictedSurcharge" type="number" step="0.01" min="0" defaultValue={rate?.ageRestrictedSurcharge?.toString?.() ?? "0.00"} />
+        </label>
+        <label>
+          Mode
+          <select name="mode" defaultValue={rate?.mode ?? ""}>
+            <option value="">Any</option>
+            {carrierModes.map((mode) => (
+              <option key={mode} value={mode}>
+                {modeLabels[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <input name="useWeightRange" type="checkbox" defaultChecked={rate?.useWeightRange ?? false} /> Use weight range
+        </label>
+        <label>
+          <input name="useVolumeRange" type="checkbox" defaultChecked={rate?.useVolumeRange ?? false} /> Use volume range
+        </label>
+        <label>
+          <input name="active" type="checkbox" defaultChecked={rate?.active ?? true} /> Active
+        </label>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <s-button type="submit">{rate?.id ? "Save rate" : "Add rate"}</s-button>
+      </div>
+    </Form>
+  );
+}

@@ -1,0 +1,662 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "postgresql"
+  // Emulate relations in Prisma (no DB-level foreign keys). Chosen because the
+  // order tables share legacy data that predates OrderSnapshot, so a hard FK
+  // could reject existing orphan rows on deploy.
+  relationMode = "prisma"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+model AppSetting {
+  id                         String   @id @default(cuid())
+  shop                       String   @unique
+  fuelSurchargePercent       Decimal  @default(0) @db.Decimal(10, 2)
+  additionalCostType         CostType @default(FIXED)
+  additionalCostValue        Decimal  @default(0) @db.Decimal(10, 2)
+  defaultCurrency            String   @default("NZD")
+  defaultServiceType         ServiceType @default(STANDARD_DELIVERY)
+  fafFliway       Decimal  @default(30.5)
+  fafFliwayMidsize Decimal  @default(30.5)
+  fafMainfreight  Decimal  @default(36.35)
+  fafTge          Decimal  @default(29.8)
+  fafM2h          Decimal  @default(0)
+  tgeAdminFee     Decimal  @default(12.69)
+  homeDeliveryFeeFliway        Decimal  @default(45) @db.Decimal(10, 2)
+  homeDeliveryFeeFliwayMidsize Decimal  @default(45) @db.Decimal(10, 2)
+  homeDeliveryFeeTge           Decimal  @default(25) @db.Decimal(10, 2)
+  mainfreightDepotFee          Decimal  @default(25) @db.Decimal(10, 2)
+  marginRate      Decimal  @default(10) @db.Decimal(10, 2)
+  gstRate         Decimal  @default(15) @db.Decimal(10, 2)
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
+}
+
+model ShippingRate {
+  id             String      @id @default(cuid())
+  shop           String
+  company        CarrierCompany
+  serviceType    ServiceType
+  city           String
+  sector         String?     
+  postalCode     String
+  useWeightRange Boolean     @default(false)
+  minWeightGrams Int?
+  maxWeightGrams Int?
+  useVolumeRange Boolean     @default(false)
+  minVolumeCm3   Int?
+  maxVolumeCm3   Int?
+  rate           Decimal     @db.Decimal(10, 4)
+  zoneSurcharge  Decimal     @default(0) @db.Decimal(10, 2)
+  minimumCharge  Decimal     @default(0) @db.Decimal(10, 2)
+  baseFee        Decimal     @default(0) @db.Decimal(10, 2)
+  homeDeliveryFee Decimal?   @db.Decimal(10, 2)
+  signatureSurcharge     Decimal @default(0) @db.Decimal(10, 4)
+  ruralSurcharge         Decimal @default(0) @db.Decimal(10, 4)
+  ageRestrictedSurcharge Decimal @default(0) @db.Decimal(10, 4)
+  residentialFee Decimal @default(0) @db.Decimal(10, 2)
+  mode           CarrierMode?
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  @@index([shop, active, company, serviceType])
+  @@index([shop, city, postalCode])
+}
+
+model OrderSnapshot {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  orderName       String   @default("")
+  email           String   @default("")
+  phone           String   @default("")
+  currencyCode    String   @default("NZD")
+  totalPrice      String   @default("0")
+  financialStatus String   @default("")
+  fulfillmentStatus String @default("")
+  /** Shopify order created_at (not OMS ingest time). */
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Shipping address
+  shippingFirstName String @default("")
+  shippingLastName  String @default("")
+  shippingAddress1  String @default("")
+  shippingAddress2  String @default("")
+  shippingCity      String @default("")
+  shippingProvince  String @default("")
+  shippingZip       String @default("")
+  shippingCountry   String @default("")
+  /** Customer delivery instructions (OMS + Shopify mirror) */
+  deliveryInstructions String @default("")
+
+  // Parsed freight info from shipping line code
+  carriers       String   @default("")
+  packageCount   String   @default("")
+  shippingTitle  String   @default("")
+  shippingCode   String   @default("")
+  totalFreight   Decimal  @default(0) @db.Decimal(10, 2)
+
+  // Raw line items JSON (for detail page)
+  lineItemsJson  String   @default("[]")
+
+  // Relations — one order (snapshot) owns its operational + index rows.
+  operational  OrderOperationalData?
+  lineItemOps  OrderLineItemOperationalData[]
+  lineIndex    OrderLineItemIndex[]
+  bundleComponents BundleComponent[]
+
+  @@unique([shop, orderId])
+  @@index([shop, createdAt])
+}
+
+model BundleComponent {
+  id                  String   @id @default(cuid())
+  shop                String
+  orderId             String
+  bundleGroupId       String
+  parentLineItemId    String
+  parentVariantId     String
+  parentSku           String   @default("")
+  parentQuantity      Int
+  componentLineItemId String
+  componentVariantId  String
+  componentSku        String   @default("")
+  componentQuantity   Int
+  componentTitle      String   @default("")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
+  @@unique([shop, orderId, bundleGroupId, componentLineItemId])
+  @@index([shop, orderId, parentVariantId])
+}
+
+model OrderOperationalData {
+  id              String   @id @default(cuid())
+  shop            String
+  orderId         String
+  customerStatus  String   @default("")
+  warehouseStatus String   @default("")
+  warehouseTags   String   @default("")
+  dispatchStatus  String   @default("")
+  trackingNumber  String   @default("")
+  deliveryStatus  String   @default("")
+  poNumber        String   @default("")
+  depositPaid     String   @default("")
+  balanceDue      String   @default("")
+  notes               String   @default("")
+  eddDate             String   @default("")
+  supplierContainer   String   @default("")
+  receivedDate        String   @default("")
+  portArrivalDate     String   @default("")
+  inTransitDate       String   @default("")
+  /// LEGACY: one SO for whole Shopify order (grouped strategy). Prefer
+  /// OrderLineItemOperationalData.cin7SalesOrderId (per-line). Kept for
+  /// backwards compat + "order has any Cin7 link" UI. See oms-cin7-architecture.mdc.
+  cin7SalesOrderId    String   @default("")
+  cin7StatusCheckedAt DateTime?
+  mondayStatusCheckedAt DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
+  @@unique([shop, orderId])
+}
+
+model OrderLineItemOperationalData {
+  id                String   @id @default(cuid())
+  shop              String
+  orderId           String
+  variantId         String
+  productTitle      String   @default("")   
+  carrier           String   @default("")
+  carrierColor      String   @default("")
+  carrierColorLabel String   @default("")
+  customerStatus    String   @default("")
+  customerStatusColor String @default("")
+  customerStatusUpdatedAt DateTime?   // NEW
+  paymentStatus     String   @default("")
+  paymentStatusColor String  @default("")
+  warehouseStatusColor String @default("")
+  warehouseStatus   String   @default("")
+  warehouseTags     String   @default("")
+  dispatchStatus    String   @default("")
+  deliveryStatus    String   @default("")
+  trackingNumber    String   @default("")
+  trackingNumberUpdatedAt DateTime?   // NEW
+  freightRef        String   @default("")
+  // NEW: per-line delivery address (overrides order-level snapshot address for this line only)
+  shippingFirstName String   @default("")
+  shippingLastName  String   @default("")
+  shippingAddress1  String   @default("")
+  shippingAddress2  String   @default("")
+  shippingCity      String   @default("")
+  shippingProvince  String   @default("")
+  shippingZip       String   @default("")
+  shippingCountry   String   @default("")
+  depotAddress1     String   @default("")
+  depotCity         String   @default("")
+  depotZip          String   @default("")
+  eddDate           String   @default("")
+  eddDateUpdatedAt        DateTime?   // NEW
+  originalEddDate   String   @default("")
+  mondayItemId      String   @default("")
+  /// Human Monday pulse name = Shopify order + letter, e.g. `#CDL215347A`
+  mondayItemName    String   @default("")
+  depositPaid       String   @default("")
+  balanceDue        String   @default("")
+  notes             String   @default("")
+  notesPushedCount  Int      @default(0)  
+  notesPushedMondayItemId String? // NEW
+  notesPulledUpdateIds    String   @default("")
+  supplierContainer String   @default("")
+  receivedDate      String   @default("")
+  portArrivalDate   String   @default("")
+  inTransitDate     String   @default("")
+  /// Canonical Cin7 Sales Order id for THIS operational line (preferred).
+  cin7SalesOrderId  String   @default("")
+  /// Cin7 API `code` returned on create (human-readable SO code).
+  cin7SalesOrderCode String  @default("")
+  /// Reference we sent to Cin7 (`reference`, ≤30 chars) e.g. `#CDL215347A`.
+  cin7SalesOrderRef  String  @default("")
+  cin7CachedStatus  String   @default("")
+  cin7CachedMismatches String @default("")
+  mondayCachedStatus  String   @default("")
+  mondayCachedMismatches String @default("")
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
+  @@unique([shop, orderId, variantId])
+  // Speeds the list tab-filter + count FILTER on customer status.
+  @@index([shop, customerStatus])
+  @@index([shop, warehouseStatus])
+}
+
+// Denormalized index: one row per FREIGHT line item. Immutable order/item
+// snapshot data used to power the freight-orders LIST page with DB-side search,
+// filter, sort and pagination (mutable status/tracking stays in
+// OrderLineItemOperationalData and is joined live). Populated by the order
+// webhooks (create/update) and the backfill route; keyed to match the ops table
+// for the join.
+model OrderLineItemIndex {
+  id             String   @id @default(cuid())
+  shop           String
+  orderId        String
+  variantId      String
+  shopifyOrderId String   @default("")
+  gid            String   @default("")
+  orderName      String   @default("")
+  letterSuffix   String   @default("")
+  customerName   String   @default("")
+  email          String   @default("")
+  phone          String   @default("")
+  city           String   @default("")
+  zip            String   @default("")
+  fullAddress    String   @default("")
+  createdAt      DateTime @default(now())
+  currency       String   @default("NZD")
+  totalFreight   Decimal  @default(0) @db.Decimal(10, 2)
+  carriers       String   @default("")
+  shippingTitle  String   @default("")
+  productTitle   String   @default("")
+  productId      String   @default("")
+  variantTitle   String   @default("")
+  sku            String   @default("")
+  vendor         String   @default("")
+  company        String   @default("")
+  boxes          Int      @default(0)
+  // Shopify ordered line-item quantity (units/items) — source of truth for OMS
+  // Qty. Distinct from `boxes` (cartons in the freight code), which must NOT be
+  // used for OMS quantity.
+  quantity       Int      @default(0)
+  amount         Decimal  @default(0) @db.Decimal(10, 2)
+  financialStatus   String @default("")
+  fulfillmentStatus String @default("")
+  // Lowercased concatenation of the searchable fields (orderName, customerName,
+  // email, carriers, productTitle, sku). A pg_trgm GIN index on this (added in
+  // the migration SQL — Prisma can't express GIN) makes `ILIKE '%q%'` search
+  // index-backed instead of a full scan at scale.
+  searchText        String @default("")
+
+  order OrderSnapshot @relation(fields: [shop, orderId], references: [shop, orderId])
+
+  @@unique([shop, orderId, variantId])
+  // Matches the list ORDER BY so paginated reads are an ordered index scan.
+  @@index([shop, createdAt(sort: Desc), orderId(sort: Desc), letterSuffix])
+  @@index([shop, createdAt])
+  @@index([shop, vendor])
+  @@index([shop, company])
+}
+
+enum ShopifyWebhookJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ShopifyWebhookJob {
+  id            String                  @id @default(cuid())
+  shop          String
+  eventTopic    String                  @default("")
+  webhookId     String                  @default("")
+  orderId       String                  @default("")
+  payload       Json
+  status        ShopifyWebhookJobStatus @default(PENDING)
+  attempts      Int                     @default(0)
+  maxAttempts   Int                     @default(5)
+  error         String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  lastAttemptAt DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+
+  @@unique([shop, webhookId])
+  @@index([shop, status, createdAt(sort: Asc)])
+  @@index([status, createdAt(sort: Asc)])
+}
+
+model ExternalUser {
+  id            String            @id @default(cuid())
+  shop          String
+  name          String
+  email         String
+  passwordHash  String            @default("")
+  isActive      Boolean           @default(false)
+  inviteToken   String?           @unique
+  inviteExpires DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  sessions      ExternalSession[]
+
+  @@unique([shop, email])
+}
+
+model ExternalSession {
+  id        String       @id @default(cuid())
+  userId    String
+  token     String       @unique
+  expiresAt DateTime
+  createdAt DateTime     @default(now())
+
+  user ExternalUser @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum CostType {
+  FIXED
+  PERCENTAGE
+}
+
+enum CarrierCompany {
+  FLIWAY
+  FLIWAYLINEHAUL
+  FLIWAYMIDSIZE
+  NZP
+  NZP_AGE_RESTRICTED
+  CASTLE
+  TGE
+  M2H
+  MAINFREIGHT
+}
+
+enum ServiceType {
+  STANDARD_DELIVERY
+  DEPOT_DELIVERY
+  CUSTOMER_PICKUP
+}
+
+enum CarrierMode {
+  AIR
+  ROAD
+}
+
+// ─── Bulk Email Queue ─────────────────────────────────────────────────────────
+
+enum BulkEmailJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum BulkEmailRecipientStatus {
+  PENDING
+  PROCESSING
+  SENT
+  FAILED
+  CANCELLED
+}
+
+enum BulkActionAuditStatus {
+  SUCCESS
+  FAILED
+}
+
+model BulkEmailJob {
+  id            String               @id @default(cuid())
+  shop          String
+  subject       String
+  body          String               // raw template with {name}, {order}, {link} placeholders
+  filters       Json?                // snapshot of filters used to select recipients
+  sentBy        String?              // admin user who initiated the job
+  totalRecipients Int                @default(0)
+  sentCount     Int                  @default(0)
+  failedCount   Int                  @default(0)
+  status        BulkEmailJobStatus   @default(PENDING)
+  error         String?              // top-level error if job-level failure
+  provider      String?              // email provider used (resend, ses, smtp, etc.)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  recipients    BulkEmailRecipient[]
+  communications CommunicationLog[]
+
+  @@index([shop, status, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Asc)])
+}
+
+model BulkEmailRecipient {
+  id            String                    @id @default(cuid())
+  jobId         String
+  email         String
+  name          String
+  orderName     String
+  orderId       String
+  variantId     String
+  orderData     Json?                     // snapshot of line-item data at send time
+  status        BulkEmailRecipientStatus  @default(PENDING)
+  error         String?                   // per-recipient error
+  sentAt        DateTime?
+  createdAt     DateTime                  @default(now())
+
+  job BulkEmailJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, status])
+}
+
+// ─── Communication / Activity Log (central OMS history) ───────────────────────
+// Single table for emails, internal notes, external syncs, and system events.
+// Line-item scoped via variantId (null = order-level). Shopify order timeline = phase 2.
+
+model CommunicationLog {
+  id                String   @id @default(cuid())
+  shop              String
+  orderId           String
+  variantId         String?  // null = order-level activity
+  opsRecordId       String?  // OrderLineItemOperationalData.id when known
+  jobId             String?  // BulkEmailJob if from bulk notify
+  activityType      String   @default("email")
+  // email | internal_note | monday_note | cin7_note | shopify_note |
+  // system_event | sms | whatsapp | supplier_update | edd_update | payment_update | …
+  channel           String   @default("email") // email | oms | monday | cin7 | shopify | sms | whatsapp
+  subject           String   @default("")
+  body              String   @default("")
+  recipientEmail    String   @default("")
+  recipientName     String   @default("")
+  sentBy            String   // admin / system actor
+  deliveryStatus    String   @default("sent")
+  // pending | sent | failed | synced | internal | partial
+  providerMessageId String?
+  syncTargets       Json?    // ["monday","cin7","shopify"]
+  syncResults       Json?    // { monday: { ok: true }, cin7: { ok: false, error: "…" } }
+  metadata          Json?    // old/new values, filters, etc.
+  sentAt            DateTime // legacy name; treat as occurredAt
+  createdAt         DateTime @default(now())
+
+  job BulkEmailJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([shop, orderId])
+  @@index([shop, orderId, variantId])
+  @@index([shop, orderId, variantId, sentAt])
+  @@index([jobId])
+  @@index([shop, activityType, sentAt])
+}
+
+/// One report per Shopify order for OMS/Cin7/Monday migration. Re-runs upsert the same row.
+model OrderMigrateReport {
+  id          String   @id @default(cuid())
+  shop        String
+  orderId     String
+  orderName   String   @default("")
+  status      String   @default("pending") // pending | success | partial | failed
+  omsAction   String   @default("") // existed | created | failed
+  mondayAction String  @default("")
+  cin7Action  String   @default("")
+  lastError   String   @default("")
+  runCount    Int      @default(1)
+  stepsJson   String   @default("[]") // JSON array of log steps
+  linesJson   String   @default("[]") // JSON array of per-line outcomes
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([shop, orderId])
+  @@index([shop, updatedAt])
+  @@index([shop, orderName])
+}
+
+/// One Control Center batch (dry_run | full) with a fixed order list.
+model MigrationRun {
+  id                String   @id @default(cuid())
+  shop              String
+  mode              String   @default("full") // dry_run | full
+  orderLimit        Int      @default(0)
+  status            String   @default("pending") // pending | running | completed | aborted | failed
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  totalOrders       Int      @default(0)
+  processedOrders   Int      @default(0)
+  successfulOrders  Int      @default(0)
+  failedOrders      Int      @default(0)
+  skippedOrders     Int      @default(0)
+  createdBy         String   @default("")
+  orders            MigrationOrder[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([shop, startedAt])
+  @@index([shop, status])
+}
+
+model MigrationOrder {
+  id                 String   @id @default(cuid())
+  runId              String
+  shopifyOrderId     String
+  shopifyOrderName   String   @default("")
+  status             String   @default("pending") // pending | running | completed | partial | failed | skipped
+  currentStep        String   @default("")
+  startedAt          DateTime?
+  completedAt        DateTime?
+  durationMs         Int      @default(0)
+  error              String   @default("")
+  retryCount         Int      @default(0)
+  lastRetryAt        DateTime?
+  run                MigrationRun @relation(fields: [runId], references: [id])
+  steps              MigrationStepLog[]
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@index([runId])
+  @@index([shopifyOrderId])
+}
+
+model MigrationStepLog {
+  id                 String   @id @default(cuid())
+  migrationOrderId   String
+  step               String
+  status             String
+  startedAt          DateTime
+  completedAt        DateTime
+  durationMs         Int      @default(0)
+  /// Redacted JSON — never tokens, passwords, emails, phones, addresses
+  requestSummary     String   @default("")
+  responseSummary    String   @default("")
+  error              String   @default("")
+  retryCount         Int      @default(0)
+  order              MigrationOrder @relation(fields: [migrationOrderId], references: [id])
+  createdAt          DateTime @default(now())
+
+  @@index([migrationOrderId, startedAt])
+}
+
+model BulkActionAudit {
+  id            String                @id @default(cuid())
+  shop          String
+  user          String
+  action        String
+  status        BulkActionAuditStatus
+  orderId       String
+  variantId     String
+  changedFields Json
+  oldValues     Json?
+  newValues     Json?
+  error         String?
+  createdAt     DateTime              @default(now())
+
+  @@index([shop, orderId])
+  @@index([shop, createdAt])
+}
+
+/// Idempotent Shopify refund → Cin7 Credit Note (one row per refund event × OMS line).
+model Cin7CreditNoteSync {
+  id                 String   @id @default(cuid())
+  shop               String
+  orderId            String
+  variantId          String
+  letterSuffix       String   @default("")
+  shopifyRefundId    String
+  shopifyOrderName   String   @default("")
+  amount             Decimal  @db.Decimal(12, 4)
+  freightAmount      Decimal  @default(0) @db.Decimal(12, 4)
+  refundMethod       String   @default("")
+  cin7SalesOrderId   String   @default("")
+  cin7CreditNoteId   String   @default("")
+  cin7CreditNoteCode String   @default("")
+  status             String   @default("pending") // pending | sent | failed | skipped
+  lastError          String   @default("")
+  payloadJson        String   @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([shop, shopifyRefundId, variantId])
+  @@index([shop, status, updatedAt])
+  @@index([shop, orderId])
+}
+
+/// Resume point for historical Order Sync cron (survives PM2 / server restart).
+model OrderSyncCursor {
+  id            String   @id @default(cuid())
+  shop          String
+  source        String   @default("cron")
+  after         String   @default("")
+  skipIdsJson   String   @default("[]")
+  lastOrderId   String   @default("")
+  lastOrderName String   @default("")
+  lastOk        Boolean?
+  lastMessage   String   @default("")
+  processed     Int      @default(0)
+  success       Int      @default(0)
+  failed        Int      @default(0)
+  caughtUp      Boolean  @default(false)
+  updatedAt     DateTime @updatedAt
+  createdAt     DateTime @default(now())
+
+  @@unique([shop, source])
+}

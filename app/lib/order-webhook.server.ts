@@ -1,0 +1,2159 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import prisma from "../db.server";
+import { unauthenticated } from "../shopify.server";
+import type { Prisma } from "@prisma/client";
+import { isFreightShippingCode, parseFreightCode, freightServicePrefixes, freightFormula, buildFreightLineItemAmounts } from "./freight";
+import { createMondayItem, buildMondayPulseName, buildMondayRowFromOms, resolveMondayCarrierLabel, resolveMondayCustomerStatusLabel, resolveMondayPaymentLabel, resolveMondayWarehouseStatusLabel, resolveMondayStatusColor, findMondayItemForLine, syncMondayBundleSubitems, isMondayBoardFullError } from "./monday.server";
+import { createCin7SalesOrder, createCin7Payment, fetchCin7SalesOrderTotal, findCin7SalesOrdersForShopifyOrder, pickCin7MatchForLine, updateCin7SalesOrderCarrier, type Cin7SalesOrderMatch } from "./cin7.server";
+import { getAppSettings } from "../models/freight.server";
+import { reindexOrderById } from "./line-index.server";
+import { sumLineItemValue } from "./cin7-allocation";
+import {
+  buildCin7CustomerOrderNo,
+  buildCin7SalesOrderReference,
+  getCin7SoStrategy,
+  isLinkedCin7Id,
+  saveCin7LineLink,
+  resolveCin7SalesOrderId,
+  extractShopifyCin7SaleId,
+} from "./cin7-adapter.server";
+import { isMondayOperationalOrder } from "./monday-scope.server";
+import {
+  attachBundleRelationships,
+  buildBundleCin7LineItems,
+  bundleComponentRows,
+  getBundleComponentVariantIds,
+  getBundleGroups,
+  getCustomerFacingLineItems,
+} from "./bundles.server";
+
+
+// ─── Order webhook payload type ──────────────────────────────────────────────
+
+export type OrderPayload = {
+  id?: number;
+  name?: string;
+  note_attributes?: Array<{ name?: string; value?: string }>;
+  metafields?: Array<{ namespace?: string; key?: string; value?: string }>;
+  cin7SaleIdMetafield?: string;
+  created_at?: string;
+  currency?: string;
+  total_price?: string;
+  presentment_currency?: string;
+  current_total_price?: string;
+  current_total_price_set?: {
+    presentment_money?: { amount?: string; currency_code?: string };
+  };
+  shipping_address?: {
+    first_name?: string;
+    last_name?: string;
+    city?: string;
+    zip?: string;
+    province?: string;
+    address1?: string;
+    address2?: string;
+    country?: string;
+    country_code?: string;
+    phone?: string;
+    company?: string;
+  };
+  billing_address?: {
+    first_name?: string;
+    last_name?: string;
+    company?: string;
+    address1?: string;
+    address2?: string;
+    city?: string;
+    province?: string;
+    zip?: string;
+    country?: string;
+    country_code?: string;
+    phone?: string;
+  };
+  phone?: string;
+  email?: string;
+  customer?: {
+    first_name?: string;
+    last_name?: string;
+    email?: string;
+    phone?: string;
+  };
+  total_discounts?: string | number;
+  discount_codes?: Array<{ code?: string }>;
+  tax_lines?: Array<{ rate?: string | number }>;
+  taxes_included?: boolean;
+  financial_status?: string;
+  fulfillment_status?: string;
+  cancelled_at?: string | null;
+  closed_at?: string | null;
+  shipping_lines?: Array<{ title?: string; code?: string; price?: string | number }>;
+  line_items?: Array<{
+    id?: number;
+    variant_id?: number;
+    product_id?: number;
+    variant_title?: string;
+    title?: string;
+    sku?: string;
+    vendor?: string;
+    quantity?: number;
+    grams?: number;
+    price?: string | number;
+    price_set?: { presentment_money?: { amount?: string; currency_code?: string } };
+    properties?: Array<{ name?: string; value?: string }>;
+    lineItemGroup?: any;
+    groupedBy?: any;
+  }>;
+};
+
+// ─── Address helpers ─────────────────────────────────────────────────────────
+
+export async function enqueueOrderWebhookJob(
+  shop: string,
+  topic: string,
+  webhookId: string,
+  order: OrderPayload,
+) {
+  const existing = await prisma.shopifyWebhookJob.findUnique({
+    where: { shop_webhookId: { shop, webhookId } },
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  // Diagnostic: record key payment-related fields at enqueue time so we can
+  // compare against what the worker later reads. Remove these logs after
+  // diagnosis. Do NOT log customer-sensitive fields.
+  try {
+    console.log(
+      `[WebhookEnqueue] shop=${shop} webhookId=${webhookId} orderId=${String(order.id ?? "")} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")}`,
+    );
+  } catch (e) {
+    // swallow any logging error
+  }
+
+  try {
+    return await prisma.shopifyWebhookJob.upsert({
+      where: { shop_webhookId: { shop, webhookId } },
+      update: {
+        payload: order as unknown as Prisma.InputJsonValue,
+        eventTopic: topic,
+        orderId: String(order.id ?? ""),
+        status: "PENDING",
+        attempts: 0,
+        maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
+        error: null,
+      },
+      create: {
+        shop,
+        eventTopic: topic,
+        webhookId,
+        orderId: String(order.id ?? ""),
+        payload: order as unknown as Prisma.InputJsonValue,
+        status: "PENDING",
+        attempts: 0,
+        maxAttempts: Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5"),
+        error: null,
+      },
+    });
+  } catch (error: any) {
+    if (error?.code === "P2002") {
+      return prisma.shopifyWebhookJob.findUnique({
+        where: { shop_webhookId: { shop, webhookId } },
+      });
+    }
+    throw error;
+  }
+}
+
+/**
+ * Attempt payments for an existing order only (payment-only flow).
+ * Idempotent per operational line using `OrderLineItemOperationalData.paymentStatus`.
+ */
+export async function attemptCreatePaymentsForOrder(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  // If the webhook payload is partial (some shops send minimal update payloads),
+  // fall back to the most recent saved OrderSnapshot so payment detection can
+  // use consistent fields. Do not change business rules here — snapshot is
+  // only used as a best-effort supplement when fields are missing.
+  if (!((order as any).financial_status) || ((order as any).current_total_price === undefined && (order as any).total_price === undefined)) {
+    try {
+      const snap = await prisma.orderSnapshot.findUnique({ where: { shop_orderId: { shop, orderId } } });
+      if (snap) {
+        // Merge snapshot fields into webhook payload for ratio calculation only
+        (order as any).financial_status = (order as any).financial_status || String(snap.financialStatus || "");
+        (order as any).current_total_price = (order as any).current_total_price ?? String(snap.totalPrice ?? "0");
+        (order as any).total_price = (order as any).total_price ?? String(snap.totalPrice ?? "0");
+        (order as any).current_subtotal_price = (order as any).current_subtotal_price ?? String(snap.totalPrice ?? "0");
+        (order as any).subtotal_price = (order as any).subtotal_price ?? String(snap.totalPrice ?? "0");
+        console.log(`[Cin7PaymentRetry] orderId=${orderId} using saved OrderSnapshot for missing webhook fields financial_status=${String((order as any).financial_status)} current_total_price=${String((order as any).current_total_price)}`);
+      }
+    } catch (e) {
+      console.error(`[Cin7PaymentRetry] failed to read OrderSnapshot for order ${orderId}:`, e);
+    }
+  }
+
+  const paidRatio = resolveOrderPaidRatio(order);
+  // Diagnostic log for payment retry attempts
+  try {
+    console.log(
+      `[Cin7PaymentRetry] orderId=${orderId} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")} paidRatio=${paidRatio}`,
+    );
+  } catch (e) {}
+
+  if (!orderId || paidRatio <= 0) {
+    console.log(`[Cin7Payment] Order ${orderId} not paid yet; payment deferred`);
+    return;
+  }
+
+  const opsRows = await prisma.orderLineItemOperationalData.findMany({
+    where: { shop, orderId },
+  });
+
+  for (const ops of opsRows) {
+    let soId = String(ops.cin7SalesOrderId || "");
+    // If the operational line isn't linked, attempt to resolve via adapter
+    if (!isLinkedCin7Id(soId)) {
+      try {
+        const resolved = await resolveCin7SalesOrderId({ shop, orderId, variantId: ops.variantId });
+        if (resolved.salesOrderId) {
+          soId = resolved.salesOrderId;
+          console.log(`[Cin7PaymentRetry] found existing Cin7 SalesOrder id=${soId} source=${resolved.source}`);
+          // Mirror link back onto the ops row so future retries are faster
+          await prisma.orderLineItemOperationalData.update({ where: { id: ops.id }, data: { cin7SalesOrderId: soId } }).catch(() => {});
+        }
+      } catch (e) {
+        console.error(`[Cin7PaymentRetry] error resolving Cin7 SO for order ${orderId} variant ${ops.variantId}:`, e);
+      }
+    }
+
+    if (!isLinkedCin7Id(soId)) {
+      console.log(`[Cin7PaymentRetry] orderId=${orderId} variant=${ops.variantId} no linked Cin7 SO found; skipping`);
+      continue;
+    }
+    if (String(ops.paymentStatus || "").toLowerCase() === "paid") {
+      console.log(`[Cin7Payment] Payment already exists for order ${orderId} variant ${ops.variantId}; skipping`);
+      continue;
+    }
+
+    try {
+      const cin7Total = await fetchCin7SalesOrderTotal(soId);
+      if (!cin7Total || Number(cin7Total) <= 0) {
+        console.log(`[Cin7Payment] Cin7 total not available for SO ${soId}; skipping`);
+        continue;
+      }
+
+      const linePaidAmount = Math.round(Number(cin7Total) * paidRatio * 100) / 100;
+      console.log(`[Cin7PaymentRetry] orderId=${orderId} variant=${ops.variantId} calculated payment amount=${linePaidAmount} using cin7Total=${cin7Total} paidRatio=${paidRatio}`);
+      if (linePaidAmount <= 0) {
+        console.log(`[Cin7Payment] Order ${orderId} variant ${ops.variantId} nothing to pay; deferred`);
+        continue;
+      }
+
+      console.log(`[Cin7PaymentRetry] creating payment for order ${orderId} variant ${ops.variantId} SO ${soId} amount=${linePaidAmount}`);
+      const paymentResult = await createCin7Payment({
+        orderId: Number(soId),
+        amount: linePaidAmount,
+        comments: `Auto-paid from Shopify order ${order.name ?? orderId} variant ${ops.variantId}`,
+      });
+
+      if (paymentResult.ok) {
+        console.log(`[Cin7Payment] Payment created for order ${orderId} variant ${ops.variantId} SO ${soId}`);
+        // Only set "paid" when paymentStatus is still empty — preserve any
+        // manually selected status (e.g. "partial", "pending") on the line.
+        if (!String(ops.paymentStatus || "").trim()) {
+          try {
+            await prisma.orderLineItemOperationalData.update({
+              where: { id: ops.id },
+              data: { paymentStatus: "paid" },
+            });
+          } catch (e) {
+            console.error(`[Cin7Payment] Failed to mark ops paid for order ${orderId} variant ${ops.variantId}`, e);
+          }
+        }
+      } else {
+        console.error(`[Cin7Payment] Payment creation failed for order ${orderId} SO ${soId}:`, paymentResult.error);
+      }
+    } catch (e) {
+      console.error(`[Cin7Payment] Error processing payment for order ${orderId} variant ${ops.variantId}:`, e);
+    }
+  }
+}
+
+export async function processQueuedOrderWebhookJobs(limit = 10) {
+  console.log("[WebhookWorker] started");
+  const staleAfterMs = Number(process.env.ORDER_WEBHOOK_STALE_MS || 15 * 60 * 1000);
+  const staleBefore = new Date(Date.now() - staleAfterMs);
+  const recovered = await prisma.shopifyWebhookJob.updateMany({
+    where: {
+      status: "PROCESSING",
+      OR: [
+        { startedAt: { lt: staleBefore } },
+        { startedAt: null, lastAttemptAt: { lt: staleBefore } },
+      ],
+    },
+    data: {
+      status: "PENDING",
+      completedAt: null,
+      error: "Recovered stale processing job",
+    },
+  });
+  if (recovered.count > 0) {
+    console.warn(`[WebhookWorker] recovered ${recovered.count} stale processing job(s)`);
+  }
+  const jobs = await prisma.shopifyWebhookJob.findMany({
+    where: { status: "PENDING" },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  console.log(`[WebhookWorker] found ${jobs.length} pending jobs`);
+
+  const results = [] as Array<{ ok: boolean; jobId?: string; retry?: boolean; error?: string }>;
+
+  for (const job of jobs) {
+    console.log(`[WebhookWorker] processing job ${job.id} webhookId=${job.webhookId}`);
+    const result = await processQueuedOrderWebhookJob(job);
+    results.push(result);
+    if (result.ok) console.log(`[WebhookWorker] completed job ${job.id}`);
+    else console.warn(`[WebhookWorker] failed job ${job.id} error=${result.error} retry=${String(result.retry)}`);
+  }
+
+  return {
+    ok: true,
+    processed: results.filter((result) => result.ok).length,
+    queued: jobs.length,
+    results,
+  };
+}
+
+async function processQueuedOrderWebhookJob(job: any) {
+  const nextAttempt = job.attempts + 1;
+  const maxAttempts = job.maxAttempts || Number(process.env.ORDER_WEBHOOK_MAX_RETRIES || "5");
+
+  // Attempt an atomic claim: only proceed if we can flip status from PENDING -> PROCESSING
+  const claimed = await prisma.shopifyWebhookJob.updateMany({
+    where: { id: job.id, status: "PENDING" },
+    data: {
+      status: "PROCESSING",
+      attempts: nextAttempt,
+      startedAt: new Date(),
+      completedAt: null,
+      lastAttemptAt: new Date(),
+      error: null,
+    },
+  });
+
+  if (claimed.count === 0) {
+    // Someone else claimed or the job is not pending anymore — skip safely.
+    console.log(`[WebhookWorker] job ${job.id} already claimed or not pending, skipping`);
+    return { ok: false, jobId: job.id, retry: true, error: "already claimed" };
+  }
+
+  try {
+    const order = job.payload as OrderPayload;
+    const { admin } = await unauthenticated.admin(job.shop);
+
+    // Diagnostic: log the payload fields read by the worker for comparison
+    try {
+      console.log(
+        `[WebhookWorkerRead] job=${job.id} webhookId=${String(job.webhookId ?? "")} orderId=${String(order.id ?? "")} financial_status=${String((order as any).financial_status ?? "")} current_total_price=${String((order as any).current_total_price ?? "")} total_price=${String((order as any).total_price ?? "")}`,
+      );
+    } catch (e) {
+      // swallow logging errors
+    }
+
+    // Same single-order service as Sync Next / bulk (OMS → Cin7 → Monday).
+    const { processShopifyOrder } = await import("./process-shopify-order.server");
+    const processed = await processShopifyOrder({
+      shop: job.shop,
+      admin,
+      order,
+      shopifyOrderId: String(order.id || ""),
+      sentBy: "orders/create webhook",
+      mode: "full",
+      persistReport: false,
+    });
+    const omsFailed = processed.steps?.some((s) => s.step === "oms_sync" && !s.ok);
+    const integrationFailed = Boolean(processed.cin7?.failed || processed.monday?.failed);
+    const pipelineFailed = processed.steps?.some((s) => !s.ok);
+    if (processed.critical || omsFailed || integrationFailed || pipelineFailed) {
+      throw new Error(processed.error || "Order integration failed");
+    }
+
+    const targets = [
+      {
+        name: "Monday",
+        url: process.env.MONDAY_SYNC_URL,
+        token: process.env.MONDAY_SYNC_TOKEN,
+      },
+    ];
+
+    const syncPayload = buildOrderSyncPayload(job.shop, order);
+    await Promise.all(
+      targets.map(async (target) => {
+        if (!target.url) return;
+        try {
+          const headers: Record<string, string> = { "Content-Type": "application/json" };
+          if (target.token) {
+            headers.Authorization = `Bearer ${target.token}`;
+          }
+          const response = await fetch(target.url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(syncPayload),
+          });
+          if (!response.ok) {
+            console.error(`Order sync failed for ${target.name}: ${response.status}`);
+          }
+        } catch (error) {
+          console.error(`Order sync request failed for ${target.name}`, error);
+        }
+      }),
+    );
+
+    await prisma.shopifyWebhookJob.update({
+      where: { id: job.id },
+      data: {
+        status: "COMPLETED",
+        completedAt: new Date(),
+        error: null,
+      },
+    });
+
+    return { ok: true, jobId: job.id };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldRetry = nextAttempt < maxAttempts;
+
+    await prisma.shopifyWebhookJob.update({
+      where: { id: job.id },
+      data: {
+        status: shouldRetry ? "PENDING" : "FAILED",
+        error: message,
+        completedAt: shouldRetry ? null : new Date(),
+        lastAttemptAt: new Date(),
+      },
+    });
+
+    console.error(`[WebhookWorker] job ${job.id} error: ${message}`);
+    return { ok: false, jobId: job.id, retry: shouldRetry, error: message };
+  }
+}
+
+export function getShippingAddress(order: OrderPayload) {
+  return order.shipping_address ?? {};
+}
+
+export function getBillingAddress(order: OrderPayload) {
+  return order.billing_address ?? {};
+}
+
+export function getCustomer(order: OrderPayload) {
+  return order.customer ?? {};
+}
+
+export function extractPhoneFromOrder(order: OrderPayload): string {
+  const shipping = getShippingAddress(order);
+  const billing = getBillingAddress(order);
+  const customer = getCustomer(order);
+
+  const phone = [order.phone, shipping.phone, billing.phone, customer.phone].find(
+    (v) => typeof v === "string" && v.trim() !== "",
+  );
+  return typeof phone === "string" ? phone.trim() : "";
+}
+
+export function extractCarrierFromOrder(order: OrderPayload): string {
+  const shippingLines = order.shipping_lines ?? [];
+  const code = shippingLines.find((l) => l?.code)?.code ?? "";
+  if (isFreightShippingCode(code)) {
+    // Format: "standard_delivery::TGE,MAINFREIGHT::4boxes::..."
+    const parts = code.split("::");
+    const carriers = parts[1]?.split(",") ?? [];
+    const first = carriers[0]?.trim() ?? "";
+    if (first) return first;
+  }
+  return shippingLines.find((l) => l?.title)?.title ?? "";
+}
+
+/** Fraction of the order total that's actually been paid, per Shopify's financial_status. */
+function resolveOrderPaidRatio(order: OrderPayload): number {
+  const status = String((order as any).financial_status ?? "").toLowerCase();
+  if (status === "paid") return 1;
+  if (status === "partially_paid" || status === "authorized") {
+    const total = Number(order.total_price ?? 0);
+    const current = Number(order.current_total_price ?? total);
+    if (total > 0) return Math.min(Math.max(current / total, 0), 1);
+    return 0;
+  }
+  // pending, authorized, partially_refunded (with nothing left owed handled by "paid"), etc.
+  return 0;
+}
+
+// ─── Depot child-address helper (from checkout cart attribute) ──────────────
+export function extractSelectedDepotAddress(order: OrderPayload): {
+  name?: string;
+  address1?: string;
+  city?: string;
+  zip?: string;
+} | null {
+  // Some checkout sessions wrote the Mainfreight depot selection under
+  // "selected_depot_mainfreight" instead of the standard
+  // "selected_depot_address" key (confirmed via production order payloads).
+  // Accept both so depot orders aren't silently dropped depending on which
+  // attribute name the checkout wrote.
+  const raw = (order.note_attributes ?? []).find(
+    (a) => a.name === "selected_depot_address" || a.name === "selected_depot_mainfreight",
+  )?.value;
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── Sync payload for external services ──────────────────────────────────────
+
+export function buildOrderSyncPayload(shop: string, order: OrderPayload) {
+  return {
+    shop,
+    order: {
+      id: order.id,
+      name: order.name,
+      createdAt: order.created_at,
+      currency: order.currency,
+      totalPrice: order.total_price,
+      shippingAddress: {
+        city: getShippingAddress(order).city,
+        postalCode: getShippingAddress(order).zip,
+        countryCode: getShippingAddress(order).country_code,
+      },
+      lineItems: (order.line_items ?? []).map((li) => ({
+        id: li.id,
+        sku: li.sku,
+        quantity: li.quantity,
+        grams: li.grams,
+        freight: parseFreightProperties(li.properties ?? []),
+      })),
+    },
+  };
+}
+
+// ─── Freight metafield (for customer-account extension) ──────────────────────
+
+const FREIGHT_NAMESPACE = "containerdoor_freight";
+const FREIGHT_METAFIELD_KEY = "freight_data";
+
+export async function writeFreightMetafield(
+  admin: { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
+  order: OrderPayload,
+) {
+  try {
+    const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    const breakdown = parseFreightCode(
+      freightLine?.code,
+      order.line_items?.map((li) => ({
+        variant_id: li.variant_id,
+        title: li.title,
+        sku: li.sku,
+      })),
+    );
+    if (!breakdown) return;
+
+    // Dedup: the ORDERS_CREATE webhook now writes this synchronously and the
+    // queued worker also calls this helper — skip when the metafield already
+    // exists so we never write it twice.
+    if (order.id != null) {
+      const existingRes = await admin.graphql(
+        `#graphql
+        query FreightMetaExists($ownerId: ID!) {
+          order(id: $ownerId) {
+            metafield(namespace: "containerdoor_freight", key: "freight_data") { key }
+          }
+        }`,
+        { variables: { ownerId: `gid://shopify/Order/${order.id}` } },
+      );
+      const existingJson = await existingRes.json();
+      if (existingJson?.data?.order?.metafield) {
+        console.log(`[FreightMeta][${String(order.id)}] already present; skipping write`);
+        return;
+      }
+    }
+
+    // Additive: attach per-line quantity, unit price, product amount and
+    // individual total (product + freight) to each freight line item in the
+    // metafield. Freight is used as-is from the code breakdown — never
+    // recalculated. Existing keys (variantId, company, boxes, amount, ...) stay.
+    const freightAmountsByVariant = new Map(
+      buildFreightLineItemAmounts(freightLine?.code, order.line_items).map((f) => [f.variantId, f]),
+    );
+    breakdown.lineItems = breakdown.lineItems.map((item) => {
+      const enriched = freightAmountsByVariant.get(String(item.variantId));
+      return { ...item, ...(enriched ?? {}) };
+    });
+
+    const response = await admin.graphql(
+      `#graphql
+      mutation SetFreightMetafield($metafields: [MetafieldsSetInput!]!) {
+        metafieldsSet(metafields: $metafields) {
+          userErrors { field message }
+        }
+      }`,
+      {
+        variables: {
+          metafields: [
+            {
+              ownerId: `gid://shopify/Order/${order.id}`,
+              namespace: FREIGHT_NAMESPACE,
+              key: FREIGHT_METAFIELD_KEY,
+              type: "json",
+              value: JSON.stringify(breakdown),
+            },
+          ],
+        },
+      },
+    );
+
+    const json = await response.json();
+    const userErrors = json?.data?.metafieldsSet?.userErrors ?? [];
+    if (userErrors.length) {
+      console.error("Freight metafield write errors", userErrors);
+    }
+  } catch (error) {
+    console.error("Failed to write freight metafield", error);
+  }
+}
+
+// ─── Order snapshot (store full order data in DB) ───────────────────────────
+// Saves/updates order data so the freight-orders pages can read from DB
+// instead of calling the Shopify API on every page load.
+
+// Build a depot-collection shipping title that reflects the ACTUAL selected
+// depot rather than the customer's destination city. The selected depot comes
+// from the single source of truth (`selected_depot_address` order attribute).
+// Falls back to the original title untouched when there's no depot selection
+// (e.g. normal delivery, or a depot order where the customer picked none).
+export function buildDepotCollectionTitle(
+  originalTitle: string,
+  selectedDepot?: { name?: string } | null,
+): string {
+  const depotName = (selectedDepot?.name ?? "").trim();
+  if (!depotName) return originalTitle;
+  // Keep the carrier/service prefix ("Mainfreight Depot Collection") and append
+  // the actual depot name, so the destination city is never shown as the depot.
+  const base = String(originalTitle || "").split("–")[0].trim();
+  return `${base || "Depot Collection"} – ${depotName}`;
+}
+
+/**
+ * Bundle-safe snapshot refresh for the orders/updated and orders/paid webhooks.
+ *
+ * Those REST webhooks deliver a payload WITHOUT GraphQL bundle relationships, so
+ * a naive saveOrderSnapshot + reindex would collapse nothing and overwrite the
+ * correct single parent line with the raw physical component lines. Hydrate the
+ * payload first (same attachBundleRelationships the orders/create route uses).
+ * Fails closed: on hydration error, saveOrderSnapshot's own preserve guard keeps
+ * an already-collapsed bundle snapshot intact instead of reverting to components.
+ */
+export async function refreshOrderSnapshotForWebhook(shop: string, order: OrderPayload): Promise<void> {
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+    await attachBundleRelationships(admin, order);
+  } catch (error) {
+    console.error(`[BundleHydrate][${String(order.id ?? "")}] failed for shop ${shop}:`, error);
+  }
+  if (getBundleGroups(order).size) {
+    await saveBundleComponents(shop, order);
+  }
+  await saveOrderSnapshot(shop, order);
+  await reindexOrderById(shop, String(order.id ?? ""));
+  try {
+    console.log(
+      `[RefundCin7] after snapshot shop=${shop} orderId=${String(order.id ?? "")} name=${String(order.name ?? "")} refunds=${Array.isArray((order as any).refunds) ? (order as any).refunds.length : 0}`,
+    );
+    const { processShopifyLaunchCin7Sync } = await import("./shopify-refund-cin7.server");
+    const launch = await processShopifyLaunchCin7Sync(shop, order);
+    console.log(`[RefundCin7] after snapshot done orderId=${String(order.id ?? "")}`, launch);
+  } catch (error) {
+    console.error(`[RefundCin7] after snapshot FAILED orderId=${String(order.id ?? "")}`, error);
+  }
+
+  // Updated/paid webhooks can arrive after a previous bundle write left stale
+  // component operational rows behind. Reconcile only bundle orders: the
+  // existing create path already uses the same customer-facing line filter,
+  // while normal orders must retain their historical refresh behavior.
+  const bundleGroups = getBundleGroups(order);
+  if (bundleGroups.size) {
+    await createOrderLineItemRecords(shop, order);
+    const componentVariantIds = [...bundleGroups.values()]
+      .flatMap((group) => group.components.map((component) => component.variantId))
+      .filter(Boolean);
+    if (componentVariantIds.length) {
+      await prisma.orderLineItemOperationalData.deleteMany({
+        where: {
+          shop,
+          orderId: String(order.id ?? ""),
+          variantId: { in: componentVariantIds },
+        },
+      });
+    }
+  }
+}
+
+function shopifyOrderCreatedAt(order: OrderPayload): Date | undefined {
+  const raw = String(order.created_at || "").trim();
+  if (!raw) return undefined;
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+export async function saveOrderSnapshot(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  const shipping = getShippingAddress(order);
+
+  const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+  const freightCode = freightLine?.code ?? "";
+  const freightParts = freightCode.split("::");
+  const isDepotCollection =
+    freightCode.toLowerCase().startsWith("depot_delivery::");
+  const selectedDepot = isDepotCollection ? extractSelectedDepotAddress(order) : null;
+  const shippingTitle = isDepotCollection
+    ? buildDepotCollectionTitle(freightLine?.title ?? "", selectedDepot)
+    : (freightLine?.title ?? "");
+
+  const lineItemsForJson = getCustomerFacingLineItems(order).map((li) => ({
+    id: li.id,
+    variantId: (li as any).variant_id,
+    productId: li.product_id ?? null,
+    variantTitle: li.variant_title ?? "",
+    title: li.title,
+    quantity: li.quantity,
+    sku: li.sku,
+    vendor: li.vendor ?? "",
+    price: li.price_set?.presentment_money?.amount ?? li.price ?? "0",
+    isBundleParent: Boolean((li as any).isBundleParent),
+    bundleGroupId: (li as any).bundleGroupId ?? "",
+  }));
+
+  // Bundle safety net: if the incoming payload is NOT bundle-aware (a raw
+  // orders/updated|orders/paid REST payload whose hydration failed or found
+  // nothing) but the existing snapshot ALREADY collapsed this bundle to a
+  // single customer-facing parent line, keep that collapsed line wholesale.
+  // Never let an unhydrated payload rewrite the snapshot back to component
+  // lines. Non-bundle orders are unaffected (their existing snapshot has no
+  // isBundleParent line, so the normal path below still runs).
+  let lineItemsForJsonEnriched: unknown[] = [];
+  if (getBundleGroups(order).size === 0) {
+    try {
+      const existing = await prisma.orderSnapshot.findUnique({
+        where: { shop_orderId: { shop, orderId } },
+        select: { lineItemsJson: true },
+      });
+      const parsed = JSON.parse(existing?.lineItemsJson ?? "[]");
+      const collapsed = Array.isArray(parsed) && parsed.some((li: any) => li?.isBundleParent);
+      if (collapsed) lineItemsForJsonEnriched = parsed;
+    } catch {
+      // Fall through to normal (raw) snapshot write; secondary hydration path.
+    }
+  }
+
+  // Per-line freight amounts (from the shipping-code breakdown, mapped by
+  // variantId). Individual order line data, additive to lineItemsJson.
+  if (!lineItemsForJsonEnriched.length) {
+    const freightLineAmounts = buildFreightLineItemAmounts(freightLine?.code, order.line_items);
+    const lineItemAmountByVariant = new Map(
+      freightLineAmounts.map((f) => [f.variantId, f]),
+    );
+    // Bundle parents are not in the freight code (their physical components
+    // are), so they inherit the carrier/boxes/amount their components were
+    // billed at checkout. Keeps the OMS bundle row's carrier consistent with
+    // the freight code while component variants stay internal-only.
+    const bundleFreightByVariant = new Map<string, { company: string; boxes: number; amount: number }>();
+    for (const group of getBundleGroups(order).values()) {
+      const componentLines = freightLineAmounts.filter((f) =>
+        group.components.some((c) => String(c.variantId) === String(f.variantId)),
+      );
+      if (!componentLines.length) continue;
+      bundleFreightByVariant.set(group.parentVariantId, {
+        company: componentLines.find((f) => f.company)?.company ?? "",
+        boxes: componentLines.reduce((sum, f) => sum + (Number(f.boxes) || 0), 0),
+        amount: componentLines.reduce((sum, f) => sum + (Number(f.amount) || 0), 0),
+      });
+    }
+    lineItemsForJsonEnriched = lineItemsForJson.map((li) => {
+      const freight = lineItemAmountByVariant.get(String(li.variantId ?? ""));
+      const bundle = bundleFreightByVariant.get(String(li.variantId ?? ""));
+      return {
+        ...li,
+        unitPrice: freight?.unitPrice ?? 0,
+        productAmount: freight?.productAmount ?? 0,
+        freightAmount: freight?.freightAmount ?? bundle?.amount ?? 0,
+        individualTotal: freight?.individualTotal ?? 0,
+        company: bundle?.company ?? freight?.company ?? "",
+        boxes: bundle?.boxes ?? freight?.boxes ?? 0,
+        amount: bundle?.amount ?? freight?.amount ?? 0,
+      };
+    });
+  }
+
+  try {
+    const shopifyCreatedAt = shopifyOrderCreatedAt(order);
+    await prisma.orderSnapshot.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      update: {
+        ...(shopifyCreatedAt ? { createdAt: shopifyCreatedAt } : {}),
+        orderName: order.name ?? "",
+        email: order.email ?? "",
+        phone: order.phone ?? "",
+        currencyCode: order.currency ?? "NZD",
+        totalPrice: order.total_price ?? "0",
+        financialStatus: (order as any).financial_status ?? "",
+        fulfillmentStatus: (order as any).fulfillment_status ?? "",
+        shippingFirstName: shipping.first_name ?? "",
+        shippingLastName: shipping.last_name ?? "",
+        shippingAddress1: shipping.address1 ?? "",
+        shippingAddress2: shipping.address2 ?? "",
+        shippingCity: shipping.city ?? "",
+        shippingProvince: shipping.province ?? "",
+        shippingZip: shipping.zip ?? "",
+        shippingCountry: shipping.country ?? shipping.country_code ?? "",
+        carriers: freightParts[1] ?? "",
+        packageCount: freightParts[2] ?? "",
+        shippingTitle,
+        shippingCode: freightCode,
+        totalFreight: Number(freightLine?.price ?? 0),
+        lineItemsJson: JSON.stringify(lineItemsForJsonEnriched),
+      },
+      create: {
+        shop,
+        orderId,
+        ...(shopifyCreatedAt ? { createdAt: shopifyCreatedAt } : {}),
+        orderName: order.name ?? "",
+        email: order.email ?? "",
+        phone: order.phone ?? "",
+        currencyCode: order.currency ?? "NZD",
+        totalPrice: order.total_price ?? "0",
+        financialStatus: (order as any).financial_status ?? "",
+        fulfillmentStatus: (order as any).fulfillment_status ?? "",
+        shippingFirstName: shipping.first_name ?? "",
+        shippingLastName: shipping.last_name ?? "",
+        shippingAddress1: shipping.address1 ?? "",
+        shippingAddress2: shipping.address2 ?? "",
+        shippingCity: shipping.city ?? "",
+        shippingProvince: shipping.province ?? "",
+        shippingZip: shipping.zip ?? "",
+        shippingCountry: shipping.country ?? shipping.country_code ?? "",
+        carriers: freightParts[1] ?? "",
+        packageCount: freightParts[2] ?? "",
+        shippingTitle,
+        shippingCode: freightCode,
+        totalFreight: Number(freightLine?.price ?? 0),
+        lineItemsJson: JSON.stringify(lineItemsForJsonEnriched),
+      },
+    });
+    console.log(`[OrderSnapshot][${orderId}] Saved for shop ${shop}`);
+  } catch (error) {
+    const code = (error as any)?.code;
+    const message = (error as any)?.message ?? "";
+    if (code === "P2002" || message.includes("Unique constraint failed")) {
+      console.warn(`[OrderSnapshot][${orderId}] Duplicate snapshot detected, skipping (P2002)`);
+    } else {
+      console.error(`[OrderSnapshot][${orderId}] FAILED`, error);
+    }
+  }
+}
+
+// ─── Line-item operational records ───────────────────────────────────────────
+// Creates an OrderLineItemOperationalData row for EVERY line item in the order.
+// This ensures all items are tracked operationally from the moment the order is placed.
+
+export async function createOrderLineItemRecords(shop: string, order: OrderPayload) {
+  const orderId = String(order.id);
+  const lineItems = getCustomerFacingLineItems(order);
+  const selectedDepot = extractSelectedDepotAddress(order);
+
+  // Build freight lookup so we can attach carrier info from the shipping line
+  const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+  const freightBreakdown = parseFreightCode(
+    freightLine?.code,
+    lineItems.map((li) => ({ variant_id: li.variant_id, title: li.title, sku: li.sku })),
+  );
+  const carrierByVariant = new Map<string, string>();
+  if (freightBreakdown) {
+    for (const li of freightBreakdown.lineItems) {
+      if (li.variantId && li.company) carrierByVariant.set(li.variantId, li.company);
+    }
+  }
+  // The checkout freight code is encoded per physical component variant, but the
+  // OMS carrier lives on the customer-facing bundle parent. Inherit the parent's
+  // carrier from its freight-bearing component so the parent row is never blank.
+  for (const group of getBundleGroups(order).values()) {
+    const component = freightBreakdown?.lineItems.find((li) =>
+      group.components.some((c) => String(c.variantId) === String(li.variantId)),
+    );
+    if (component?.company) carrierByVariant.set(group.parentVariantId, component.company);
+  }
+
+  let created = 0;
+  let skipped = 0;
+
+  const isDepotCollectionOrder = freightLine?.code?.startsWith("depot_delivery::") ?? false;
+
+  for (const li of lineItems) {
+    const variantId = li.variant_id != null ? String(li.variant_id) : null;
+    if (!variantId) {
+      skipped++;
+      continue;
+    }
+
+    const lineCarrier = carrierByVariant.get(variantId) ?? "";
+    // Previously hardcoded to Fliway only ("FLIWAYLINEHAUL"), which silently
+    // dropped the depot address for every other depot-eligible carrier
+    // (Mainfreight, TGE, Fliway Midsize). Use the same depot-carrier list the
+    // rest of the freight system already relies on so all carriers behave
+    // consistently.
+    const isDepotCollectionLine =
+      isDepotCollectionOrder && freightFormula.depotCollectionCompanies.includes(lineCarrier as any);
+
+    const depotFields =
+      selectedDepot && isDepotCollectionLine
+        ? {
+            depotAddress1: selectedDepot.address1 ?? "",
+            depotCity: selectedDepot.city ?? "",
+            depotZip: selectedDepot.zip ?? "",
+          }
+        : {};
+
+    try {
+      const existing = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId } },
+        select: { id: true, depotAddress1: true },
+      });
+
+      if (!existing) {
+        await prisma.orderLineItemOperationalData.create({
+          data: {
+            shop,
+            orderId,
+            variantId,
+            productTitle: li.title ?? "",
+            carrier: lineCarrier,
+            paymentStatus: "",
+            // Depot fields only — shippingAddress1/City/Zip are NOT touched here.
+            // Those remain reserved for customer address overrides via order-amendments.server.ts.
+            ...depotFields,
+          },
+        });
+        created++;
+      } else if ((depotFields as any).depotAddress1 && !existing.depotAddress1) {
+        // Row already existed (e.g. created by another webhook path first) but
+        // never got its depot address — backfill it now.
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: existing.id },
+          data: depotFields,
+        });
+        skipped++;
+      } else {
+        skipped++;
+      }
+    } catch {
+      // Race on create (duplicate webhook or re-played) — safe to skip
+      skipped++;
+    }
+  }
+
+  console.log(
+    `[OrderLineItems][Webhook][${orderId}] DONE - created=${created}, skipped=${skipped}, total=${lineItems.length}`,
+  );
+}
+
+// ─── Depot backfill (existing orders) ────────────────────────────────────────
+// One source of truth for the selected depot is the Shopify order note attribute
+// `selected_depot_address` (legacy alias `selected_depot_mainfreight`). Orders
+// created before depot capture was reliable (e.g. #CDL215379) have empty
+// OrderLineItemOperationalData.depotAddress1/City/Zip even though Shopify holds
+// the selection. This helper safely repopulates those rows from Shopify, ONLY
+// when the OMS depot fields are empty and the order is a real Depot Collection
+// order. It never overwrites an already-populated correct depot.
+
+export async function backfillOrderDepotData(
+  shop: string,
+  orderId: string | number,
+): Promise<boolean> {
+  const oid = String(orderId).replace(/^gid:\/\/shopify\/Order\//, "").trim();
+  if (!oid) return false;
+
+  try {
+    // Only consider Depot Collection orders; skip everything else (normal delivery,
+    // customer pickup) so backfill can never touch non-depot orders.
+    const snap = await prisma.orderSnapshot.findUnique({
+      where: { shop_orderId: { shop, orderId: oid } },
+      select: { shippingCode: true },
+    });
+    const isDepotOrder = Boolean(
+      String(snap?.shippingCode ?? "").toLowerCase().startsWith("depot_delivery::"),
+    );
+    if (!isDepotOrder) return false;
+
+    // Depot line rows whose depot fields are missing/empty. The depot columns
+    // are non-nullable with default "" so missing == empty string.
+    const emptyRows = await prisma.orderLineItemOperationalData.findMany({
+      where: {
+        shop,
+        orderId: oid,
+        depotAddress1: "",
+      },
+      select: { id: true },
+    });
+    if (emptyRows.length === 0) return false;
+
+    // Fetch the selected depot from Shopify's order note attribute.
+    const raw = await fetchSelectedDepotAttributeRaw(shop, oid);
+    if (!raw) return false;
+    const selectedDepot = extractSelectedDepotAddress({ note_attributes: raw } as OrderPayload);
+    if (!selectedDepot || !String(selectedDepot.address1 ?? "").trim()) return false;
+
+    const depotFields = selectedDepot
+      ? {
+          depotAddress1: selectedDepot.address1 ?? "",
+          depotCity: selectedDepot.city ?? "",
+          depotZip: selectedDepot.zip ?? "",
+        }
+      : {};
+
+    let updated = 0;
+    // The order is already confirmed as a Depot Collection order above, and the
+    // depot is a per-order selection shared by all of that order's lines (the
+    // row-level `carrier` can be a display label like "MF Depot", which is not
+    // one of the canonical codes, so we must NOT filter by row carrier here.
+    // We only write the depot address fields — never the carrier — so the
+    // existing carrier association is always preserved.
+    for (const row of emptyRows) {
+      await prisma.orderLineItemOperationalData.update({
+        where: { id: row.id },
+        data: { ...depotFields },
+      });
+      updated++;
+    }
+
+    if (updated > 0) {
+      console.log(`[DepotBackfill][${oid}] populated depot on ${updated} line(s) for shop ${shop}`);
+    }
+    return updated > 0;
+  } catch (error) {
+    // Backfill is best-effort — never fail the calling route/loader.
+    console.warn(`[DepotBackfill][${oid}] failed for shop ${shop}:`, error);
+    return false;
+  }
+}
+
+// Fetch the raw note attributes (so extractSelectedDepotAddress can be reused)
+// for the order's selected-depot attribute. Same attribute keys the checkout
+// extension writes and the webhook reads. NOTE: Shopify's GraphQL Order type
+// exposes these as `customAttributes` (a list with no `first` arg) — the legacy
+// `noteAttributes` field no longer exists on `Order` in current API versions.
+export async function fetchSelectedDepotAttributeRaw(
+  shop: string,
+  orderId: string,
+): Promise<Array<{ name?: string; value?: string }> | null> {
+  try {
+    const { admin } = await unauthenticated.admin(shop);
+    const response = await admin.graphql(
+      `#graphql
+      query OrderDepotSelection($id: ID!) {
+        node(id: $id) {
+          ... on Order {
+            customAttributes {
+              key
+              value
+            }
+          }
+        }
+      }`,
+      { variables: { id: `gid://shopify/Order/${orderId}` } },
+    );
+    const json = await response.json();
+    const attrs = (json.data?.node?.customAttributes ?? [])
+      .filter(
+        (n: { key?: string } | undefined): n is { key?: string; value?: string } =>
+          Boolean(n && (n.key === "selected_depot_address" || n.key === "selected_depot_mainfreight")),
+      )
+      .map((n: { key?: string; value?: string }) => ({ name: n.key, value: n.value }));
+    return attrs.length ? attrs : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function ingestShopifyOrderIntoOms(
+  shop: string,
+  order: OrderPayload,
+  admin: { graphql: (query: string, opts?: { variables?: Record<string, unknown> }) => Promise<Response> },
+) {
+  if (getBundleGroups(order).size) {
+    await saveBundleComponents(shop, order);
+  }
+  await saveOrderSnapshot(shop, order);
+  await reindexOrderById(shop, String(order.id ?? ""));
+  await createOrderLineItemRecords(shop, order);
+  await backfillOrderDepotData(shop, String(order.id ?? ""));
+  await writeFreightMetafield(admin, order);
+}
+
+async function saveBundleComponents(shop: string, order: OrderPayload): Promise<void> {
+  const orderId = String(order.id ?? "");
+  const rows = bundleComponentRows(order);
+  console.log(`[Bundle][Persist][${orderId}] attempting BundleComponent upsert count=${rows.length}`);
+  try {
+    await prisma.bundleComponent.deleteMany({ where: { shop, orderId } });
+    if (!rows.length) return;
+    await prisma.bundleComponent.createMany({
+      data: rows.map((row) => ({ shop, orderId, ...row })) as any,
+      skipDuplicates: true,
+    });
+    console.log(`[Bundle][Persist][${orderId}] success count=${rows.length}`);
+  } catch (error) {
+    console.error(`[Bundle][Persist][${orderId}] ERROR`, error);
+    throw error;
+  }
+}
+
+type OperationalLine = {
+  variantId: string;
+  title: string;
+  sku: string;
+  company: string;
+  boxes: number;
+  /**
+   * Freight the checkout allocated to THIS line, taken from the freight code.
+   * `undefined` means the order has no usable freight-code breakdown, in which
+   * case callers fall back to their own freight estimation. For a bundle parent
+   * it is the sum of its components' entries (each counted once).
+   */
+  amount?: number;
+};
+
+/** Freight-code lines when present; otherwise Shopify line items (imported/old orders). */
+export function getOperationalLines(order: OrderPayload): OperationalLine[] {
+  const componentVariantIds = getBundleComponentVariantIds(order);
+  const bundleGroups = getBundleGroups(order);
+  const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+  const breakdown = parseFreightCode(
+    freightLine?.code,
+    order.line_items?.map((li) => ({
+      variant_id: li.variant_id,
+      title: li.title,
+      sku: li.sku,
+    })),
+  );
+  if (breakdown?.lineItems?.length) {
+    const lines: OperationalLine[] = breakdown.lineItems
+      .filter((li) => li.variantId)
+      .filter((li) => !componentVariantIds.has(String(li.variantId)))
+      .map((li) => ({
+        variantId: String(li.variantId),
+        title: li.title ?? "",
+        sku: String(li.sku || ""),
+        company: String(li.company || ""),
+        boxes: Number(li.boxes) || 0,
+        amount: Number(li.amount) || 0,
+      }));
+    for (const group of bundleGroups.values()) {
+      if (lines.some((line) => line.variantId === group.parentVariantId)) continue;
+      const componentFreight = breakdown.lineItems.filter((line) => group.components.some((component) => component.variantId === String(line.variantId)));
+      if (!componentFreight.length) continue;
+      lines.unshift({
+        variantId: group.parentVariantId,
+        title: group.parentTitle,
+        sku: group.parentSku,
+        company: String(componentFreight[0].company || ""),
+        boxes: componentFreight.reduce((sum, line) => sum + (Number(line.boxes) || 0), 0),
+        // Component variants are filtered out of `lines` above, so summing their
+        // entries here allocates each breakdown entry to exactly one OMS line.
+        amount: componentFreight.reduce((sum, line) => sum + (Number(line.amount) || 0), 0),
+      });
+    }
+    // Append Shopify line items absent from the freight code (operational $0
+    // BOGOS free gifts, etc.) so Cin7/Monday still receive them. These lines
+    // carry no freight — no invented carrier or package data.
+    const freightVariantIds = new Set(lines.map((l) => l.variantId));
+    for (const li of getCustomerFacingLineItems(order)) {
+      if (li.variant_id == null) continue;
+      const vid = String(li.variant_id);
+      if (freightVariantIds.has(vid)) continue;
+      freightVariantIds.add(vid);
+      lines.push({
+        variantId: vid,
+        title: li.title ?? "",
+        sku: String(li.sku || ""),
+        company: "",
+        boxes: 0,
+      });
+    }
+    // Bundle orders collapse component lines into one parent row that must be
+    // emitted in Shopify line-item order. Non-bundle orders (including ones
+    // whose optional bundle hydration returned nothing or failed) keep the
+    // exact historical path: freight-code order first, appended non-freight
+    // lines after, no reordering or dropping.
+    if (!bundleGroups.size) return lines;
+    const lineByVariant = new Map(lines.map((line) => [line.variantId, line]));
+    return getCustomerFacingLineItems(order)
+      .map((line) => lineByVariant.get(String(line.variant_id ?? line.id ?? "")))
+      .filter((line): line is OperationalLine => Boolean(line));
+  }
+  return getCustomerFacingLineItems(order)
+    .filter((li) => li.variant_id != null || li.id != null)
+    .map((li) => ({
+      variantId: String(li.variant_id ?? li.id ?? ""),
+      title: li.title ?? "",
+      sku: String(li.sku || ""),
+      company: "",
+      boxes: Number(li.quantity ?? 1) || 1,
+    }));
+}
+
+// ─── Cin7 order creation ─────────────────────────────────────────────────────
+// Preferred: one Cin7 Sales Order per operational freight line (CIN7_SO_STRATEGY=per_line).
+// Legacy grouped mode kept behind CIN7_SO_STRATEGY=grouped — see oms-cin7-architecture.mdc.
+
+export type IntegrationSyncStats = {
+  created: number;
+  linked: number;
+  skipped: number;
+  failed: number;
+  errors?: string[];
+};
+
+function emptyStats(): IntegrationSyncStats {
+  return { created: 0, linked: 0, skipped: 0, failed: 0 };
+}
+
+export async function createCin7EntryForOrder(
+  shop: string,
+  order: OrderPayload,
+): Promise<IntegrationSyncStats> {
+  const orderId = String(order.id);
+  const strategy = getCin7SoStrategy();
+  console.log(`[Cin7][Webhook][${orderId}] START strategy=${strategy} for order ${order.name}`);
+
+  if (strategy === "per_line") {
+    return createCin7EntriesPerLine(shop, order);
+  }
+  return createCin7EntryGroupedLegacy(shop, order);
+}
+
+async function createCin7EntriesPerLine(shop: string, order: OrderPayload): Promise<IntegrationSyncStats> {
+  const orderId = String(order.id);
+
+  try {
+    const breakdownLines = getOperationalLines(order);
+    if (!breakdownLines.length) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - no operational lines`);
+      return emptyStats();
+    }
+
+    const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    const shipping = getShippingAddress(order);
+    const billing = getBillingAddress(order);
+    const customer = getCustomer(order);
+    const customerOrderNo = buildCin7CustomerOrderNo(order.name, orderId);
+    const currencyCode =
+      order.current_total_price_set?.presentment_money?.currency_code ?? "NZD";
+
+    // Freight prices already have OUR OWN GST margin baked in — calculateFreightRate
+    // multiplies by settings.gstRate before the customer ever sees the price at
+    // checkout. That is NOT the same as Shopify's order.tax_lines rate, which can
+    // be 0/unrelated and caused a silent no-op division — Cin7 then added its own
+    // 15% on top of an already-taxed number (double tax). Pull the real rate from
+    // AppSettings (same value the freight calculator used, same one shown on the
+    // Settings page as "GST %") instead of any hardcoded percentage.
+    const appSettings = await getAppSettings(shop);
+    const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+
+    // Ensure order-ops row exists (claim marker for UI "has Cin7 work").
+    // Retry the upsert a few times on P2002 races (concurrent workers).
+    {
+      const maxRetries = 3;
+      let attempt = 0;
+      while (true) {
+        try {
+          await prisma.orderOperationalData.upsert({
+            where: { shop_orderId: { shop, orderId } },
+            create: { shop, orderId, cin7SalesOrderId: "pending" },
+            update: {},
+          });
+          break;
+        } catch (err) {
+          const code = (err as any)?.code;
+          const message = (err as any)?.message ?? "";
+          if (code === "P2002" || message.includes("Unique constraint failed")) {
+            attempt++;
+            if (attempt > maxRetries) {
+              console.warn(`[Cin7][Webhook][${orderId}] orderOperationalData upsert P2002 after ${attempt} attempts, continuing`);
+              break;
+            }
+            const backoff = 100 * Math.pow(2, attempt - 1);
+            console.warn(`[Cin7][Webhook][${orderId}] P2002 on orderOperationalData upsert attempt ${attempt}, retrying after ${backoff}ms`);
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise((res) => setTimeout(res, backoff));
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+
+    // Real freight charge for the whole order, as actually shown/charged at
+    // Shopify checkout (freightLine.price) — NOT li.amount from the parsed
+    // freight code, which is an internal per-carrier calc that can come back
+    // as 0 for some rate types (confirmed: depot collection gave amount=0
+    // even though checkout charged real freight). Split across per-line SOs
+    // weighted by boxes so the sum of all line SOs' freight equals the
+    // order's real total shipping charge.
+    const totalFreightCharge = Number(freightLine?.price ?? 0);
+    const totalBoxesAcrossLines = breakdownLines.reduce(
+      (sum, x) => sum + (Number(x.boxes) || 0),
+      0,
+    );
+    const validLineCount = breakdownLines.filter((x) => x.variantId).length || 1;
+    // Derive the order-level pre-tax total using our GST rate so we can
+    // compute the freight pre-tax as: orderPreTax - sum(productTotals).
+    const orderTotalInclTax = Number(
+      order.current_total_price_set?.presentment_money?.amount ?? order.total_price ?? 0,
+    );
+    const orderTotalPreTax = Number((orderTotalInclTax / (1 + ourGstRate)) || 0);
+    const productTotalsSum = (order.line_items ?? []).reduce(
+      (s, li) =>
+        s +
+        (Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0) * (Number(li.quantity ?? 1) || 1)),
+      0,
+    );
+    let totalFreightPreTax = orderTotalPreTax - productTotalsSum;
+    if (!Number.isFinite(totalFreightPreTax) || totalFreightPreTax < 0) totalFreightPreTax = 0;
+
+    // The freight code carries a per-variant allocation (variantId -> carrier,
+    // boxes, freight amount). When that breakdown actually allocates money it IS
+    // the authoritative split, so each OMS line gets exactly its own amount and
+    // no two Sales Orders are charged the same freight.
+    //
+    // A breakdown summing to ZERO is NOT usable: depot collection and customer
+    // pickup deliberately encode amount 0 per line while Shopify checkout still
+    // charges real freight (see the historical note below), so those orders must
+    // keep the box-weighted split of the real charge. Orders with no breakdown
+    // at all (imports, old orders) fall through the same way, and BOGOS/imported
+    // lines inside a real order correctly keep amount 0.
+    const breakdownFreightTotal = breakdownLines.reduce(
+      (sum, x) => sum + (Number(x.amount) || 0),
+      0,
+    );
+    const hasBreakdownAllocation = breakdownFreightTotal > 0;
+    if (hasBreakdownAllocation) {
+      // Never silently treat the Shopify shipping charge and the freight-code
+      // header as equivalent: they can disagree (bad/stale shipping line, price
+      // edits post-checkout, or a store whose presentment currency differs from
+      // the rates the app quotes in). Surface it loudly and keep allocating from
+      // the verified per-variant breakdown rather than inventing an amount.
+      if (Math.abs(breakdownFreightTotal - totalFreightCharge) > 0.01) {
+        console.warn(
+          `[Cin7][Webhook][${orderId}] FREIGHT MISMATCH ${customerOrderNo}: shipping_lines[0].price=${totalFreightCharge.toFixed(2)} ` +
+            `but freight-code breakdown totals ${breakdownFreightTotal.toFixed(2)} (diff ${(totalFreightCharge - breakdownFreightTotal).toFixed(2)}). ` +
+            `Allocating per the freight-code breakdown; the two values are NOT equivalent.`,
+        );
+      }
+    }
+
+    let created = 0;
+    let linked = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    const opsByVariant = new Map<string, Awaited<ReturnType<typeof prisma.orderLineItemOperationalData.findUnique>>>();
+    let unlinkedCount = 0;
+    for (const li of breakdownLines) {
+      if (!li.variantId) continue;
+      const existingOps = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+      });
+      if (existingOps) opsByVariant.set(li.variantId, existingOps);
+      if (!existingOps || !isLinkedCin7Id(existingOps.cin7SalesOrderId)) unlinkedCount++;
+    }
+
+    // Strict lookup only when a line still needs a Sales Order. Already-linked
+    // lines (historical Cin7 UI OrderId) must not call Cin7 — 429 was failing
+    // whole-order sync even when OMS already stored the id.
+    let existingCin7: Cin7SalesOrderMatch[] = [];
+    const shopifyCin7Id = extractShopifyCin7SaleId(order);
+    if (shopifyCin7Id && unlinkedCount > 0) {
+      console.log(
+        `[Cin7][Webhook][${orderId}] LINK from Shopify Cin7 Sale ID metafield/attribute id=${shopifyCin7Id}`,
+      );
+      for (const li of breakdownLines) {
+        if (!li.variantId) continue;
+        const existingOps = opsByVariant.get(li.variantId);
+        if (existingOps && isLinkedCin7Id(existingOps.cin7SalesOrderId)) continue;
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: shopifyCin7Id,
+          salesOrderRef: shopifyCin7Id,
+          mirrorToOrder: true,
+        });
+        if (existingOps) existingOps.cin7SalesOrderId = shopifyCin7Id;
+        unlinkedCount = Math.max(0, unlinkedCount - 1);
+      }
+    }
+
+    if (unlinkedCount > 0) {
+      try {
+        existingCin7 = await findCin7SalesOrdersForShopifyOrder({
+          orderName: order.name,
+          orderId,
+          strict: true,
+        });
+      } catch (lookupErr) {
+        const msg = lookupErr instanceof Error ? lookupErr.message : String(lookupErr);
+        console.error(
+          `[Cin7][Webhook][${orderId}] existing SO lookup FAILED — continuing to POST create (no GET match): ${msg}`,
+        );
+        existingCin7 = [];
+      }
+    }
+    console.log(
+      `[Cin7][Webhook][${orderId}] existing Cin7 matches=${existingCin7.length} unlinkedLines=${unlinkedCount} for ${customerOrderNo}`,
+    );
+
+    for (const [idx, li] of breakdownLines.entries()) {
+      if (!li.variantId) {
+        skipped++;
+        continue;
+      }
+
+      const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
+      const reference = buildCin7SalesOrderReference({
+        orderName: order.name,
+        letterSuffix,
+        orderId,
+        variantId: li.variantId,
+      });
+
+      let ops = opsByVariant.get(li.variantId) ?? await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+      });
+      if (!ops) {
+        try {
+          ops = await prisma.orderLineItemOperationalData.create({
+            data: {
+              shop,
+              orderId,
+              variantId: li.variantId,
+              productTitle: li.title ?? "",
+              carrier: li.company ?? "",
+              cin7SalesOrderId: "pending",
+            },
+          });
+        } catch {
+          ops = await prisma.orderLineItemOperationalData.findUnique({
+            where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+          });
+        }
+      }
+      if (!ops) {
+        failed++;
+        console.error(`[Cin7][Webhook][${orderId}] No ops row for variant ${li.variantId}`);
+        continue;
+      }
+
+      if (isLinkedCin7Id(ops.cin7SalesOrderId)) {
+        skipped++;
+        continue;
+      }
+
+      const shopifyLine = (order.line_items ?? []).find(
+        (x) => String(x.variant_id) === String(li.variantId),
+      );
+      const bundleGroup = [...getBundleGroups(order).values()].find((group) => group.parentVariantId === li.variantId);
+      let bundleLineItems = buildBundleCin7LineItems(order, li.variantId);
+      // The bundle parent is a synthetic OMS grouping variant that is not
+      // stocked in Cin7 (it resolves to productId 0). buildBundleCin7LineItems
+      // appends it at price 0 purely for reference; the priced component lines
+      // are the real representation, so drop the zero-priced parent rather than
+      // sending the warehouse a phantom, unfulfillable line. Only dropped when
+      // priced components remain, so a parent-only bundle is never emptied.
+      if (bundleGroup?.parentSku && bundleLineItems.some((l: any) => Number(l.unitPrice) > 0)) {
+        bundleLineItems = bundleLineItems.filter((l: any) => l.code !== bundleGroup.parentSku);
+      }
+      const sku = String(li.sku || shopifyLine?.sku || "").trim();
+
+      const existingMatch = pickCin7MatchForLine(existingCin7, {
+        reference,
+        sku,
+        orderName: order.name,
+      });
+      if (existingMatch?.id) {
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: existingMatch.id,
+          salesOrderCode: existingMatch.code || "",
+          salesOrderRef: existingMatch.reference || reference,
+          mirrorToOrder: true,
+        });
+        linked++;
+        console.log(
+          `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing id=${existingMatch.id} ref=${existingMatch.reference || reference} sku=${sku || "(none)"}`,
+        );
+        continue;
+      }
+
+      if (!sku && !bundleLineItems.length) {
+        console.log(`[Cin7][Webhook][${orderId}] SKIP line ${letterSuffix} - no SKU`);
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: { cin7CachedStatus: "error", cin7CachedMismatches: "SKU not found" },
+        });
+        skipped++;
+        continue;
+      }
+
+      await prisma.orderLineItemOperationalData.update({
+        where: { id: ops.id },
+        data: {
+          cin7SalesOrderId: "pending",
+          cin7SalesOrderRef: reference,
+          productTitle: li.title ?? ops.productTitle,
+          carrier: li.company,
+        },
+      });
+
+      try {
+        const qty = Number(shopifyLine?.quantity ?? bundleGroup?.parentQuantity ?? 1) || 1;
+        const unitPrice = Number(
+          shopifyLine?.price_set?.presentment_money?.amount ?? shopifyLine?.price ?? 0,
+        );
+        // This line's freight. A verified freight-code breakdown wins: it is the
+        // exact per-variant allocation, so lines sharing a box count (or a
+        // carrier) no longer collide on the same amount. The box-weighted split
+        // of the order-wide freight stays as the fallback for orders with no
+        // breakdown (imports/old orders, depot collection where the code's
+        // per-line amount is 0), preserving the historical path.
+        const freightRaw = hasBreakdownAllocation
+          ? Number(li.amount) || 0
+          : totalBoxesAcrossLines > 0
+            ? totalFreightPreTax * ((Number(li.boxes) || 0) / totalBoxesAcrossLines)
+            : totalFreightPreTax / validLineCount;
+        const freightFinal = Number(Number(freightRaw).toFixed(2));
+
+        // Convert freight from tax-inclusive to tax-exclusive for Cin7 when
+        // Shopify prices include GST. Cin7 always adds 15% GST regardless of
+        // taxStatus, so we must send exclusive amounts with taxStatus="Excl".
+        const freightFinalExcl = order.taxes_included
+          ? Math.round(freightFinal / (1 + ourGstRate) * 100) / 100
+          : freightFinal;
+        console.log(
+          `[Cin7][Webhook][${orderId}] Freight calc line=${letterSuffix} variant=${li.variantId} li.amount=${Number(
+            (li as any).amount ?? 0,
+          )} totalFreightCharge=${totalFreightCharge} totalFreightPreTax=${totalFreightPreTax} boxes=${li.boxes} totalBoxes=${totalBoxesAcrossLines} ourGstRate=${ourGstRate} freightRaw=${freightRaw} freightFinal=${freightFinal}`,
+        );
+
+        const result = await createCin7SalesOrder({
+          reference,
+          firstName: shipping.first_name ?? customer.first_name ?? "",
+          lastName: shipping.last_name ?? customer.last_name ?? "",
+          company: shipping.company ?? "",
+          email: order.email ?? customer.email ?? "",
+          phone: extractPhoneFromOrder(order),
+          deliveryAddress1: shipping.address1 ?? "",
+          deliveryCity: shipping.city ?? "",
+          deliveryState: shipping.province ?? "",
+          deliveryPostalCode: shipping.zip ?? "",
+          deliveryCountry: shipping.country ?? shipping.country_code ?? "",
+          billingFirstName: billing.first_name ?? shipping.first_name ?? customer.first_name ?? "",
+          billingLastName: billing.last_name ?? shipping.last_name ?? customer.last_name ?? "",
+          billingCompany: billing.company ?? shipping.company ?? "",
+          billingAddress1: billing.address1 ?? shipping.address1 ?? "",
+          billingCity: billing.city ?? shipping.city ?? "",
+          billingState: billing.province ?? shipping.province ?? "",
+          billingPostalCode: billing.zip ?? shipping.zip ?? "",
+          billingCountry:
+            billing.country ?? billing.country_code ?? shipping.country ?? shipping.country_code ?? "",
+          logisticsCarrier: li.company,
+          currencyCode,
+          customerOrderNo,
+          internalComments: `OMS line ${letterSuffix} from Shopify ${customerOrderNo} (variant ${li.variantId})`,
+          taxRate: (() => {
+            const fromShopify = Number(order.tax_lines?.[0]?.rate ?? 0) * 100;
+            if (fromShopify > 0) return fromShopify;
+            return Number((ourGstRate * 100).toFixed(2));
+          })(),
+          taxStatus: "Excl",
+          // Freight for THIS line, split from the real checkout freight
+          // amount (`freightLine.price`). Convert to tax-exclusive for Cin7.
+          freightTotal: freightFinalExcl,
+          freightDescription: freightLine?.title || li.company || "",
+          lineItems: bundleLineItems.length
+            ? bundleLineItems.map((li: any) => ({
+                ...li,
+                unitPrice: order.taxes_included
+                  ? Math.round(li.unitPrice / (1 + ourGstRate) * 100) / 100
+                  : li.unitPrice,
+              }))
+            : [{ code: sku, name: li.title ?? shopifyLine?.title ?? "", qty, unitPrice: order.taxes_included
+                ? Math.round(unitPrice / (1 + ourGstRate) * 100) / 100
+                : unitPrice }],
+        });
+
+        await saveCin7LineLink({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          salesOrderId: String(result.id),
+          salesOrderCode: result.code || "",
+          salesOrderRef: reference,
+          mirrorToOrder: true,
+        });
+        created++;
+        console.log(
+          `[Cin7][Webhook][${orderId}] line ${letterSuffix} OK id=${result.id} ref=${reference}`,
+        );
+
+        // Record a Payment for this line's Cin7 SO so Cin7 shows Paid/Owing
+        // reflecting the real Shopify financial status (0-100% range).
+        // We send tax-exclusive amounts to Cin7 with taxStatus="Excl", so Cin7
+        // adds GST once. The Cin7 total fetch returns the correct GST-inclusive
+        // total. Fallback uses tax-exclusive amounts + 15% GST.
+        const paidRatio = resolveOrderPaidRatio(order);
+        // Fallback value for this SO = the product value of the lines actually
+        // sent (tax-exclusive) + the freight allocated to it (tax-exclusive)
+        // + 15% GST. When the live Cin7 total fetch fails (e.g. 429), pay this
+        // instead of skipping — a skipped payment leaves the SO unpaid forever.
+        const unitPriceExcl = order.taxes_included
+          ? Math.round(unitPrice / (1 + ourGstRate) * 100) / 100
+          : unitPrice;
+        const lineSubtotalExcl = bundleLineItems.length
+          ? sumLineItemValue(
+              bundleLineItems.map((bli: any) => ({
+                qty: bli.qty,
+                unitPrice: order.taxes_included
+                  ? Math.round(Number(bli.unitPrice ?? 0) / (1 + ourGstRate) * 100) / 100
+                  : Number(bli.unitPrice ?? 0),
+              })),
+            )
+          : qty * unitPriceExcl;
+        const fallbackTotalExcl = Math.round((lineSubtotalExcl + freightFinalExcl) * 100) / 100;
+        const fallbackTotal = Math.round(fallbackTotalExcl * (1 + ourGstRate) * 100) / 100;
+        const cin7Total = await fetchCin7SalesOrderTotal(String(result.id));
+        if (!cin7Total || Number(cin7Total) <= 0) {
+          console.error(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} Cin7 SO total fetch failed for SO ${result.id}; ` +
+              `falling back to locally computed total ${fallbackTotal} for payment.`,
+          );
+        }
+        const lineTotalInclTax = cin7Total && Number(cin7Total) > 0 ? Number(cin7Total) : fallbackTotal;
+        const linePaidAmount = Math.round(lineTotalInclTax * paidRatio * 100) / 100;
+        if (linePaidAmount > 0) {
+          const paymentResult = await createCin7Payment({
+            orderId: result.id,
+            amount: linePaidAmount,
+            comments: `Auto-paid from Shopify order ${customerOrderNo} line ${letterSuffix}`,
+          });
+          if (!paymentResult.ok) {
+            console.error(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment FAILED`,
+              paymentResult.error,
+            );
+          } else {
+            console.log(
+              `[Cin7][Webhook][${orderId}] line ${letterSuffix} Payment OK id=${paymentResult.id} amount=${linePaidAmount}`,
+            );
+            // Only set "paid" when paymentStatus is still empty — preserve any
+            // manually selected status on the line.
+            if (!String(ops.paymentStatus || "").trim()) {
+              try {
+                await prisma.orderLineItemOperationalData.update({
+                  where: { id: ops.id },
+                  data: { paymentStatus: "paid" },
+                });
+              } catch (e) {
+                console.error(`[Cin7][Webhook][${orderId}] Failed to mark ops paid for variant ${li.variantId}`, e);
+              }
+            }
+          }
+        } else {
+          console.log(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} SKIP payment - nothing paid (financial_status=${String((order as any).financial_status ?? "")})`,
+          );
+        }
+      } catch (e: any) {
+        const retryMatch = pickCin7MatchForLine(existingCin7, {
+          reference,
+          sku,
+          orderName: order.name,
+        });
+        if (retryMatch?.id) {
+          await saveCin7LineLink({
+            shop,
+            orderId,
+            variantId: li.variantId,
+            salesOrderId: retryMatch.id,
+            salesOrderCode: retryMatch.code || "",
+            salesOrderRef: retryMatch.reference || reference,
+            mirrorToOrder: true,
+          });
+          linked++;
+          console.log(
+            `[Cin7][Webhook][${orderId}] line ${letterSuffix} LINKED existing after create failed id=${retryMatch.id} err=${e?.message || e}`,
+          );
+          continue;
+        }
+        if (e?.isDuplicate) {
+          failed++;
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { cin7SalesOrderId: "duplicate" },
+          });
+        } else {
+          failed++;
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { cin7SalesOrderId: "" },
+          });
+        }
+        const msg = e instanceof Error ? e.message : String(e);
+        errors.push(`line ${letterSuffix}: ${msg}`);
+        console.error(`[Cin7][Webhook][${orderId}] line ${letterSuffix} FAILED`, e);
+      }
+    }
+
+    console.log(
+      `[Cin7][Webhook][${orderId}] DONE per_line created=${created} linked=${linked} skipped=${skipped} failed=${failed}`,
+    );
+    return { created, linked, skipped, failed, errors };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
+    return { created: 0, linked: 0, skipped: 0, failed: 1, errors: [msg] };
+  }
+}
+
+/** Legacy: one Cin7 SO containing all SKUs for the Shopify order. */
+async function createCin7EntryGroupedLegacy(shop: string, order: OrderPayload): Promise<IntegrationSyncStats> {
+  const orderId = String(order.id);
+  console.log(`[Cin7][Webhook][${orderId}] START grouped (legacy) for order ${order.name}`);
+
+  try {
+    const existingOps = await prisma.orderOperationalData.findUnique({
+      where: { shop_orderId: { shop, orderId } },
+      select: { cin7SalesOrderId: true },
+    });
+    if (isLinkedCin7Id(existingOps?.cin7SalesOrderId)) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - already linked id=${existingOps?.cin7SalesOrderId}`);
+      return { created: 0, linked: 1, skipped: 0, failed: 0 };
+    }
+    await prisma.orderOperationalData.upsert({
+      where: { shop_orderId: { shop, orderId } },
+      create: { shop, orderId, cin7SalesOrderId: "pending" },
+      update: { cin7SalesOrderId: "pending" },
+    });
+    console.log(`[Cin7][Webhook][${orderId}] Claimed row for creation`);
+
+    const appSettings = await getAppSettings(shop);
+    const ourGstRate = Number((appSettings as any).gstRate ?? 15) / 100;
+    const isTaxIncluded = order.taxes_included;
+    const toExcl = (amount: number) => isTaxIncluded
+      ? Math.round(amount / (1 + ourGstRate) * 100) / 100
+      : amount;
+
+    const lineItems = (order.line_items ?? [])
+      .map((li) => ({
+        code: li.sku ?? "",
+        name: li.title ?? "",
+        qty: li.quantity ?? 1,
+        unitPrice: toExcl(Number(li.price_set?.presentment_money?.amount ?? li.price ?? 0)),
+      }))
+      .filter((li) => li.code);
+
+    if (lineItems.length === 0) {
+      console.log(`[Cin7][Webhook][${orderId}] SKIP - no SKUs`);
+      return { created: 0, linked: 0, skipped: 1, failed: 0 };
+    }
+
+    const shipping = getShippingAddress(order);
+    const billing = getBillingAddress(order);
+    const customer = getCustomer(order);
+
+    const freightLine = (order.shipping_lines ?? []).find((s) => isFreightShippingCode(s.code));
+    const freightTotalExcl = toExcl(Number(freightLine?.price ?? 0));
+
+    const result = await createCin7SalesOrder({
+      reference: `Shopify-${order.name ?? orderId}`.slice(0, 30),
+      firstName: shipping.first_name ?? customer.first_name ?? "",
+      lastName: shipping.last_name ?? customer.last_name ?? "",
+      company: shipping.company ?? "",
+      email: order.email ?? customer.email ?? "",
+      phone: extractPhoneFromOrder(order),
+      deliveryAddress1: shipping.address1 ?? "",
+      deliveryCity: shipping.city ?? "",
+      deliveryState: shipping.province ?? "",
+      deliveryPostalCode: shipping.zip ?? "",
+      deliveryCountry: shipping.country ?? shipping.country_code ?? "",
+      billingFirstName: billing.first_name ?? shipping.first_name ?? customer.first_name ?? "",
+      billingLastName: billing.last_name ?? shipping.last_name ?? customer.last_name ?? "",
+      billingCompany: billing.company ?? shipping.company ?? "",
+      billingAddress1: billing.address1 ?? shipping.address1 ?? "",
+      billingCity: billing.city ?? shipping.city ?? "",
+      billingState: billing.province ?? shipping.province ?? "",
+      billingPostalCode: billing.zip ?? shipping.zip ?? "",
+      billingCountry: billing.country ?? billing.country_code ?? shipping.country ?? shipping.country_code ?? "",
+      logisticsCarrier: extractCarrierFromOrder(order),
+      currencyCode: order.current_total_price_set?.presentment_money?.currency_code ?? "NZD",
+      customerOrderNo: order.name ?? orderId,
+      internalComments: `Auto-created from Shopify order ${order.name ?? orderId} (grouped legacy)`,
+      freightTotal: freightTotalExcl,
+      freightDescription: (order as any).shipping_lines?.[0]?.title ?? "",
+      discountTotal: Number(order.total_discounts ?? 0),
+      discountDescription: order.discount_codes?.[0]?.code ?? "",
+      taxRate: Number((ourGstRate * 100).toFixed(2)),
+      taxStatus: "Excl",
+      lineItems: lineItems.map((li) => ({ ...li, unitPrice: toExcl(li.unitPrice) })),
+    });
+
+    await prisma.orderOperationalData.update({
+      where: { shop_orderId: { shop, orderId } },
+      data: { cin7SalesOrderId: String(result.id) },
+    });
+
+    console.log(`[Cin7][Webhook][${orderId}] SUCCESS grouped id=${result.id}, code=${result.code}`);
+    return { created: 1, linked: 0, skipped: 0, failed: 0 };
+  } catch (error) {
+    console.error(`[Cin7][Webhook][${orderId}] FAILED`, error);
+    return { created: 0, linked: 0, skipped: 0, failed: 1 };
+  }
+}
+
+// ─── Monday.com line-item creation ───────────────────────────────────────────
+
+export async function createMondayEntriesForOrder(
+  shop: string,
+  order: OrderPayload,
+): Promise<IntegrationSyncStats> {
+  const orderId = String(order.id);
+  console.log(`[Monday][Webhook][${orderId}] START for order ${order.name}`);
+
+  if (!isMondayOperationalOrder(order)) {
+    console.log(
+      `[Monday][Webhook][${orderId}] SKIP - not operational (fulfilled/cancelled) fulfillment=${String(order.fulfillment_status || "") || "empty"} financial=${String(order.financial_status || "") || "empty"}`,
+    );
+    return { created: 0, linked: 0, skipped: 1, failed: 0 };
+  }
+
+  try {
+    const breakdownLines = getOperationalLines(order);
+    if (!breakdownLines.length || !order.id) {
+      console.log(`[Monday][Webhook][${orderId}] SKIP - no operational lines`);
+      return emptyStats();
+    }
+
+    const shipping = getShippingAddress(order);
+    const customerName =
+      [shipping.first_name, shipping.last_name].filter(Boolean).join(" ").trim() || "—";
+    const email = String(order.email || "").trim();
+    const phone = extractPhoneFromOrder(order);
+    const address = [
+      shipping.address1,
+      shipping.address2,
+      shipping.city,
+      shipping.province,
+      shipping.zip,
+      shipping.country || shipping.country_code,
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+    let createdCount = 0;
+    let linkedCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+    const errors: string[] = [];
+    const isBundle = getBundleGroups(order).size > 0;
+
+    for (const [idx, li] of breakdownLines.entries()) {
+      if (!li.variantId) {
+        skippedCount++;
+        continue;
+      }
+
+      const letterSuffix = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[idx % 26];
+      const itemName = buildMondayPulseName(order.name, letterSuffix, orderId);
+
+      // Ops row is usually already created by createOrderLineItemRecords — do NOT
+      // require a fresh create (that unique-key race was skipping Monday entirely).
+      let ownedOpsNow = false;
+      let ops = await prisma.orderLineItemOperationalData.findUnique({
+        where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+      });
+      if (!ops) {
+        try {
+          ops = await prisma.orderLineItemOperationalData.create({
+            data: {
+              shop,
+              orderId,
+              variantId: li.variantId,
+              productTitle: li.title ?? "",
+              carrier: li.company ?? "",
+              mondayItemId: "pending",
+            },
+          });
+          ownedOpsNow = true;
+        } catch (createErr) {
+          ops = await prisma.orderLineItemOperationalData.findUnique({
+            where: { shop_orderId_variantId: { shop, orderId, variantId: li.variantId } },
+          });
+          if (!ops) {
+            failedCount++;
+            console.error(
+              `[Monday][Webhook][${orderId}] No ops row for variant ${li.variantId}`,
+              createErr,
+            );
+            continue;
+          }
+        }
+      }
+
+      if (ops.mondayItemId && ops.mondayItemId !== "pending") {
+        // Already linked — still rename pulse to #OrderLetter in case it was created with product title.
+        try {
+          const { renameMondayItem } = await import("./monday.server");
+          await renameMondayItem(ops.mondayItemId, itemName);
+          await prisma.orderLineItemOperationalData.update({
+            where: { id: ops.id },
+            data: { mondayItemName: itemName },
+          });
+        } catch (e) {
+          console.error(`[Monday][Webhook][${orderId}] rename existing failed`, e);
+        }
+        if (isBundle) {
+          const components = await prisma.bundleComponent.findMany({
+            where: { shop, orderId, parentVariantId: li.variantId },
+            select: { componentSku: true, componentTitle: true, componentQuantity: true },
+            orderBy: { componentLineItemId: "asc" },
+          });
+          await syncMondayBundleSubitems(ops.mondayItemId, components).catch((error) => {
+            console.error(`[Monday][Webhook][${orderId}] bundle subitems sync failed`, error);
+          });
+        }
+        skippedCount++;
+        continue;
+      }
+
+      // Atomically claim this line for Monday creation so overlapping runs
+      // (webhook worker, Sync Next, bulk) never both create the same item.
+      // A fresh "pending" means another run is mid-flight (skip, it will link);
+      // a stale "pending" (crashed run) is reclaimed after 5 minutes.
+      if (!ownedOpsNow) {
+        const claimStaleBefore = new Date(Date.now() - 5 * 60 * 1000);
+        const claimed = await prisma.orderLineItemOperationalData.updateMany({
+          where: {
+            id: ops.id,
+            OR: [
+              { mondayItemId: "" },
+              { mondayItemId: "pending", updatedAt: { lt: claimStaleBefore } },
+            ],
+          },
+          data: { mondayItemId: "pending", productTitle: li.title ?? ops.productTitle, carrier: ops.carrier || li.company },
+        });
+        if (claimed.count === 0) {
+          // Another run holds the claim (or this line got linked meanwhile) — skip to avoid duplicates.
+          skippedCount++;
+          continue;
+        }
+      }
+
+      let mondayItemId: string;
+      let mondayRowForColor: Awaited<ReturnType<typeof buildMondayRowFromOms>>["row"] | null = null;
+      try {
+        const { row: mondayRow } = await buildMondayRowFromOms({
+          shop,
+          orderId,
+          variantId: li.variantId,
+          ops: {
+            ...ops,
+            productTitle: li.title ?? ops.productTitle ?? "",
+            carrier: ops.carrier || li.company || "",
+          },
+        });
+        mondayRowForColor = mondayRow;
+        let existingMonday: { id: string; name: string } | null = null;
+        try {
+          existingMonday = await findMondayItemForLine({
+            orderName: order.name,
+            letterSuffix,
+            orderId,
+            sku: li.sku,
+          });
+        } catch (lookupErr) {
+          console.error(
+            `[Monday][Webhook][${orderId}] lookup failed (will create) line ${letterSuffix}`,
+            lookupErr,
+          );
+        }
+        if (existingMonday?.id) {
+          mondayItemId = existingMonday.id;
+          linkedCount++;
+          console.log(
+            `[Monday][Webhook][${orderId}] line ${letterSuffix} LINKED existing ${existingMonday.id} name=${existingMonday.name}`,
+          );
+        } else {
+          mondayItemId = await createMondayItem(itemName, {
+            ...mondayRow,
+            lineOrderName: itemName,
+            carriers: li.company || mondayRow.carriers,
+            productTitle: li.title ?? mondayRow.productTitle,
+            sku: li.sku || mondayRow.sku,
+            boxes: li.boxes || mondayRow.boxes,
+            customerName: customerName !== "—" ? customerName : mondayRow.customerName,
+            email: email || mondayRow.email,
+            phone: phone || mondayRow.phone,
+            address: address || mondayRow.address,
+          });
+          createdCount++;
+        }
+      } catch (err) {
+        if (isMondayBoardFullError(err)) {
+          failedCount++;
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`line ${letterSuffix}: ${msg}`);
+          console.error(
+            `[Monday][Webhook][${orderId}] FAILED board full — prune closed items before retry`,
+            err,
+          );
+          await prisma.orderLineItemOperationalData
+            .update({
+              where: { id: ops.id },
+              data: { mondayItemId: "" },
+            })
+            .catch(() => {});
+          continue;
+        }
+        const retry = await findMondayItemForLine({
+          orderName: order.name,
+          letterSuffix,
+          orderId,
+          sku: li.sku,
+        }).catch(() => null);
+        if (retry?.id) {
+          mondayItemId = retry.id;
+          linkedCount++;
+          console.log(
+            `[Monday][Webhook][${orderId}] line ${letterSuffix} LINKED after create failed ${retry.id}`,
+          );
+        } else {
+          failedCount++;
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`line ${letterSuffix}: ${msg}`);
+          console.error(
+            `[Monday][Webhook][${orderId}] FAILED createMondayItem for variant ${li.variantId}`,
+            err,
+          );
+          await prisma.orderLineItemOperationalData
+            .update({
+              where: { id: ops.id },
+              data: { mondayItemId: "" },
+            })
+            .catch(() => {});
+          continue;
+        }
+      }
+
+      const carrierLabelUsed = mondayRowForColor
+        ? resolveMondayCarrierLabel(li.company || mondayRowForColor.carriers, mondayRowForColor.isDepot)
+        : null;
+      const custLabelUsed = mondayRowForColor
+        ? resolveMondayCustomerStatusLabel(mondayRowForColor.customerStatus)
+        : null;
+      const payLabelUsed = mondayRowForColor
+        ? resolveMondayPaymentLabel(mondayRowForColor.paymentStatus)
+        : null;
+      const wareLabelUsed = mondayRowForColor
+        ? resolveMondayWarehouseStatusLabel(mondayRowForColor.warehouseStatus)
+        : null;
+      const [carrierColor, customerStatusColor, paymentStatusColor, warehouseStatusColor] = await Promise.all([
+        resolveMondayStatusColor("carriers", carrierLabelUsed),
+        resolveMondayStatusColor("customerStatus", custLabelUsed),
+        resolveMondayStatusColor("paymentStatus", payLabelUsed),
+        resolveMondayStatusColor("warehouseStatus", wareLabelUsed),
+      ]);
+
+      try {
+        await prisma.orderLineItemOperationalData.update({
+          where: { id: ops.id },
+          data: {
+            mondayItemId,
+            mondayItemName: itemName,
+            mondayCachedStatus: "match",
+            mondayCachedMismatches: "",
+            productTitle: li.title ?? ops.productTitle,
+            carrier: ops.carrier || li.company,
+            ...(carrierColor ? { carrierColor } : {}),
+            ...(customerStatusColor ? { customerStatusColor } : {}),
+            ...(paymentStatusColor ? { paymentStatusColor } : {}),
+            ...(warehouseStatusColor ? { warehouseStatusColor } : {}),
+          },
+        });
+        console.log(
+          `[Monday][Webhook][${orderId}] Saved pulse ${itemName} → ${mondayItemId} (variant ${li.variantId})`,
+        );
+      } catch (dbErr) {
+        failedCount++;
+        console.error(
+          `[Monday][Webhook][${orderId}] Monday item created (${mondayItemId}) but DB update FAILED for variant ${li.variantId}`,
+          dbErr,
+        );
+      }
+
+      if (isBundle) {
+        const components = await prisma.bundleComponent.findMany({
+          where: { shop, orderId, parentVariantId: li.variantId },
+          select: { componentSku: true, componentTitle: true, componentQuantity: true },
+          orderBy: { componentLineItemId: "asc" },
+        });
+        await syncMondayBundleSubitems(mondayItemId, components).catch((error) => {
+          console.error(`[Monday][Webhook][${orderId}] bundle subitems sync failed`, error);
+        });
+      }
+    }
+
+    console.log(
+      `[Monday][Webhook][${orderId}] DONE - created=${createdCount}, linked=${linkedCount}, skipped=${skippedCount}, failed=${failedCount}`,
+    );
+    return { created: createdCount, linked: linkedCount, skipped: skippedCount, failed: failedCount, errors };
+  } catch (error) {
+    console.error(`[Monday][Webhook][${orderId}] FATAL`, error);
+    return { created: 0, linked: 0, skipped: 0, failed: 1 };
+  }
+}
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+function parseFreightProperties(properties: Array<{ name?: string; value?: string }>) {
+  const map = Object.fromEntries(
+    properties
+      .filter((p) => p.name)
+      .map((p) => [String(p.name), String(p.value ?? "")]),
+  );
+
+  return {
+    company: map.courier_company,
+    serviceType: map.freight_service_type,
+    boxes: map.number_of_boxes,
+    unitsPerBox: map.units_per_box,
+    weightGrams: map.weight_grams,
+    volumeCm3: map.volume_cm3,
+    hiabRequired: map.hiab_required,
+    shippingCharge: map.freight_charge,
+  };
+}
